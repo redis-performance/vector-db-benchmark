@@ -31,7 +31,8 @@ class RedisConfigurator(BaseConfigurator):
         try:
             index.dropindex(delete_documents=True)
         except redis.ResponseError as e:
-            print(e)
+            if "Unknown Index name" not in e.__str__():
+                print(e)
 
     def recreate(self, dataset: Dataset, collection_params):
         self.clean()
