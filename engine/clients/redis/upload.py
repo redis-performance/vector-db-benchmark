@@ -26,18 +26,23 @@ class RedisUploader(BaseUploader):
             idx = ids[i]
             vec = vectors[i]
             meta = metadata[i] if metadata else {}
-            payload = {
-                k: v
-                for k, v in meta.items()
-                if v is not None and not isinstance(v, dict)
-            }
-            # Redis treats geopoints differently and requires putting them as
-            # a comma-separated string with lat and lon coordinates
-            geopoints = {
-                k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
-                for k, v in meta.items()
-                if isinstance(v, dict)
-            }
+            payload = {}
+            geopoints = {}
+
+            if meta is not None:
+                meta = {}
+                payload = {
+                    k: v
+                    for k, v in meta.items()
+                    if v is not None and not isinstance(v, dict)
+                }
+                # Redis treats geopoints differently and requires putting them as
+                # a comma-separated string with lat and lon coordinates
+                geopoints = {
+                    k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
+                    for k, v in meta.items()
+                    if isinstance(v, dict)
+                }
             cls.client.hset(
                 str(idx),
                 mapping={

@@ -4,7 +4,7 @@ from redis.commands.search.field import GeoField, NumericField, TextField, Vecto
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.redis.config import REDIS_PORT
+from engine.clients.redis.config import REDIS_PORT, REDIS_AUTH, REDIS_USER
 
 
 class RedisConfigurator(BaseConfigurator):
@@ -24,7 +24,7 @@ class RedisConfigurator(BaseConfigurator):
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
 
-        self.client = redis.Redis(host=host, port=REDIS_PORT, db=0)
+        self.client = redis.Redis(host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER)
 
     def clean(self):
         index = self.client.ft()

@@ -36,6 +36,7 @@ class RedisSearcher(BaseSearcher):
             .paging(0, top)
             .return_fields("vector_score")
             .dialect(2)
+            .timeout(0)
         )
         params_dict = {
             "vec_param": np.array(vector).astype(np.float32).tobytes(),
