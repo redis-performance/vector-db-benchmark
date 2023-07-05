@@ -45,13 +45,20 @@ class QdrantUploader(BaseUploader):
         while True:
             time.sleep(wait_time)
             total += wait_time
+
             collection_info = cls.client.get_collection(QDRANT_COLLECTION_NAME)
             if collection_info.status != CollectionStatus.GREEN:
                 continue
             time.sleep(wait_time)
             collection_info = cls.client.get_collection(QDRANT_COLLECTION_NAME)
             if collection_info.status == CollectionStatus.GREEN:
-                break
+                vectors_count = collection_info.vectors_count
+                indexed_vectors_count = collection_info.indexed_vectors_count
+                if vectors_count > indexed_vectors_count:
+                    print(f"waiting on fully indexed collection. vectors_count {vectors_count} != indexed_vectors_count {indexed_vectors_count}")
+                    continue
+                else:
+                    break
         return total
 
     @classmethod
