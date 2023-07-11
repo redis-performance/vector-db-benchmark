@@ -1,6 +1,8 @@
 import uuid
 from typing import List, Tuple
 
+from weaviate import Client
+
 from engine.base_client.search import BaseSearcher
 from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 from engine.clients.weaviate.parser import WeaviateConditionParser
