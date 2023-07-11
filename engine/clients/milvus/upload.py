@@ -33,7 +33,7 @@ class MilvusUploader(BaseUploader):
         cls.client = connections.connect(
             alias=MILVUS_DEFAULT_ALIAS,
             host=host,
-            port=str(connection_params.pop("port", MILVUS_PORT)),
+            port=MILVUS_PORT,
             user=MILVUS_USER,
             password=MILVUS_PASS,
             **connection_params
