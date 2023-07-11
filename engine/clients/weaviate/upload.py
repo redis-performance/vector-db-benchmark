@@ -1,10 +1,8 @@
 import uuid
 from typing import List, Optional
 
-from weaviate import Client, AuthApiKey
-
 from engine.base_client.upload import BaseUploader
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_PORT, WEAVIATE_API_KEY
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 
 
 class WeaviateUploader(BaseUploader):
@@ -13,16 +11,7 @@ class WeaviateUploader(BaseUploader):
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
-        if host.startswith("http"):
-            url = ""
-        else:
-            url = "http://"
-        url += f"{host}:{connection_params.pop('port', WEAVIATE_PORT)}"
-        auth_client_secret = None
-        if WEAVIATE_API_KEY is not None:
-            auth_client_secret = AuthApiKey(WEAVIATE_API_KEY)
-        cls.client = Client(url, auth_client_secret, **connection_params)
-
+        cls.client = setup_client(connection_params, host)
         cls.upload_params = upload_params
         cls.connection_params = connection_params
 
