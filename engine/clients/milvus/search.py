@@ -8,7 +8,7 @@ from engine.clients.milvus.config import (
     DISTANCE_MAPPING,
     MILVUS_COLLECTION_NAME,
     MILVUS_DEFAULT_ALIAS,
-    MILVUS_DEFAULT_PORT,
+    MILVUS_DEFAULT_PORT, MILVUS_PASS, MILVUS_USER,
 )
 from engine.clients.milvus.parser import MilvusConditionParser
 
@@ -26,6 +26,8 @@ class MilvusSearcher(BaseSearcher):
             alias=MILVUS_DEFAULT_ALIAS,
             host=host,
             port=str(connection_params.pop("port", MILVUS_DEFAULT_PORT)),
+            user=MILVUS_USER,
+            password=MILVUS_PASS,
             **connection_params
         )
         cls.collection = Collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)

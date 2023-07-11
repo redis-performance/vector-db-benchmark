@@ -14,7 +14,7 @@ from engine.clients.milvus.config import (
     DTYPE_DEFAULT,
     MILVUS_COLLECTION_NAME,
     MILVUS_DEFAULT_ALIAS,
-    MILVUS_DEFAULT_PORT,
+    MILVUS_DEFAULT_PORT, MILVUS_USER, MILVUS_PASS,
 )
 
 
@@ -34,6 +34,8 @@ class MilvusUploader(BaseUploader):
             alias=MILVUS_DEFAULT_ALIAS,
             host=host,
             port=str(connection_params.pop("port", MILVUS_DEFAULT_PORT)),
+            user=MILVUS_USER,
+            password=MILVUS_PASS,
             **connection_params
         )
         cls.collection = Collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)
