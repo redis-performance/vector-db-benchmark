@@ -1,5 +1,6 @@
 import multiprocessing as mp
 from typing import List, Optional
+import backoff
 
 from pymilvus import (
     Collection,
@@ -64,6 +65,13 @@ class MilvusUploader(BaseUploader):
             ]
         else:
             field_values = []
+        cls.upload_with_backoff(field_values, ids, vectors)
+
+    @classmethod
+    @backoff.on_exception(backoff.expo,
+                          MilvusException,
+                          max_time=120)
+    def upload_with_backoff(cls, field_values, ids, vectors):
         cls.collection.insert([ids, vectors] + field_values)
 
     @classmethod
