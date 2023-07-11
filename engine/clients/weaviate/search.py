@@ -54,4 +54,5 @@ class WeaviateSearcher(BaseSearcher):
         return id_score_pairs
 
     def setup_search(self):
+
         self.client.schema.update_config(WEAVIATE_CLASS_NAME, self.search_params)
