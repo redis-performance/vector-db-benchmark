@@ -1,3 +1,4 @@
+import logging
 import multiprocessing as mp
 from typing import List, Optional
 import backoff
@@ -70,7 +71,8 @@ class MilvusUploader(BaseUploader):
     @classmethod
     @backoff.on_exception(backoff.expo,
                           MilvusException,
-                          max_time=120)
+                          max_time=600,
+                          backoff_log_level=logging.WARN)
     def upload_with_backoff(cls, field_values, ids, vectors):
         cls.collection.insert([ids, vectors] + field_values)
 
