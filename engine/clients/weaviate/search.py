@@ -1,10 +1,10 @@
 import uuid
 from typing import List, Tuple
 
-from weaviate import Client
+from weaviate import Client, AuthApiKey
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_API_KEY, WEAVIATE_PORT
 from engine.clients.weaviate.parser import WeaviateConditionParser
 
 
@@ -15,8 +15,15 @@ class WeaviateSearcher(BaseSearcher):
 
     @classmethod
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
-        url = f"http://{host}:{connection_params.pop('port', WEAVIATE_DEFAULT_PORT)}"
-        cls.client = Client(url, **connection_params)
+        if host.startswith("http"):
+            url = ""
+        else:
+            url = "http://"
+        url += f"{host}:{connection_params.pop('port', WEAVIATE_PORT)}"
+        auth_client_secret = None
+        if WEAVIATE_API_KEY is not None:
+            auth_client_secret = AuthApiKey(WEAVIATE_API_KEY)
+        cls.client = Client(url, auth_client_secret, **connection_params)
         cls.search_params = search_params
 
     @classmethod
