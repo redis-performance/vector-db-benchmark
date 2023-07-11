@@ -14,7 +14,7 @@ from engine.clients.milvus.config import (
     DTYPE_DEFAULT,
     MILVUS_COLLECTION_NAME,
     MILVUS_DEFAULT_ALIAS,
-    MILVUS_DEFAULT_PORT, MILVUS_USER, MILVUS_PASS, MILVUS_PORT,
+    MILVUS_USER, MILVUS_PASS, MILVUS_PORT,
 )
 
 
@@ -30,9 +30,16 @@ class MilvusUploader(BaseUploader):
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
+        h = ""
+        uri = ""
+        if host.startswith("http"):
+            uri = host
+        else:
+            h = host
         cls.client = connections.connect(
             alias=MILVUS_DEFAULT_ALIAS,
-            host=host,
+            host=h,
+            uri=uri,
             port=MILVUS_PORT,
             user=MILVUS_USER,
             password=MILVUS_PASS,

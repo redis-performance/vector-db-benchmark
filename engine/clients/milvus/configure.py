@@ -32,9 +32,16 @@ class MilvusConfigurator(BaseConfigurator):
 
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
+        h = ""
+        uri = ""
+        if host.startswith("http"):
+            uri = host
+        else:
+            h = host
         self.client = connections.connect(
             alias=MILVUS_DEFAULT_ALIAS,
-            host=host,
+            host=h,
+            uri=uri,
             port=MILVUS_PORT,
             user=MILVUS_USER,
             password=MILVUS_PASS,
