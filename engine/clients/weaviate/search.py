@@ -17,6 +17,8 @@ class WeaviateSearcher(BaseSearcher):
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
         cls.client = setup_client(connection_params, host)
         cls.search_params = search_params
+        # Ping Weaviate's ready state
+        assert cls.client.is_ready() is True
 
     @classmethod
     def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:

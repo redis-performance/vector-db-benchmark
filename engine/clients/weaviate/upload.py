@@ -35,8 +35,8 @@ class WeaviateUploader(BaseUploader):
         # Weaviate introduced the batch_size, so it can handle built-in client's
         # multi-threading. That should make the upload faster.
         cls.client.batch.configure(
-            batch_size=100,
-            timeout_retries=3,
+            batch_size=len(vectors),
+            timeout_retries=5,
         )
 
         with cls.client.batch as batch:
