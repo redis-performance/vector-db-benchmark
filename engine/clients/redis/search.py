@@ -5,7 +5,7 @@ import redis
 from redis.commands.search.query import Query
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.redis.config import REDIS_PORT
+from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT
 from engine.clients.redis.parser import RedisConditionParser
 
 
@@ -36,7 +36,7 @@ class RedisSearcher(BaseSearcher):
             .paging(0, top)
             .return_fields("vector_score")
             .dialect(2)
-            .timeout(0)
+            .timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
             "vec_param": np.array(vector).astype(np.float32).tobytes(),

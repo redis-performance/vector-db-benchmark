@@ -4,7 +4,7 @@ from typing import List, Tuple
 from weaviate import Client
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 from engine.clients.weaviate.parser import WeaviateConditionParser
 
 
@@ -15,8 +15,7 @@ class WeaviateSearcher(BaseSearcher):
 
     @classmethod
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
-        url = f"http://{host}:{connection_params.pop('port', WEAVIATE_DEFAULT_PORT)}"
-        cls.client = Client(url, **connection_params)
+        cls.client = setup_client(connection_params, host)
         cls.search_params = search_params
 
     @classmethod
@@ -55,4 +54,5 @@ class WeaviateSearcher(BaseSearcher):
         return id_score_pairs
 
     def setup_search(self):
+
         self.client.schema.update_config(WEAVIATE_CLASS_NAME, self.search_params)

@@ -1,9 +1,8 @@
-from weaviate import Client
 
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_PORT, WEAVIATE_API_KEY, setup_client
 
 
 class WeaviateConfigurator(BaseConfigurator):
@@ -22,8 +21,9 @@ class WeaviateConfigurator(BaseConfigurator):
 
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
-        url = f"http://{host}:{connection_params.pop('port', WEAVIATE_DEFAULT_PORT)}"
-        self.client = Client(url, **connection_params)
+        self.client = setup_client(connection_params, host)
+
+
 
     def clean(self):
         classes = self.client.schema.get()

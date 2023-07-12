@@ -84,8 +84,9 @@ class BaseClient:
             for search_id, searcher in enumerate(self.searchers):
                 search_params = {**searcher.search_params}
                 ef = "n/a"
-                if "ef" in search_params["search_params"]:
-                    ef = search_params["search_params"]["ef"]
+                if "search_params" in search_params:
+                    if "ef" in search_params["search_params"]:
+                        ef = search_params["search_params"]["ef"]
                 parallel = search_params["parallel"] if "parallel" in search_params else 1
                 print(f"\tef runtime: {ef}; #clients {parallel}")
                 search_stats = searcher.search_all(
