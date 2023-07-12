@@ -50,17 +50,9 @@ class BaseSearcher:
 
         precision = 1.0
         if query.expected_result:
-            # This was Qdrant original recall calculation
-            # ids = set(x[0] for x in search_res)
-            # precision = len(ids.intersection(query.expected_result[:top])) / top
-            # This is ann-benchmark recall calculation
-            epsilon = 1e-3
-            threshold = query.expected_scores[top - 1] + epsilon
-            actual = 0.0
-            for cand_res in search_res[:top]:
-                if cand_res[1] <= threshold:
-                    actual += 1
-            precision = actual/top
+            ids = set(x[0] for x in search_res)
+            precision = len(ids.intersection(query.expected_result[:top])) / top
+
         return precision, end - start
 
     def search_all(
