@@ -1,4 +1,4 @@
-from pymilvus import DataType
+from pymilvus import DataType, connections
 import os
 from engine.base_client.distances import Distance
 
@@ -27,3 +27,22 @@ DTYPE_DEFAULT = {
     DataType.VARCHAR: "---MILVUS DOES NOT ACCEPT EMPTY STRINGS---",
     DataType.FLOAT: 0.0,
 }
+
+
+def get_milvus_client(connection_params: dict, host: str, alias: str):
+    h = ""
+    uri = ""
+    if host.startswith("http"):
+        uri = host
+    else:
+        h = host
+    client = connections.connect(
+        alias=alias,
+        host=h,
+        uri=uri,
+        port=MILVUS_PORT,
+        user=MILVUS_USER,
+        password=MILVUS_PASS,
+        **connection_params
+    )
+    return client

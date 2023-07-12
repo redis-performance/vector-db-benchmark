@@ -1,12 +1,13 @@
 import uuid
 from typing import List, Optional
+from weaviate import Client
 
 from engine.base_client.upload import BaseUploader
 from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 
 
 class WeaviateUploader(BaseUploader):
-    client = None
+    client : Client = None
     upload_params = {}
 
     @classmethod

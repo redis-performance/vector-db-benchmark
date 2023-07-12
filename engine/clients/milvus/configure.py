@@ -17,7 +17,7 @@ from engine.clients.milvus.config import (
     DTYPE_EXTRAS,
     MILVUS_COLLECTION_NAME,
     MILVUS_DEFAULT_ALIAS,
-    MILVUS_PASS, MILVUS_USER, MILVUS_PORT,
+    get_milvus_client,
 )
 
 
@@ -32,29 +32,15 @@ class MilvusConfigurator(BaseConfigurator):
 
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
-        h = ""
-        uri = ""
-        if host.startswith("http"):
-            uri = host
-        else:
-            h = host
-        self.client = connections.connect(
-            alias=MILVUS_DEFAULT_ALIAS,
-            host=h,
-            uri=uri,
-            port=MILVUS_PORT,
-            user=MILVUS_USER,
-            password=MILVUS_PASS,
-            **connection_params,
-        )
+        self.client = get_milvus_client(connection_params, host, MILVUS_DEFAULT_ALIAS)
         print("established connection")
 
     def clean(self):
-        try:
+        if utility.has_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS):
+            print("dropping collection named {MILVUS_COLLECTION_NAME}...")
             utility.drop_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)
-            utility.has_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)
-        except MilvusException:
-            pass
+            print("dropped collection named {MILVUS_COLLECTION_NAME}...")
+        assert utility.has_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS) is False
 
     def recreate(self, dataset: Dataset, collection_params):
         idx = FieldSchema(
