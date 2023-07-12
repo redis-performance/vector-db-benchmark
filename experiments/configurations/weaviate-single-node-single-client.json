@@ -7,7 +7,7 @@
     },
     "collection_params": { "vectorIndexConfig": { "ef": 100, "efConstruction": 100, "maxConnections": 16 } },
     "search_params": [
-      { "parallel": 8, "vectorIndexConfig": { "ef": 128} }
+      { "parallel": 1, "vectorIndexConfig": { "ef": 128} }
     ],
     "upload_params": { "batch_size": 32, "parallel": 1 }
   },
