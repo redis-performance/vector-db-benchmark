@@ -7,6 +7,6 @@
     "search_params": [
       { "parallel": 8, "params": { } }
     ],
-    "upload_params": { "parallel": 4, "batch_size": 32, "index_type": "DISKANN", "index_params": {  } }
+    "upload_params": { "parallel": 4, "batch_size": 16, "index_type": "DISKANN", "index_params": {  } }
   }
 ]
