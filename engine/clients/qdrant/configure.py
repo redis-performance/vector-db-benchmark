@@ -30,7 +30,6 @@ class QdrantConfigurator(BaseConfigurator):
 
     def clean(self):
         res = self.client.delete_collection(collection_name=QDRANT_COLLECTION_NAME)
-        assert res is True
 
     def recreate(self, dataset: Dataset, collection_params):
         self.client.recreate_collection(
