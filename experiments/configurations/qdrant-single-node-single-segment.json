@@ -4,7 +4,7 @@
     "engine": "qdrant",
     "connection_params": {},
     "collection_params": {
-      "optimizer_config": { "max_segment_number": 1,"memmap_threshold": 10000 },
+      "optimizers_config": { "max_segment_number": 1, "default_segment_number": 1, "memmap_threshold": 10000 },
       "hnsw_config": { "m": 16, "ef_construct": 128 }
     },
     "search_params": [
@@ -21,7 +21,7 @@
     "engine": "qdrant",
     "connection_params": {},
     "collection_params": {
-      "optimizer_config": { "max_segment_number": 1,"memmap_threshold": 10000 },
+      "optimizers_config": { "max_segment_number": 1, "default_segment_number": 1, "memmap_threshold": 10000 },
       "hnsw_config": { "m": 32, "ef_construct": 128 }
     },
     "search_params": [
@@ -38,7 +38,7 @@
     "engine": "qdrant",
     "connection_params": {},
     "collection_params": {
-      "optimizer_config": { "max_segment_number": 1,"memmap_threshold": 10000 },
+      "optimizers_config": { "max_segment_number": 1, "default_segment_number": 1, "memmap_threshold": 10000 },
       "hnsw_config": { "m": 32, "ef_construct": 256 }
     },
     "search_params": [
@@ -55,7 +55,7 @@
     "engine": "qdrant",
     "connection_params": {},
     "collection_params": {
-      "optimizer_config": { "max_segment_number": 1,"memmap_threshold": 10000 },
+      "optimizers_config": { "max_segment_number": 1, "default_segment_number": 1, "memmap_threshold": 10000 },
       "hnsw_config": { "m": 32, "ef_construct": 512 }
     },
     "search_params": [
@@ -72,7 +72,7 @@
     "engine": "qdrant",
     "connection_params": {},
     "collection_params": {
-      "optimizer_config": { "max_segment_number": 1,"memmap_threshold": 10000 },
+      "optimizers_config": { "max_segment_number": 1, "default_segment_number": 1, "memmap_threshold": 10000 },
       "hnsw_config": { "m": 64, "ef_construct": 256 }
     },
     "search_params": [
@@ -89,7 +89,7 @@
     "engine": "qdrant",
     "connection_params": {},
     "collection_params": {
-      "optimizer_config": { "max_segment_number": 1,"memmap_threshold": 10000 },
+      "optimizers_config": { "max_segment_number": 1, "default_segment_number": 1, "memmap_threshold": 10000 },
       "hnsw_config": { "m": 64, "ef_construct": 512 }
     },
     "search_params": [
