@@ -29,7 +29,8 @@ class QdrantConfigurator(BaseConfigurator):
             self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, **connection_params)
 
     def clean(self):
-        self.client.delete_collection(collection_name=QDRANT_COLLECTION_NAME)
+        res = self.client.delete_collection(collection_name=QDRANT_COLLECTION_NAME)
+        assert res is True
 
     def recreate(self, dataset: Dataset, collection_params):
         self.client.recreate_collection(
