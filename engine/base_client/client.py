@@ -54,7 +54,7 @@ class BaseClient:
             out.write(json.dumps(upload_stats, indent=2))
 
     def run_experiment(
-        self, dataset: Dataset, skip_upload: bool = False, skip_search: bool = False
+        self, dataset: Dataset, skip_upload: bool = False, skip_search: bool = False, parallels: [int] = [],
     ):
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
@@ -88,12 +88,16 @@ class BaseClient:
                     if "ef" in search_params["search_params"]:
                         ef = search_params["search_params"]["ef"]
                 parallel = search_params["parallel"] if "parallel" in search_params else 1
-                print(f"\tef runtime: {ef}; #clients {parallel}")
-                search_stats = searcher.search_all(
-                    dataset.config.distance, reader.read_queries()
-                )
-                self.save_search_results(
-                    dataset.config.name, search_stats, search_id, search_params
-                )
+                filter_parallel = (len(parallels) > 0)
+                if (filter_parallel and parallel in parallels) or filter_parallel is False:
+                    print(f"\trunning ef runtime: {ef}; #clients {parallel}")
+                    search_stats = searcher.search_all(
+                        dataset.config.distance, reader.read_queries()
+                    )
+                    self.save_search_results(
+                        dataset.config.name, search_stats, search_id, search_params
+                    )
+                else:
+                    print(f"\tskipping ef runtime: {ef}; #clients {parallel}")
         print("Experiment stage: Done")
         print("Results saved to: ", RESULTS_DIR)
