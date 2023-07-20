@@ -48,19 +48,28 @@ class BaseSearcher:
         search_res = cls.search_one(query.vector, query.meta_conditions, top)
         end = time.perf_counter()
 
+        debugging = False
         precision = 1.0
         if query.expected_result:
             # This was Qdrant original recall calculation
             # ids = set(x[0] for x in search_res)
             # precision = len(ids.intersection(query.expected_result[:top])) / top
             # This is ann-benchmark recall calculation
+            # IMPORTANT - qdrant use in their hybrid data sets actual *cosine metric* as the "expected_score",
+            # while we (and ann) are using *1-cosine metric*. Then, we make the adjustment for computing the threshold
             epsilon = 1e-3
-            threshold = query.expected_scores[top - 1] + epsilon
+            threshold = (1.0 - query.expected_scores[top - 1]) + epsilon
             actual = 0.0
             for cand_res in search_res[:top]:
                 if cand_res[1] <= threshold:
                     actual += 1
             precision = actual/top
+            if debugging:
+                print("query meta: ", query.meta_conditions)
+                print("our ids: ", [x[0] for x in search_res])
+                print("our scores: ", [x[1] for x in search_res])
+                print("their ids: ", query.expected_result)
+                print("their scores: ", query.expected_scores)
         return precision, end - start
 
     def search_all(
@@ -70,7 +79,6 @@ class BaseSearcher:
     ):
         parallel = self.search_params.pop("parallel", 1)
         top = self.search_params.pop("top", None)
-
         # setup_search may require initialized client
         self.init_client(
             self.host, distance, self.connection_params, self.search_params
