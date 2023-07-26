@@ -46,7 +46,7 @@ class RedisConfigurator(BaseConfigurator):
         payload_fields += [
             TagField(
                 name=field_name,
-                separator=','
+                separator=';'
             )
             for field_name, field_type in dataset.config.schema.items() if field_type == 'keyword'
         ]
