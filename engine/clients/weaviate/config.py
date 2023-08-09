@@ -17,4 +17,6 @@ def setup_client(connection_params, host):
     if WEAVIATE_API_KEY is not None:
         auth_client_secret = AuthApiKey(WEAVIATE_API_KEY)
     c = Client(url, auth_client_secret, **connection_params)
+    # Ping Weaviate's live state.
+    assert c.is_live() is True
     return c

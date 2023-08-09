@@ -17,6 +17,7 @@ app = typer.Typer()
 def run(
     engines: List[str] = typer.Option(["*"]),
     datasets: List[str] = typer.Option(["*"]),
+    parallels: List[int] = typer.Option([]),
     host: str = "localhost",
     skip_upload: bool = False,
     skip_search: bool = False,
@@ -49,7 +50,7 @@ def run(
             dataset.download()
             try:
                 with stopit.ThreadingTimeout(timeout) as tt:
-                    client.run_experiment(dataset, skip_upload, skip_search)
+                    client.run_experiment(dataset, skip_upload, skip_search, parallels)
 
                 # If the timeout is reached, the server might be still in the
                 # middle of some background processing, like creating the index.
