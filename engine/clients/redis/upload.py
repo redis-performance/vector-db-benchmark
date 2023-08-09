@@ -27,22 +27,20 @@ class RedisUploader(BaseUploader):
             vec = vectors[i]
             meta = metadata[i] if metadata else {}
             payload = {}
-            geopoints = {}
-
-            if meta is not None:
-                meta = {}
-                payload = {
-                    k: v
-                    for k, v in meta.items()
-                    if v is not None and not isinstance(v, dict)
-                }
-                # Redis treats geopoints differently and requires putting them as
-                # a comma-separated string with lat and lon coordinates
-                geopoints = {
-                    k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
-                    for k, v in meta.items()
-                    if isinstance(v, dict)
-                }
+            for k, v in meta.items():
+                # This is a patch for arxiv-titles dataset where we have a list of "labels", and
+                # we want to index all of them under the same TAG field (whose seperator is ';').
+                if k == 'labels':
+                    payload[k] = ";".join(v)
+                if v is not None and not isinstance(v, dict) and not isinstance(v, list):
+                    payload[k] = v
+            # Redis treats geopoints differently and requires putting them as
+            # a comma-separated string with lat and lon coordinates
+            geopoints = {
+                k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
+                for k, v in meta.items()
+                if isinstance(v, dict)
+            }
             cls.client.hset(
                 str(idx),
                 mapping={

@@ -1,5 +1,5 @@
 import redis
-from redis.commands.search.field import GeoField, NumericField, TextField, VectorField
+from redis.commands.search.field import GeoField, NumericField, TextField, VectorField, TagField
 
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
@@ -15,7 +15,7 @@ class RedisConfigurator(BaseConfigurator):
     }
     FIELD_MAPPING = {
         "int": NumericField,
-        "keyword": TextField,
+        "keyword": TagField,
         "text": TextField,
         "float": NumericField,
         "geo": GeoField,
@@ -41,7 +41,14 @@ class RedisConfigurator(BaseConfigurator):
             self.FIELD_MAPPING[field_type](
                 name=field_name,
             )
-            for field_name, field_type in dataset.config.schema.items()
+            for field_name, field_type in dataset.config.schema.items() if field_type != 'keyword'
+        ]
+        payload_fields += [
+            TagField(
+                name=field_name,
+                separator=';'
+            )
+            for field_name, field_type in dataset.config.schema.items() if field_type == 'keyword'
         ]
         search_namespace.create_index(
             fields=[
