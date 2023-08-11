@@ -5,7 +5,7 @@ import redis
 from redis.commands.search.query import Query
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT
+from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT, REDIS_HYBRID_POLICY
 from engine.clients.redis.parser import RedisConditionParser
 
 
@@ -18,7 +18,12 @@ class RedisSearcher(BaseSearcher):
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
         cls.client = redis.Redis(host=host, port=REDIS_PORT, db=0)
         cls.search_params = search_params
-
+        cls.knn_conditions = "EF_RUNTIME $EF"
+        if REDIS_HYBRID_POLICY is not None:
+            # for HYBRID_POLICY ADHOC_BF we need to remove EF_RUNTIME
+            if REDIS_HYBRID_POLICY == "ADHOC_BF":
+                cls.knn_conditions = ""
+            cls.knn_conditions = f"HYBRID_POLICY {REDIS_HYBRID_POLICY} {cls.knn_conditions}"
     @classmethod
     def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
         conditions = cls.parser.parse(meta_conditions)
@@ -30,7 +35,7 @@ class RedisSearcher(BaseSearcher):
 
         q = (
             Query(
-                f"{prefilter_condition}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+                f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]"
             )
             .sort_by("vector_score", asc=False)
             .paging(0, top)

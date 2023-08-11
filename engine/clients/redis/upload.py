@@ -4,7 +4,7 @@ import numpy as np
 import redis
 
 from engine.base_client.upload import BaseUploader
-from engine.clients.redis.config import REDIS_PORT
+from engine.clients.redis.config import REDIS_PORT, REDIS_KEY_PREFIX
 from engine.clients.redis.helper import convert_to_redis_coords
 
 
@@ -42,7 +42,7 @@ class RedisUploader(BaseUploader):
                 if isinstance(v, dict)
             }
             cls.client.hset(
-                str(idx),
+                REDIS_KEY_PREFIX + str(idx),
                 mapping={
                     "vector": np.array(vec).astype(np.float32).tobytes(),
                     **payload,
