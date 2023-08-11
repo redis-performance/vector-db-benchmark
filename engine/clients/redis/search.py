@@ -5,7 +5,7 @@ import redis
 from redis.commands.search.query import Query
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT, REDIS_HYBRID_POLICY
+from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT, REDIS_HYBRID_POLICY, REDIS_KEY_PREFIX
 from engine.clients.redis.parser import RedisConditionParser
 
 
@@ -52,4 +52,4 @@ class RedisSearcher(BaseSearcher):
 
         results = cls.client.ft().search(q, query_params=params_dict)
 
-        return [(int(result.id), float(result.vector_score)) for result in results.docs]
+        return [(int(result.id[len(REDIS_KEY_PREFIX):]), float(result.vector_score)) for result in results.docs]
