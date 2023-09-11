@@ -5,7 +5,7 @@ import redis
 from redis.commands.search.query import Query
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT, REDIS_HYBRID_POLICY, REDIS_KEY_PREFIX
+from engine.clients.redis.config import REDIS_PORT, REDIS_QUERY_TIMEOUT, REDIS_HYBRID_POLICY, REDIS_KEY_PREFIX, REDIS_AUTH, REDIS_USER
 from engine.clients.redis.parser import RedisConditionParser
 
 
@@ -16,7 +16,7 @@ class RedisSearcher(BaseSearcher):
 
     @classmethod
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
-        cls.client = redis.Redis(host=host, port=REDIS_PORT, db=0)
+        cls.client = redis.Redis(host=host, port=REDIS_PORT, db=0, password=REDIS_AUTH, username=REDIS_USER)
         cls.search_params = search_params
         cls.knn_conditions = "EF_RUNTIME $EF"
         if REDIS_HYBRID_POLICY is not None:
