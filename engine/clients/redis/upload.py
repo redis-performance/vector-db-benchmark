@@ -1,10 +1,15 @@
 from typing import List, Optional
 
 import numpy as np
-import redis
-
+from redis import Redis, RedisCluster
 from engine.base_client.upload import BaseUploader
-from engine.clients.redis.config import REDIS_PORT, REDIS_KEY_PREFIX, REDIS_AUTH, REDIS_USER
+from engine.clients.redis.config import (
+    REDIS_PORT,
+    REDIS_KEY_PREFIX,
+    REDIS_AUTH,
+    REDIS_USER,
+    REDIS_CLUSTER,
+)
 from engine.clients.redis.helper import convert_to_redis_coords
 
 
@@ -14,7 +19,10 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
-        cls.client = redis.Redis(host=host, port=REDIS_PORT, db=0, password=REDIS_AUTH, username=REDIS_USER)
+        redis_constructor = RedisCluster if REDIS_CLUSTER else Redis
+        cls.client = redis_constructor(
+            host=host, port=REDIS_PORT, db=0, password=REDIS_AUTH, username=REDIS_USER
+        )
         cls.upload_params = upload_params
 
     @classmethod
@@ -32,9 +40,13 @@ class RedisUploader(BaseUploader):
                 for k, v in meta.items():
                     # This is a patch for arxiv-titles dataset where we have a list of "labels", and
                     # we want to index all of them under the same TAG field (whose seperator is ';').
-                    if k == 'labels':
+                    if k == "labels":
                         payload[k] = ";".join(v)
-                    if v is not None and not isinstance(v, dict) and not isinstance(v, list):
+                    if (
+                        v is not None
+                        and not isinstance(v, dict)
+                        and not isinstance(v, list)
+                    ):
                         payload[k] = v
                 # Redis treats geopoints differently and requires putting them as
                 # a comma-separated string with lat and lon coordinates

@@ -1,10 +1,22 @@
 import redis
-from redis.commands.search.field import GeoField, NumericField, TextField, VectorField, TagField
+from redis.commands.search.field import (
+    GeoField,
+    NumericField,
+    TextField,
+    VectorField,
+    TagField,
+)
 
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.redis.config import REDIS_PORT, REDIS_AUTH, REDIS_USER, DISABLE_CLEAN, REDIS_KEY_PREFIX
+from engine.clients.redis.config import (
+    REDIS_PORT,
+    REDIS_AUTH,
+    REDIS_USER,
+    DISABLE_CLEAN,
+    REDIS_KEY_PREFIX,
+)
 
 
 class RedisConfigurator(BaseConfigurator):
@@ -26,7 +38,9 @@ class RedisConfigurator(BaseConfigurator):
         if REDIS_KEY_PREFIX != "":
             print(f"\tUsing a key prefix for this experiment: {REDIS_KEY_PREFIX}")
 
-        self.client = redis.Redis(host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER)
+        self.client = redis.Redis(
+            host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
+        )
 
     def clean(self):
         if DISABLE_CLEAN is False:
@@ -39,7 +53,6 @@ class RedisConfigurator(BaseConfigurator):
         else:
             print(f"\tSkipping clean stage given DISABLE_CLEAN=1")
 
-
     def recreate(self, dataset: Dataset, collection_params):
         self.clean()
         search_namespace = self.client.ft()
@@ -48,15 +61,17 @@ class RedisConfigurator(BaseConfigurator):
                 name=field_name,
                 sortable=True,
             )
-            for field_name, field_type in dataset.config.schema.items() if field_type != 'keyword'
+            for field_name, field_type in dataset.config.schema.items()
+            if field_type != "keyword"
         ]
         payload_fields += [
             TagField(
                 name=field_name,
-                separator=';',
+                separator=";",
                 sortable=True,
             )
-            for field_name, field_type in dataset.config.schema.items() if field_type == 'keyword'
+            for field_name, field_type in dataset.config.schema.items()
+            if field_type == "keyword"
         ]
         try:
             search_namespace.create_index(
@@ -80,7 +95,9 @@ class RedisConfigurator(BaseConfigurator):
             if "Index already exists" not in e.__str__():
                 raise e
             elif DISABLE_CLEAN is True:
-                print("There as an error when creating the index but you've specified DISABLE_CLEAN=1 so we're ignoring it")
+                print(
+                    "There as an error when creating the index but you've specified DISABLE_CLEAN=1 so we're ignoring it"
+                )
             else:
                 raise e
 

@@ -18,7 +18,6 @@ class BaseConfigurator:
         raise NotImplementedError()
 
     def configure(self, dataset: Dataset) -> Optional[dict]:
-        print("Ensuring we have a clean DB")
         self.clean()
         return self.recreate(dataset, self.collection_params) or {}
 
