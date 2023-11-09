@@ -32,6 +32,14 @@
     "link": "http://ann-benchmarks.com/gist-960-euclidean.hdf5"
   },
   {
+    "name": "laion-img-emb-512-100K-angular",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-100K-angular.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100K-angular.hdf5"
+  },
+  {
     "name": "laion-img-emb-512-1M-angular",
     "vector_size": 512,
     "distance": "cosine",
