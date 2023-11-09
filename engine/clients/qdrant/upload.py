@@ -31,6 +31,7 @@ class QdrantUploader(BaseUploader):
                 vectors=vectors,
                 payloads=[payload or {} for payload in metadata],
             ),
+            wait=False,
         )
 
     @classmethod

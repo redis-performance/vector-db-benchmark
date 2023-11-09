@@ -21,6 +21,7 @@ def run(
     host: str = "localhost",
     skip_upload: bool = False,
     skip_search: bool = False,
+    skip_if_exists: bool = True,
     exit_on_error: bool = True,
     timeout: float = 86400.0,
 ):
@@ -50,7 +51,7 @@ def run(
             dataset.download()
             try:
                 with stopit.ThreadingTimeout(timeout) as tt:
-                    client.run_experiment(dataset, skip_upload, skip_search, parallels)
+                    client.run_experiment(dataset, skip_upload, skip_search, skip_if_exists, parallels)
 
                 # If the timeout is reached, the server might be still in the
                 # middle of some background processing, like creating the index.
