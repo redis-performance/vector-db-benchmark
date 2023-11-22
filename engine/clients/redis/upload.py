@@ -5,7 +5,6 @@ from redis import Redis, RedisCluster
 from engine.base_client.upload import BaseUploader
 from engine.clients.redis.config import (
     REDIS_PORT,
-    REDIS_KEY_PREFIX,
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
@@ -21,7 +20,7 @@ class RedisUploader(BaseUploader):
     def init_client(cls, host, distance, connection_params, upload_params):
         redis_constructor = RedisCluster if REDIS_CLUSTER else Redis
         cls.client = redis_constructor(
-            host=host, port=REDIS_PORT, db=0, password=REDIS_AUTH, username=REDIS_USER
+            host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
         cls.upload_params = upload_params
 
@@ -56,7 +55,7 @@ class RedisUploader(BaseUploader):
                     if isinstance(v, dict)
                 }
             cls.client.hset(
-                REDIS_KEY_PREFIX + str(idx),
+                str(idx),
                 mapping={
                     "vector": np.array(vec).astype(np.float32).tobytes(),
                     **payload,

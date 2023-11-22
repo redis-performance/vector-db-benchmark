@@ -1,4 +1,5 @@
 import redis
+from redis import Redis, RedisCluster
 from redis.commands.search.field import (
     GeoField,
     NumericField,
@@ -14,8 +15,7 @@ from engine.clients.redis.config import (
     REDIS_PORT,
     REDIS_AUTH,
     REDIS_USER,
-    DISABLE_CLEAN,
-    REDIS_KEY_PREFIX,
+    REDIS_CLUSTER,
 )
 
 
@@ -35,23 +35,19 @@ class RedisConfigurator(BaseConfigurator):
 
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
-        if REDIS_KEY_PREFIX != "":
-            print(f"\tUsing a key prefix for this experiment: {REDIS_KEY_PREFIX}")
-
-        self.client = redis.Redis(
+        redis_constructor = RedisCluster if REDIS_CLUSTER else Redis
+        self.client = redis_constructor(
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
 
+
     def clean(self):
-        if DISABLE_CLEAN is False:
-            index = self.client.ft()
-            try:
-                index.dropindex(delete_documents=True)
-            except redis.ResponseError as e:
-                if "Unknown Index name" not in e.__str__():
-                    print(e)
-        else:
-            print(f"\tSkipping clean stage given DISABLE_CLEAN=1")
+        index = self.client.ft()
+        try:
+            index.dropindex(delete_documents=True)
+        except redis.ResponseError as e:
+            if "Unknown Index name" not in e.__str__():
+                print(e)
 
     def recreate(self, dataset: Dataset, collection_params):
         self.clean()
@@ -93,12 +89,6 @@ class RedisConfigurator(BaseConfigurator):
             )
         except redis.ResponseError as e:
             if "Index already exists" not in e.__str__():
-                raise e
-            elif DISABLE_CLEAN is True:
-                print(
-                    "There as an error when creating the index but you've specified DISABLE_CLEAN=1 so we're ignoring it"
-                )
-            else:
                 raise e
 
 
