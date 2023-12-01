@@ -45,7 +45,7 @@ class RedisConfigurator(BaseConfigurator):
         conns = [self.client]
         if self._is_cluster:
             conns = [
-                self.client.get_connection(node) for node in self.client.get_primaries()
+                self.client.get_redis_connection(node) for node in self.client.get_primaries()
             ]
         for conn in conns:
             index = conn.ft()
@@ -91,7 +91,7 @@ class RedisConfigurator(BaseConfigurator):
         conns = [self.client]
         if self._is_cluster:
             conns = [
-                self.client.get_connection(node) for node in self.client.get_primaries()
+                self.client.get_redis_connection(node) for node in self.client.get_primaries()
             ]
         for conn in conns:
             search_namespace = conn.ft()
