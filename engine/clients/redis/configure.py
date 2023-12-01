@@ -41,11 +41,12 @@ class RedisConfigurator(BaseConfigurator):
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
 
-
     def clean(self):
         conns = [self.client]
         if self._is_cluster:
-            conns = self.client.get_primaries()
+            conns = [
+                self.client.get_connection(node) for node in self.client.get_primaries()
+            ]
         for conn in conns:
             index = conn.ft()
             try:
@@ -75,29 +76,27 @@ class RedisConfigurator(BaseConfigurator):
             if field_type == "keyword"
         ]
         index_fields = [
-                        VectorField(
-                            name="vector",
-                            algorithm="HNSW",
-                            attributes={
-                                "TYPE": "FLOAT32",
-                                "DIM": dataset.config.vector_size,
-                                "DISTANCE_METRIC": self.DISTANCE_MAPPING[
-                                    dataset.config.distance
-                                ],
-                                **self.collection_params.get("hnsw_config", {}),
-                            },
-                        )
-                    ] + payload_fields
+            VectorField(
+                name="vector",
+                algorithm="HNSW",
+                attributes={
+                    "TYPE": "FLOAT32",
+                    "DIM": dataset.config.vector_size,
+                    "DISTANCE_METRIC": self.DISTANCE_MAPPING[dataset.config.distance],
+                    **self.collection_params.get("hnsw_config", {}),
+                },
+            )
+        ] + payload_fields
 
         conns = [self.client]
         if self._is_cluster:
-            conns = self.client.get_primaries()
+            conns = [
+                self.client.get_connection(node) for node in self.client.get_primaries()
+            ]
         for conn in conns:
             search_namespace = conn.ft()
             try:
-                search_namespace.create_index(
-                    fields=index_fields
-                )
+                search_namespace.create_index(fields=index_fields)
             except redis.ResponseError as e:
                 if "Index already exists" not in e.__str__():
                     raise e
