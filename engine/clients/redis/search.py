@@ -59,7 +59,4 @@ class RedisSearcher(BaseSearcher):
 
         results = cls.client.ft().search(q, query_params=params_dict)
 
-        return [
-            (int(result.id), float(result.vector_score))
-            for result in results.docs
-        ]
+        return [(int(result.id), float(result.vector_score)) for result in results.docs]
