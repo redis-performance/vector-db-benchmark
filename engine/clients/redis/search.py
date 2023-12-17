@@ -35,7 +35,7 @@ class RedisSearcher(BaseSearcher):
                 cls.client.get_redis_connection(node)
                 for node in cls.client.get_primaries()
             ]
-        cls._ft = cls.conns[random.randint(0, len(cls.conns))].ft()
+        cls._ft = cls.conns[random.randint(0, len(cls.conns)) - 1].ft()
 
     @classmethod
     def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
