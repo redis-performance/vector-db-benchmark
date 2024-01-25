@@ -40,68 +40,60 @@
     "link": "http://ann-benchmarks.com/gist-960-euclidean.hdf5"
   },
   {
-    "name": "laion-img-emb-512-100K-angular",
+    "name": "laion-img-emb-512-1M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-100K-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100K-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-1M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-1M-cosine.hdf5"
   },
   {
-    "name": "laion-img-emb-512-1M-angular",
+    "name": "laion-img-emb-512-10M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-1M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-1M-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-10M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-10M-cosine.hdf5"
   },
   {
-    "name": "laion-img-emb-512-10M-angular",
+    "name": "laion-img-emb-512-20M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-10M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-10M-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-20M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-20M-cosine.hdf5"
   },
   {
-    "name": "laion-img-emb-512-20M-angular",
+    "name": "laion-img-emb-512-40M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-20M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-20M-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-40M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-40M-cosine.hdf5"
   },
   {
-    "name": "laion-img-emb-512-40M-angular",
+    "name": "laion-img-emb-512-100M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-40M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-40M-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-100M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100M-cosine.hdf5"
   },
   {
-    "name": "laion-img-emb-512-100M-angular",
+    "name": "laion-img-emb-512-200M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-100M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100M-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-200M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-200M-cosine.hdf5"
   },
   {
-    "name": "laion-img-emb-512-200M-angular",
+    "name": "laion-img-emb-512-400M-cosine",
     "vector_size": 512,
     "distance": "cosine",
     "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-200M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-200M-angular.hdf5"
-  },
-  {
-    "name": "laion-img-emb-512-400M-angular",
-    "vector_size": 512,
-    "distance": "cosine",
-    "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-400M-angular.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-400M-angular.hdf5"
+    "path": "laion-img-emb-512/laion-img-emb-512-400M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-400M-cosine.hdf5"
   },
   {
     "name": "gist-960-angular",
