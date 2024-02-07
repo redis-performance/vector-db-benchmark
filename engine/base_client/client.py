@@ -129,3 +129,10 @@ class BaseClient:
                     print(f"\tskipping ef runtime: {ef}; #clients {parallel}")
         print("Experiment stage: Done")
         print("Results saved to: ", RESULTS_DIR)
+
+    def delete_client(self):
+        self.uploader.delete_client()
+        self.configurator.delete_client()
+
+        for s in self.searchers:
+            s.delete_client()

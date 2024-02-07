@@ -51,7 +51,10 @@ def run(
             dataset.download()
             try:
                 with stopit.ThreadingTimeout(timeout) as tt:
-                    client.run_experiment(dataset, skip_upload, skip_search, skip_if_exists, parallels)
+                    client.run_experiment(
+                        dataset, skip_upload, skip_search, skip_if_exists, parallels
+                    )
+                client.delete_client()
 
                 # If the timeout is reached, the server might be still in the
                 # middle of some background processing, like creating the index.
