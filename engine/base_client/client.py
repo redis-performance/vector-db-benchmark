@@ -97,7 +97,6 @@ class BaseClient:
         if not skip_search:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
-
                 if skip_if_exists:
                     glob_pattern = (
                         f"{self.name}-{dataset.config.name}-search-{search_id}-*.json"
@@ -111,20 +110,21 @@ class BaseClient:
                         continue
 
                 search_params = {**searcher.search_params}
-                ef = "n/a"
+                ef = "default"
                 if "search_params" in search_params:
-                    if "ef" in search_params["search_params"]:
-                        ef = search_params["search_params"]["ef"]
-                client_count = search_params["parallel"] if "parallel" in search_params else 1
-                filter_client_count = (len(parallels) > 0)
+                    ef = search_params["search_params"].get("ef", "default")
+                client_count = search_params.get("parallel", 1)
+                filter_client_count = len(parallels) > 0
                 if filter_client_count and (client_count not in parallels):
-                    print(f"\tskipping ef runtime: {ef}; #clients {client_count}")
+                    print(f"\tSkipping ef runtime: {ef}; #clients {client_count}")
                     continue
-                print(f"\trunning ef runtime: {ef}; #clients {client_count}")
+                print(f"\tRunning ef runtime: {ef}; #clients {client_count}")
 
                 search_stats = searcher.search_all(
                     dataset.config.distance, reader.read_queries()
                 )
+                # ensure we specify the client count in the results
+                search_params["parallel"] = client_count
                 self.save_search_results(
                     dataset.config.name, search_stats, search_id, search_params
                 )
