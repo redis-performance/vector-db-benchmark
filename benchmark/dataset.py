@@ -32,12 +32,6 @@ def show_progress(block_num, block_size, total_size):
     print(f"{percent} %", end="\r")
 
 
-# prepare progressbar
-def show_progress(block_num, block_size, total_size):
-    percent = round(block_num * block_size / total_size * 100, 2)
-    print(f"{percent} %", end="\r")
-
-
 class Dataset:
     def __init__(self, config: dict):
         self.config = DatasetConfig(**config)
