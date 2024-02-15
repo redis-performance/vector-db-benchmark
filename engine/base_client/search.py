@@ -50,7 +50,6 @@ class BaseSearcher:
         if query.expected_result:
             ids = set(x[0] for x in search_res)
             precision = len(ids.intersection(query.expected_result[:top])) / top
-
         return precision, end - start
 
     def search_all(
@@ -106,6 +105,7 @@ class BaseSearcher:
             "min_time": np.min(latencies),
             "max_time": np.max(latencies),
             "rps": len(latencies) / total_time,
+            "p50_time": np.percentile(latencies, 50),
             "p95_time": np.percentile(latencies, 95),
             "p99_time": np.percentile(latencies, 99),
             "precisions": precisions,
