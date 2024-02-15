@@ -21,9 +21,9 @@ class WeaviateUploader(BaseUploader):
         keys = data_object.keys()
         for key in keys:
             if isinstance(data_object[key], dict):
-                if lat := data_object[key].pop("lat", None):
+                if lat := data_object[key]..get("lat", None):
                     data_object[key]["latitude"] = lat
-                if lon := data_object[key].pop("lon", None):
+                if lon := data_object[key]..get("lon", None):
                     data_object[key]["longitude"] = lon
 
         return data_object
