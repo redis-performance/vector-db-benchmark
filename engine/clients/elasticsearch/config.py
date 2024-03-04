@@ -1,4 +1,5 @@
 import os
+
 from elasticsearch import Elasticsearch
 
 ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", 9200))
@@ -25,14 +26,12 @@ def get_es_client(host, connection_params):
         url = "http://"
     url += f"{host}:{ELASTIC_PORT}"
     if ELASTIC_API_KEY is None:
-        print("Connecting using basic auth")
         client = Elasticsearch(
             url,
             basic_auth=(ELASTIC_USER, ELASTIC_PASSWORD),
             **init_params,
         )
     else:
-        print("Connecting using api key")
         client = Elasticsearch(
             url,
             api_key=ELASTIC_API_KEY,
