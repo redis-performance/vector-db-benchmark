@@ -7,7 +7,7 @@ from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 
 
 class WeaviateUploader(BaseUploader):
-    client : Client = None
+    client: Client = None
     upload_params = {}
 
     @classmethod

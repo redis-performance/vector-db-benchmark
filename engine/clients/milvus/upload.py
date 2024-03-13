@@ -55,10 +55,9 @@ class MilvusUploader(BaseUploader):
         cls.upload_with_backoff(field_values, ids, vectors)
 
     @classmethod
-    @backoff.on_exception(backoff.expo,
-                          MilvusException,
-                          max_time=600,
-                          backoff_log_level=logging.WARN)
+    @backoff.on_exception(
+        backoff.expo, MilvusException, max_time=600, backoff_log_level=logging.WARN
+    )
     def upload_with_backoff(cls, field_values, ids, vectors):
         cls.collection.insert([ids, vectors] + field_values)
 

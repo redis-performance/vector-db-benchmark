@@ -40,7 +40,10 @@ class MilvusConfigurator(BaseConfigurator):
             print("dropping collection named {MILVUS_COLLECTION_NAME}...")
             utility.drop_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)
             print("dropped collection named {MILVUS_COLLECTION_NAME}...")
-        assert utility.has_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS) is False
+        assert (
+            utility.has_collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)
+            is False
+        )
 
     def recreate(self, dataset: Dataset, collection_params):
         idx = FieldSchema(
