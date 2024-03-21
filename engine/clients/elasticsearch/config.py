@@ -37,4 +37,5 @@ def get_es_client(host, connection_params):
             api_key=ELASTIC_API_KEY,
             **init_params,
         )
+    assert client.ping()
     return client
