@@ -29,7 +29,7 @@ class QdrantUploader(BaseUploader):
     ):
         cls.client.upsert(
             collection_name=QDRANT_COLLECTION_NAME,
-            points=Batch.construct(
+            points=Batch.model_construct(
                 ids=ids,
                 vectors=vectors,
                 payloads=[payload or {} for payload in metadata],
@@ -42,6 +42,7 @@ class QdrantUploader(BaseUploader):
         cls.client.update_collection(
             collection_name=QDRANT_COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
+                # indexing_threshold=10_000,
                 max_optimization_threads=1,
             ),
         )

@@ -28,13 +28,10 @@ class WeaviateConfigurator(BaseConfigurator):
         self.client = setup_client(connection_params, host)
 
     def clean(self):
-        classes = self.client.schema.get()
-        for cl in classes["classes"]:
-            if cl["class"] == WEAVIATE_CLASS_NAME:
-                self.client.schema.delete_class(WEAVIATE_CLASS_NAME)
+        self.client.collections.delete(WEAVIATE_CLASS_NAME)
 
     def recreate(self, dataset: Dataset, collection_params):
-        self.client.schema.create_class(
+        self.client.collections.create_from_dict(
             {
                 "class": WEAVIATE_CLASS_NAME,
                 "vectorizer": "none",
@@ -57,3 +54,8 @@ class WeaviateConfigurator(BaseConfigurator):
                 },
             }
         )
+        self.client.close()
+
+    def __del__(self):
+        if self.client.is_connected():
+            self.client.close()

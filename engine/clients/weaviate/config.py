@@ -3,11 +3,12 @@ from weaviate import Client, AuthApiKey
 
 WEAVIATE_CLASS_NAME = "Benchmark"
 WEAVIATE_DEFAULT_PORT = 8090
-WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY",None)
-WEAVIATE_PORT = os.getenv("WEAVIATE_PORT",WEAVIATE_DEFAULT_PORT)
+WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY", None)
+WEAVIATE_PORT = os.getenv("WEAVIATE_PORT", WEAVIATE_DEFAULT_PORT)
+
 
 def setup_client(connection_params, host):
-    port = connection_params.get('port', WEAVIATE_PORT)
+    port = connection_params.get("port", WEAVIATE_PORT)
     if host.startswith("http"):
         url = ""
     else:
