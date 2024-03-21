@@ -2,6 +2,7 @@ import multiprocessing as mp
 import uuid
 from typing import List, Optional
 
+import elastic_transport
 from elasticsearch import Elasticsearch
 
 from engine.base_client.upload import BaseUploader
@@ -48,7 +49,21 @@ class ElasticUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        cls.client.indices.forcemerge(
-            index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
-        )
+        tries = 10
+        for i in range(tries + 1):
+            try:
+                cls.client.indices.forcemerge(
+                    index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
+                )
+            except elastic_transport.TlsError as e:
+                if i < tries:  # i is zero indexed
+                    print(
+                        "Received the following error during retry {}/{} while waiting for ES index to be ready... {}".format(
+                            i, tries, e.__str__()
+                        )
+                    )
+                    continue
+                else:
+                    raise
+            break
         return {}
