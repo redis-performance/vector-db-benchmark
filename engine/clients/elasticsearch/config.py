@@ -19,6 +19,7 @@ def get_es_client(host, connection_params):
             "verify_certs": False,
             "request_timeout": ELASTIC_TIMEOUT,
             "retry_on_timeout": True,
+            "ssl_show_warn": False,
         },
         **connection_params,
     }
