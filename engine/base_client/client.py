@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
+import warnings
 
 from benchmark import ROOT_DIR
 from benchmark.dataset import Dataset
@@ -14,6 +15,8 @@ RESULTS_DIR = ROOT_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 DETAILED_RESULTS = bool(int(os.getenv("DETAILED_RESULTS", False)))
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 class BaseClient:
