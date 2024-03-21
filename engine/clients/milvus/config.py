@@ -5,9 +5,9 @@ from engine.base_client.distances import Distance
 MILVUS_COLLECTION_NAME = "Benchmark"
 MILVUS_DEFAULT_ALIAS = "bench"
 MILVUS_DEFAULT_PORT = "19530"
-MILVUS_PASS = os.getenv("MILVUS_PASS","")
-MILVUS_USER = os.getenv("MILVUS_USER","")
-MILVUS_PORT = os.getenv("MILVUS_PORT",MILVUS_DEFAULT_PORT)
+MILVUS_PASS = os.getenv("MILVUS_PASS", "")
+MILVUS_USER = os.getenv("MILVUS_USER", "")
+MILVUS_PORT = os.getenv("MILVUS_PORT", MILVUS_DEFAULT_PORT)
 
 DISTANCE_MAPPING = {
     Distance.L2: "L2",

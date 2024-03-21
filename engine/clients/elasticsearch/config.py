@@ -1,4 +1,5 @@
 import os
+import urllib3
 
 from elasticsearch import Elasticsearch
 
@@ -8,6 +9,7 @@ ELASTIC_USER = os.getenv("ELASTIC_USER", "elastic")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD", "passwd")
 ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY", None)
 ELASTIC_TIMEOUT = int(os.getenv("ELASTIC_TIMEOUT", 90))
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def get_es_client(host, connection_params):

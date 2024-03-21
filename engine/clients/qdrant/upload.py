@@ -6,7 +6,11 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Batch, CollectionStatus, OptimizersConfigDiff
 
 from engine.base_client.upload import BaseUploader
-from engine.clients.qdrant.config import QDRANT_COLLECTION_NAME, QDRANT_API_KEY, QDRANT_URL
+from engine.clients.qdrant.config import (
+    QDRANT_COLLECTION_NAME,
+    QDRANT_API_KEY,
+    QDRANT_URL,
+)
 
 
 class QdrantUploader(BaseUploader):
@@ -18,9 +22,16 @@ class QdrantUploader(BaseUploader):
         os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "true"
         os.environ["GRPC_POLL_STRATEGY"] = "epoll,poll"
         if QDRANT_URL is None:
-            cls.client = QdrantClient(host=host, api_key=QDRANT_API_KEY, prefer_grpc=True, **connection_params)
+            cls.client = QdrantClient(
+                host=host, api_key=QDRANT_API_KEY, prefer_grpc=True, **connection_params
+            )
         else:
-            cls.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, prefer_grpc=True, **connection_params)
+            cls.client = QdrantClient(
+                url=QDRANT_URL,
+                api_key=QDRANT_API_KEY,
+                prefer_grpc=True,
+                **connection_params
+            )
         cls.upload_params = upload_params
 
     @classmethod

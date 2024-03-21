@@ -7,7 +7,11 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.qdrant.config import QDRANT_COLLECTION_NAME, QDRANT_API_KEY, QDRANT_URL
+from engine.clients.qdrant.config import (
+    QDRANT_COLLECTION_NAME,
+    QDRANT_API_KEY,
+    QDRANT_URL,
+)
 from engine.clients.qdrant.parser import QdrantConditionParser
 
 
