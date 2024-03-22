@@ -1,5 +1,6 @@
 import os
-from weaviate import Client, AuthApiKey
+from weaviate import Client
+from weaviate.auth import AuthApiKey
 
 WEAVIATE_CLASS_NAME = "Benchmark"
 WEAVIATE_DEFAULT_PORT = 8090
