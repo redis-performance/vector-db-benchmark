@@ -10,7 +10,7 @@ ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD", "passwd")
 ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY", None)
 ELASTIC_TIMEOUT = int(os.getenv("ELASTIC_TIMEOUT", 300))
 ELASTIC_INDEX_TIMEOUT = os.getenv("ELASTIC_INDEX_TIMEOUT", "30m")
-ELASTIC_INDEX_REFRESH_INTERVAL = int(os.getenv("ELASTIC_TIMEOUT", 30))
+ELASTIC_INDEX_REFRESH_INTERVAL = os.getenv("ELASTIC_INDEX_REFRESH_INTERVAL", "10s")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
