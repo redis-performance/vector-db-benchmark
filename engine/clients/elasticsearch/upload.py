@@ -3,7 +3,7 @@ import uuid
 from typing import List, Optional
 
 import elastic_transport
-from elasticsearch import Elasticsearch
+from elasticsearch import Elasticsearch, ApiError
 
 from engine.base_client.upload import BaseUploader
 from engine.clients.elasticsearch.config import ELASTIC_INDEX, get_es_client
@@ -55,7 +55,7 @@ class ElasticUploader(BaseUploader):
                 cls.client.indices.forcemerge(
                     index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
                 )
-            except elastic_transport.TlsError as e:
+            except (elastic_transport.TlsError, ApiError) as e:
                 if i < tries:  # i is zero indexed
                     print(
                         "Received the following error during retry {}/{} while waiting for ES index to be ready... {}".format(
