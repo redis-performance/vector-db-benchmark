@@ -9,6 +9,7 @@ from engine.clients.elasticsearch.config import (
     get_es_client,
     ELASTIC_TIMEOUT,
     ELASTIC_INDEX_TIMEOUT,
+    ELASTIC_INDEX_REFRESH_INTERVAL,
 )
 
 
@@ -53,7 +54,7 @@ class ElasticConfigurator(BaseConfigurator):
                 "index": {
                     "number_of_shards": 1,
                     "number_of_replicas": 0,
-                    "refresh_interval": -1,
+                    "refresh_interval": ELASTIC_INDEX_REFRESH_INTERVAL,
                 }
             },
             mappings={
