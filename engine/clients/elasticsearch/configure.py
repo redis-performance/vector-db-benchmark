@@ -4,7 +4,12 @@ from benchmark.dataset import Dataset
 from engine.base_client import IncompatibilityError
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.elasticsearch.config import ELASTIC_INDEX, get_es_client
+from engine.clients.elasticsearch.config import (
+    ELASTIC_INDEX,
+    get_es_client,
+    ELASTIC_TIMEOUT,
+    ELASTIC_INDEX_TIMEOUT,
+)
 
 
 class ElasticConfigurator(BaseConfigurator):
@@ -25,7 +30,9 @@ class ElasticConfigurator(BaseConfigurator):
     def clean(self):
         try:
             self.client.indices.delete(
-                index=ELASTIC_INDEX, timeout="5m", master_timeout="5m"
+                index=ELASTIC_INDEX,
+                timeout=ELASTIC_INDEX_TIMEOUT,
+                master_timeout=ELASTIC_INDEX_TIMEOUT,
             )
         except NotFoundError:
             pass
@@ -39,6 +46,9 @@ class ElasticConfigurator(BaseConfigurator):
 
         self.client.indices.create(
             index=ELASTIC_INDEX,
+            timeout=ELASTIC_INDEX_TIMEOUT,
+            master_timeout=ELASTIC_INDEX_TIMEOUT,
+            wait_for_active_shards="all",
             settings={
                 "index": {
                     "number_of_shards": 1,
