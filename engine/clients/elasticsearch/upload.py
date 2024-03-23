@@ -6,7 +6,11 @@ import elastic_transport
 from elasticsearch import Elasticsearch, ApiError
 
 from engine.base_client.upload import BaseUploader
-from engine.clients.elasticsearch.config import ELASTIC_INDEX, get_es_client
+from engine.clients.elasticsearch.config import (
+    ELASTIC_INDEX,
+    get_es_client,
+    _wait_for_es_green,
+)
 
 
 class ClosableElastic(Elasticsearch):
@@ -66,6 +70,6 @@ class ElasticUploader(BaseUploader):
                     continue
                 else:
                     raise
-            break
             _wait_for_es_green(cls.client)
+            break
         return {}

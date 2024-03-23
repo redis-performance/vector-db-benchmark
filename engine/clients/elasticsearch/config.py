@@ -46,7 +46,7 @@ def get_es_client(host, connection_params):
     return client
 
 
-def _wait_es_green(client):
+def _wait_for_es_green(client):
     print("waiting for ES green status...")
     for _ in range(100):
         try:
