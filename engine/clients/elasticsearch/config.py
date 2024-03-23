@@ -46,11 +46,11 @@ def get_es_client(host, connection_params):
     return client
 
 
-def _wait_for_es_green(client):
-    print("waiting for ES green status...")
+def _wait_for_es_status(client, status="yellow"):
+    print(f"waiting for ES {status} status...")
     for _ in range(100):
         try:
-            client.cluster.health(wait_for_status="green")
+            client.cluster.health(wait_for_status=status)
             return client
         except ConnectionError:
             time.sleep(0.1)

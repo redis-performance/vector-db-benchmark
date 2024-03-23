@@ -9,7 +9,7 @@ from engine.base_client.upload import BaseUploader
 from engine.clients.elasticsearch.config import (
     ELASTIC_INDEX,
     get_es_client,
-    _wait_for_es_green,
+    _wait_for_es_status,
 )
 
 
@@ -70,6 +70,6 @@ class ElasticUploader(BaseUploader):
                     continue
                 else:
                     raise
-            _wait_for_es_green(cls.client)
+            _wait_for_es_status(cls.client)
             break
         return {}
