@@ -1,6 +1,6 @@
 import os
 import urllib3
-
+import time
 from elasticsearch import Elasticsearch
 
 ELASTIC_PORT = int(os.getenv("ELASTIC_PORT", 9200))
@@ -44,3 +44,16 @@ def get_es_client(host, connection_params):
         )
     assert client.ping()
     return client
+
+
+def _wait_es_green(client):
+    print("waiting for ES green status...")
+    for _ in range(100):
+        try:
+            client.cluster.health(wait_for_status="green")
+            return client
+        except ConnectionError:
+            time.sleep(0.1)
+    else:
+        # timeout
+        raise Exception("Elasticsearch failed to start.")

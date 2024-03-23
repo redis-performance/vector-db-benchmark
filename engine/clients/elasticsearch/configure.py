@@ -29,6 +29,7 @@ class ElasticConfigurator(BaseConfigurator):
         self.client = get_es_client(host, connection_params)
 
     def clean(self):
+        print("Ensuring the index does not exist...")
         try:
             self.client.indices.delete(
                 index=ELASTIC_INDEX,
@@ -37,6 +38,7 @@ class ElasticConfigurator(BaseConfigurator):
             )
         except NotFoundError:
             pass
+        print("Finished ensuring the index does not exist...")
 
     def recreate(self, dataset: Dataset, collection_params):
         if dataset.config.distance == Distance.DOT:

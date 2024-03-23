@@ -50,7 +50,7 @@ class ElasticUploader(BaseUploader):
     @classmethod
     def post_upload(cls, _distance):
         print("forcing the merge into 1 segment...")
-        tries = 10
+        tries = 30
         for i in range(tries + 1):
             try:
                 cls.client.indices.forcemerge(
@@ -67,14 +67,5 @@ class ElasticUploader(BaseUploader):
                 else:
                     raise
             break
-            print("waiting for ES green status...")
-            for _ in range(100):
-                try:
-                    client.cluster.health(wait_for_status="green")
-                    return client
-                except ConnectionError:
-                    time.sleep(0.1)
-            else:
-                # timeout
-                raise SkipTest("Elasticsearch failed to start.")
+            _wait_for_es_green(cls.client)
         return {}

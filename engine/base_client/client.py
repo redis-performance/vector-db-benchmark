@@ -15,6 +15,7 @@ RESULTS_DIR = ROOT_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 DETAILED_RESULTS = bool(int(os.getenv("DETAILED_RESULTS", False)))
+REPETITIONS = int(os.getenv("REPETITIONS", 3))
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -147,21 +148,24 @@ class BaseClient:
                 if filter_client_count and (client_count not in parallels):
                     print(f"\tSkipping ef runtime: {ef}; #clients {client_count}")
                     continue
-                print(f"\tRunning ef runtime: {ef}; #clients {client_count}")
+                for repetition in range(1, REPETITIONS + 1):
+                    print(
+                        f"\tRunning repetition {repetition} ef runtime: {ef}; #clients {client_count}"
+                    )
 
-                search_stats = searcher.search_all(
-                    dataset.config.distance, reader.read_queries()
-                )
-                # ensure we specify the client count in the results
-                search_params["parallel"] = client_count
-                if not DETAILED_RESULTS:
-                    # Remove verbose stats from search results
-                    search_stats.pop("latencies", None)
-                    search_stats.pop("precisions", None)
+                    search_stats = searcher.search_all(
+                        dataset.config.distance, reader.read_queries()
+                    )
+                    # ensure we specify the client count in the results
+                    search_params["parallel"] = client_count
+                    if not DETAILED_RESULTS:
+                        # Remove verbose stats from search results
+                        search_stats.pop("latencies", None)
+                        search_stats.pop("precisions", None)
 
-                self.save_search_results(
-                    dataset.config.name, search_stats, search_id, search_params
-                )
+                    self.save_search_results(
+                        dataset.config.name, search_stats, search_id, search_params
+                    )
 
         print("Experiment stage: Done")
         print("Results saved to: ", RESULTS_DIR)
