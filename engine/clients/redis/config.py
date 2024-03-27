@@ -7,4 +7,4 @@ REDIS_CLUSTER = bool(int(os.getenv("REDIS_CLUSTER", 0)))
 REDIS_HYBRID_POLICY = os.getenv("REDIS_HYBRID_POLICY", None)
 
 # 90 seconds timeout
-REDIS_QUERY_TIMEOUT = int(os.getenv("REDIS_QUERY_TIMEOUT", 90 * 1000))
+REDIS_QUERY_TIMEOUT = int(os.getenv("REDIS_QUERY_TIMEOUT", 60 * 1000))

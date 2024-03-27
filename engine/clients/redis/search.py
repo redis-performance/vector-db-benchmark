@@ -27,7 +27,7 @@ class RedisSearcher(BaseSearcher):
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
         cls.search_params = search_params
-        cls.knn_conditions = "EF_RUNTIME $EF"
+        cls.knn_conditions = "EF_RUNTIME "
         cls._is_cluster = True if REDIS_CLUSTER else False
         # In the case of CLUSTER API enabled we randomly select the starting primary shard
         # when doing the client initialization to evenly distribute the load among the cluster
@@ -42,6 +42,7 @@ class RedisSearcher(BaseSearcher):
     @classmethod
     def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
         conditions = cls.parser.parse(meta_conditions)
+        ef_runtime = cls.search_params["search_params"]["ef"]
         if conditions is None:
             prefilter_condition = "*"
             params = {}
@@ -50,20 +51,17 @@ class RedisSearcher(BaseSearcher):
 
         q = (
             Query(
-                f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]"
+                f"{prefilter_condition}=>[KNN {top} @vector $vec_param EF_RUNTIME {ef_runtime} AS vector_score]"
             )
-            .sort_by("vector_score", asc=True)
+            # .sort_by("vector_score", asc=True)
             .paging(0, top)
-            .return_fields("vector_score")
+            # .return_fields("vector_score")
             # performance is optimized for sorting operations on DIALECT 4 in different scenarios.
             # check SORTBY details in https://redis.io/commands/ft.search/
-            .dialect(4)
-            .timeout(REDIS_QUERY_TIMEOUT)
+            .dialect(4).timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
             "vec_param": np.array(vector).astype(np.float32).tobytes(),
-            "K": top,
-            "EF": cls.search_params["search_params"]["ef"],
             **params,
         }
         results = cls._ft.search(q, query_params=params_dict)
