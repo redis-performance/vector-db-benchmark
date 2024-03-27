@@ -67,7 +67,7 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        index_info = cls.client.conn.ft().info()
+        index_info = cls.client.ft().info()
         # redisearch
         if "percent_index" in index_info:
             percent_index = float(index_info["percent_index"])
@@ -78,7 +78,7 @@ class RedisUploader(BaseUploader):
                     )
                 )
                 time.sleep(1)
-                percent_index = float(cls.client.conn.ft().info()["percent_index"])
+                percent_index = float(cls.client.ft().info()["percent_index"])
         # memorydb
         if "current_lag" in index_info:
             current_lag = float(index_info["current_lag"])
@@ -89,5 +89,5 @@ class RedisUploader(BaseUploader):
                     )
                 )
                 time.sleep(1)
-                current_lag = int(cls.client.conn.ft().info()["current_lag"])
+                current_lag = int(cls.client.ft().info()["current_lag"])
         return {}
