@@ -11,6 +11,7 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
+    REDIS_DIALECT,
 )
 from engine.clients.redis.parser import RedisConditionParser
 
@@ -58,7 +59,7 @@ class RedisSearcher(BaseSearcher):
             # .return_fields("vector_score")
             # performance is optimized for sorting operations on DIALECT 4 in different scenarios.
             # check SORTBY details in https://redis.io/commands/ft.search/
-            .dialect(4).timeout(REDIS_QUERY_TIMEOUT)
+            .dialect(REDIS_DIALECT).timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
             "vec_param": np.array(vector).astype(np.float32).tobytes(),
