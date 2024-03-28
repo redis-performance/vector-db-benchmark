@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional
 
 import numpy as np
@@ -66,4 +67,27 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
+        index_info = cls.client.ft().info()
+        # redisearch / memorystore for redis
+        if "percent_index" in index_info:
+            percent_index = float(index_info["percent_index"])
+            while percent_index < 1.0:
+                print(
+                    "waiting for index to be fully processed. current percent index: {}".format(
+                        percent_index * 100.0
+                    )
+                )
+                time.sleep(1)
+                percent_index = float(cls.client.ft().info()["percent_index"])
+        # memorydb
+        if "current_lag" in index_info:
+            current_lag = float(index_info["current_lag"])
+            while current_lag > 0:
+                print(
+                    "waiting for index to be fully processed. current current_lag: {}".format(
+                        current_lag
+                    )
+                )
+                time.sleep(1)
+                current_lag = int(cls.client.ft().info()["current_lag"])
         return {}
