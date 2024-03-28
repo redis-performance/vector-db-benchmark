@@ -53,11 +53,20 @@ class RedisConfigurator(BaseConfigurator):
             try:
                 index.dropindex(delete_documents=True)
             except redis.ResponseError as e:
+                str_err = e.__str__()
                 if (
-                    "Unknown Index name" not in e.__str__()
-                    and "Index does not exist" not in e.__str__()
+                    "Unknown Index name" not in str_err
+                    and "Index does not exist" not in str_err
                 ):
-                    print(e)
+                    # google memorystore does not support the DD argument.
+                    # in that case we can flushall
+                    if "wrong number of arguments for FT.DROPINDEX command" in str_err:
+                        print(
+                            "Given the FT.DROPINDEX command failed, we're flushing the entire DB..."
+                        )
+                        conn.flushall()
+                    else:
+                        raise e
 
     def recreate(self, dataset: Dataset, collection_params):
         self.clean()

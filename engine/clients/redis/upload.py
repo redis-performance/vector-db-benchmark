@@ -68,7 +68,7 @@ class RedisUploader(BaseUploader):
     @classmethod
     def post_upload(cls, _distance):
         index_info = cls.client.ft().info()
-        # redisearch
+        # redisearch / memorystore for redis
         if "percent_index" in index_info:
             percent_index = float(index_info["percent_index"])
             while percent_index < 1.0:
