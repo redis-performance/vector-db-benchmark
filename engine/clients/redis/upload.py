@@ -78,7 +78,28 @@ class RedisUploader(BaseUploader):
                     )
                 )
                 time.sleep(1)
-                percent_index = float(cls.client.ft().info()["percent_index"])
+                index_info = cls.client.ft().info()
+                percent_index = float(index_info["percent_index"])
+        if "backfill_status" in index_info:
+            backfill_status = index_info["backfill_status"]
+            while backfill_status != "Completed":
+                print(
+                    f"waiting for backfill status to be Completed. Current status: {backfill_status}"
+                )
+                time.sleep(1)
+                index_info = cls.client.ft().info()
+                backfill_status = index_info["backfill_status"]
+        if "num_indexed_vectors" in index_info and "num_docs" in index_info:
+            num_indexed_vectors = int(index_info["num_indexed_vectors"])
+            num_docs = int(index_info["num_docs"])
+            while num_indexed_vectors < num_docs:
+                print(
+                    f"waiting for index to be fully processed. num_indexed_vectors {num_indexed_vectors} != num_docs {num_docs}..."
+                )
+                time.sleep(1)
+                index_info = cls.client.ft().info()
+                num_indexed_vectors = int(index_info["num_indexed_vectors"])
+                num_docs = int(index_info["num_docs"])
         # memorydb
         if "current_lag" in index_info:
             current_lag = float(index_info["current_lag"])
@@ -89,5 +110,6 @@ class RedisUploader(BaseUploader):
                     )
                 )
                 time.sleep(1)
-                current_lag = int(cls.client.ft().info()["current_lag"])
+                index_info = cls.client.ft().info()
+                current_lag = float(index_info["current_lag"])
         return {}
