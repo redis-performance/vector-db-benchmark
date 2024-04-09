@@ -70,6 +70,7 @@ class BaseUploader:
 
         print(f"Total import time: {total_time}")
 
+        memory_usage = self.get_memory_usage()
         self.delete_client()
 
         return {
@@ -77,6 +78,9 @@ class BaseUploader:
             "upload_time": upload_time,
             "total_time": total_time,
             "latencies": latencies,
+            "parallel": parallel,
+            "batch_size": batch_size,
+            "memory_usage": memory_usage,
         }
 
     @classmethod
@@ -96,3 +100,7 @@ class BaseUploader:
     @classmethod
     def delete_client(cls):
         pass
+
+    @classmethod
+    def get_memory_usage(cls):
+        return {}
