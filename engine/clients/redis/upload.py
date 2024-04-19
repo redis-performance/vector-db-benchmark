@@ -106,5 +106,9 @@ class RedisUploader(BaseUploader):
 
     def get_memory_usage(cls):
         used_memory = cls.client_decode.info("memory")["used_memory"]
-        index_info = cls.client_decode.ft().info()
+        index_info = {}
+        if REDIS_ALGORITHM != "HNSW" and REDIS_ALGORITHM != "FLAT":
+            print(f"TODO: FIXME!! Avoiding calling ft.info for {REDIS_ALGORITHM}...")
+        else:
+            index_info = cls.client_decode.ft().info()
         return {"used_memory": used_memory, "index_info": index_info}
