@@ -9,6 +9,7 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
+    REDIS_ALGORITHM,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
 
@@ -75,6 +76,9 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
+        if REDIS_ALGORITHM != "HNSW" and REDIS_ALGORITHM != "FLAT":
+            print(f"TODO: FIXME!! Avoiding calling ft.info for {REDIS_ALGORITHM}...")
+            return {}
         index_info = cls.client.ft().info()
         # redisearch / memorystore for redis
         if "percent_index" in index_info:

@@ -16,6 +16,7 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
+    REDIS_ALGORITHM,
 )
 
 
@@ -88,15 +89,18 @@ class RedisConfigurator(BaseConfigurator):
             for field_name, field_type in dataset.config.schema.items()
             if field_type == "keyword"
         ]
+        algorithm_config = {}
+        if REDIS_ALGORITHM == "HNSW":
+            algorithm_config = self.collection_params.get("hnsw_config", {})
         index_fields = [
             VectorField(
                 name="vector",
-                algorithm="HNSW",
+                algorithm=REDIS_ALGORITHM,
                 attributes={
                     "TYPE": "FLOAT32",
                     "DIM": dataset.config.vector_size,
                     "DISTANCE_METRIC": self.DISTANCE_MAPPING[dataset.config.distance],
-                    **self.collection_params.get("hnsw_config", {}),
+                    **algorithm_config,
                 },
             )
         ] + payload_fields
