@@ -67,9 +67,10 @@ class RedisSearcher(BaseSearcher):
         params_dict = {
             "vec_param": np.array(vector).astype(np.float32).tobytes(),
             "K": top,
-            "EF": cls.search_params["search_params"]["ef"],
             **params,
         }
+        if REDIS_ALGORITHM == "HNSW":
+            params_dict["EF"] = cls.search_params["search_params"]["ef"]
         results = cls._ft.search(q, query_params=params_dict)
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]
