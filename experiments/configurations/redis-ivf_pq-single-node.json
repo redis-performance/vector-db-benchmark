@@ -1,0 +1,72 @@
+[
+  {
+    "name": "redis-ivf_pq-n_lists-64",
+    "engine": "redis",
+    "algorithm": "ivf_pq",
+    "connection_params": {},
+    "collection_params": {
+      "ivf_config": { "N_LISTS": 64 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
+      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+    ],
+    "upload_params": { "parallel": 16 }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-128",
+    "engine": "redis",
+    "algorithm": "ivf_pq",
+    "connection_params": {},
+    "collection_params": {
+      "ivf_config": { "N_LISTS": 128 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
+      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+    ],
+    "upload_params": { "parallel": 16 }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-256",
+    "engine": "redis",
+    "algorithm": "ivf_pq",
+    "connection_params": {},
+    "collection_params": {
+      "ivf_config": { "N_LISTS": 256 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
+      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+    ],
+    "upload_params": { "parallel": 16 }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512",
+    "engine": "redis",
+    "algorithm": "ivf_pq",
+    "connection_params": {},
+    "collection_params": {
+      "ivf_config": { "N_LISTS": 512 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
+      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+    ],
+    "upload_params": { "parallel": 16 }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024",
+    "engine": "redis",
+    "algorithm": "ivf_pq",
+    "connection_params": {},
+    "collection_params": {
+      "ivf_config": { "N_LISTS": 1024 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
+      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+    ],
+    "upload_params": { "parallel": 16 }
+  }
+]
