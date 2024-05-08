@@ -16,7 +16,6 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
-    REDIS_ALGORITHM,
 )
 
 
