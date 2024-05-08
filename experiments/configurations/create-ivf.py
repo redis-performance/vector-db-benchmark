@@ -19,18 +19,14 @@ for algo in ["raft_ivf_pq", "raft_ivf_flat"]:
                 "search_params": [
                     {
                         "parallel": 1,
-                        "search_params": {
-                            "algorithm": algo,
-                        },
+                        "algorithm": algo,
                     },
                     {
                         "parallel": 100,
-                        "search_params": {
-                            "algorithm": algo,
-                        },
+                        "algorithm": algo,
                     },
                 ],
-                "upload_params": {"parallel": 16,  "algorithm": algo},
+                "upload_params": {"parallel": 16, "algorithm": algo},
             }
             configs.append(config)
     fname = f"redis-{algo}-single-node.json"

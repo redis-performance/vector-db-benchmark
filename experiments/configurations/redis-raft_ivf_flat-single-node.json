@@ -13,15 +13,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -43,15 +39,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -73,15 +65,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -103,15 +91,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -133,15 +117,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -163,15 +143,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -193,15 +169,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -223,15 +195,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -253,15 +221,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -283,15 +247,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -313,15 +273,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -343,15 +299,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -373,15 +325,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -403,15 +351,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -433,15 +377,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -463,15 +403,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -493,15 +429,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -523,15 +455,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -553,15 +481,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -583,15 +507,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -613,15 +533,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -643,15 +559,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -673,15 +585,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -703,15 +611,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -733,15 +637,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -763,15 +663,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -793,15 +689,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -823,15 +715,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -853,15 +741,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
@@ -883,15 +767,11 @@
     "search_params": [
       {
         "parallel": 1,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       },
       {
         "parallel": 100,
-        "search_params": {
-          "algorithm": "raft_ivf_flat"
-        }
+        "algorithm": "raft_ivf_flat"
       }
     ],
     "upload_params": {
