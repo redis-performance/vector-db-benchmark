@@ -4,7 +4,7 @@ n_lists = [256, 512, 1024, 1536, 2048]
 n_probes = [16, 20, 32, 64, 128, 256]
 
 
-for algo in ["ivf_pq", "ivf_flat"]:
+for algo in ["raft_ivf_pq", "raft_ivf_flat"]:
     configs = []
     for lists in n_lists:
         for probes in n_probes:
