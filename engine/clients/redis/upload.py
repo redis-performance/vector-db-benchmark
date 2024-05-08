@@ -9,7 +9,6 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
-    REDIS_ALGORITHM,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
 
@@ -33,6 +32,7 @@ class RedisUploader(BaseUploader):
             decode_responses=True,
         )
         cls.upload_params = upload_params
+        cls.algorithm = cls.upload_params.get("algorithm", "hnsw").upper()
 
     @classmethod
     def upload_batch(
@@ -76,8 +76,8 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        if REDIS_ALGORITHM != "HNSW" and REDIS_ALGORITHM != "FLAT":
-            print(f"TODO: FIXME!! Avoiding calling ft.info for {REDIS_ALGORITHM}...")
+        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT":
+            print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
             return {}
         index_info = cls.client.ft().info()
         # redisearch / memorystore for redis
@@ -107,8 +107,8 @@ class RedisUploader(BaseUploader):
     def get_memory_usage(cls):
         used_memory = cls.client_decode.info("memory")["used_memory"]
         index_info = {}
-        if REDIS_ALGORITHM != "HNSW" and REDIS_ALGORITHM != "FLAT":
-            print(f"TODO: FIXME!! Avoiding calling ft.info for {REDIS_ALGORITHM}...")
+        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT":
+            print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
         else:
             index_info = cls.client_decode.ft().info()
         return {"used_memory": used_memory, "index_info": index_info}

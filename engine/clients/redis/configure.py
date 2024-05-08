@@ -90,12 +90,14 @@ class RedisConfigurator(BaseConfigurator):
             if field_type == "keyword"
         ]
         algorithm_config = {}
-        if REDIS_ALGORITHM == "HNSW":
-            algorithm_config = self.collection_params.get("hnsw_config", {})
+        # by default we use hnsw
+        algo = collection_params.get("algorithm", "hnsw")
+        algorithm_config = collection_params.get(f"{algo}_config", {})
+        print(f"Using algorithm {algo} with config {algorithm_config}")
         index_fields = [
             VectorField(
                 name="vector",
-                algorithm=REDIS_ALGORITHM,
+                algorithm=algo,
                 attributes={
                     "TYPE": "FLOAT32",
                     "DIM": dataset.config.vector_size,

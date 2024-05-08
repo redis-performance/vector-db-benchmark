@@ -11,7 +11,6 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
-    REDIS_ALGORITHM,
 )
 
 from engine.clients.redis.parser import RedisConditionParser
@@ -30,7 +29,8 @@ class RedisSearcher(BaseSearcher):
         )
         cls.search_params = search_params
         cls.knn_conditions = ""
-        if REDIS_ALGORITHM == "HNSW":
+        cls.algorithm = cls.search_params.get("algorithm", "hnsw").upper()
+        if cls.algorithm == "HNSW":
             cls.knn_conditions = "EF_RUNTIME $EF"
         cls._is_cluster = True if REDIS_CLUSTER else False
         # In the case of CLUSTER API enabled we randomly select the starting primary shard
@@ -69,7 +69,7 @@ class RedisSearcher(BaseSearcher):
             "K": top,
             **params,
         }
-        if REDIS_ALGORITHM == "HNSW":
+        if cls.algorithm == "HNSW":
             params_dict["EF"] = cls.search_params["search_params"]["ef"]
         results = cls._ft.search(q, query_params=params_dict)
 

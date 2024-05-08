@@ -1,72 +1,902 @@
 [
   {
-    "name": "redis-ivf_pq-n_lists-64",
+    "name": "redis-ivf_pq-n_lists-256-n_probes-16",
     "engine": "redis",
-    "algorithm": "ivf_pq",
     "connection_params": {},
     "collection_params": {
-      "ivf_config": { "N_LISTS": 64 }
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 16
+      }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
-      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
     ],
-    "upload_params": { "parallel": 16 }
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
   },
   {
-    "name": "redis-ivf_pq-n_lists-128",
+    "name": "redis-ivf_pq-n_lists-256-n_probes-20",
     "engine": "redis",
-    "algorithm": "ivf_pq",
     "connection_params": {},
     "collection_params": {
-      "ivf_config": { "N_LISTS": 128 }
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 20
+      }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
-      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
     ],
-    "upload_params": { "parallel": 16 }
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
   },
   {
-    "name": "redis-ivf_pq-n_lists-256",
+    "name": "redis-ivf_pq-n_lists-256-n_probes-32",
     "engine": "redis",
-    "algorithm": "ivf_pq",
     "connection_params": {},
     "collection_params": {
-      "ivf_config": { "N_LISTS": 256 }
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 32
+      }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
-      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
     ],
-    "upload_params": { "parallel": 16 }
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
   },
   {
-    "name": "redis-ivf_pq-n_lists-512",
+    "name": "redis-ivf_pq-n_lists-256-n_probes-64",
     "engine": "redis",
-    "algorithm": "ivf_pq",
     "connection_params": {},
     "collection_params": {
-      "ivf_config": { "N_LISTS": 512 }
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 64
+      }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
-      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
     ],
-    "upload_params": { "parallel": 16 }
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
   },
   {
-    "name": "redis-ivf_pq-n_lists-1024",
+    "name": "redis-ivf_pq-n_lists-256-n_probes-128",
     "engine": "redis",
-    "algorithm": "ivf_pq",
     "connection_params": {},
     "collection_params": {
-      "ivf_config": { "N_LISTS": 1024 }
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 128
+      }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "n_probes": 32 } }, { "parallel": 1, "search_params": { "n_probes": 64 } }, { "parallel": 1, "search_params": { "n_probes": 128 } }, { "parallel": 1, "search_params": { "n_probes": 256 } }, { "parallel": 1, "search_params": { "n_probes": 512 } },
-      { "parallel": 100, "search_params": { "n_probes": 32 } }, { "parallel": 100, "search_params": { "n_probes": 64 } }, { "parallel": 100, "search_params": { "n_probes": 128 } }, { "parallel": 100, "search_params": { "n_probes": 256 } }, { "parallel": 100, "search_params": { "n_probes": 512 } }
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
     ],
-    "upload_params": { "parallel": 16 }
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-256-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-512-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1024-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1536-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1536-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1536-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1536-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1536-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-1536-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-2048-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 2048,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-2048-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 2048,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-2048-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 2048,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-2048-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 2048,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-2048-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 2048,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
+  },
+  {
+    "name": "redis-ivf_pq-n_lists-2048-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "ivf_pq",
+      "ivf_pq_config": {
+        "N_LISTS": 2048,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "algorithm": "ivf_pq"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "ivf_pq"
+    }
   }
 ]
