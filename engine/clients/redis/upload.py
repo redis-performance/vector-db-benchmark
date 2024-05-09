@@ -1,5 +1,7 @@
 import time
 from typing import List, Optional
+import requests
+import json
 
 import numpy as np
 from redis import Redis, RedisCluster
@@ -9,12 +11,15 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
+    GPU_STATS,
+    GPU_STATS_ENDPOINT,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
 
 
 class RedisUploader(BaseUploader):
     client = None
+    host = None
     client_decode = None
     upload_params = {}
 
@@ -24,6 +29,7 @@ class RedisUploader(BaseUploader):
         cls.client = redis_constructor(
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
+        cls.host = host
         cls.client_decode = redis_constructor(
             host=host,
             port=REDIS_PORT,
@@ -107,8 +113,27 @@ class RedisUploader(BaseUploader):
     def get_memory_usage(cls):
         used_memory = cls.client_decode.info("memory")["used_memory"]
         index_info = {}
+        device_info = {}
         if cls.algorithm != "HNSW" and cls.algorithm != "FLAT":
             print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
         else:
             index_info = cls.client_decode.ft().info()
-        return {"used_memory": used_memory, "index_info": index_info}
+        if GPU_STATS:
+            url = f"http://{cls.host}:5000/"
+            if GPU_STATS_ENDPOINT is not None:
+                url = GPU_STATS_ENDPOINT
+            try:
+                print(f"Quering GPU stats from endpoint {url}...")
+                # Send GET request to the server
+                response = requests.get(url)
+                device_info = json.loads(response.text)
+                print("Retrieved device info:", device_info)
+            except requests.exceptions.RequestException as e:
+                # Handle any exceptions that may occur
+                print("An error occurred while querying gpu stats:", e)
+
+        return {
+            "used_memory": used_memory,
+            "index_info": index_info,
+            "device_info": device_info,
+        }
