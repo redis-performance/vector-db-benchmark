@@ -5,10 +5,7 @@ from typing import List, Tuple
 from opensearchpy import OpenSearch
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.opensearch.config import (
-    OPENSEARCH_INDEX,
-    get_opensearch_client,
-)
+from engine.clients.opensearch.config import OPENSEARCH_INDEX, get_opensearch_client
 from engine.clients.opensearch.parser import OpenSearchConditionParser
 
 
