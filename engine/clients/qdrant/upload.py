@@ -87,7 +87,7 @@ class QdrantUploader(BaseUploader):
             del cls.client
 
     def get_memory_usage(cls):
-        collection_info = cls.client.collection_info(QDRANT_COLLECTION_NAME)
+        collection_info = cls.client.get_collection(QDRANT_COLLECTION_NAME)
         used_memory = {}
         # Extract memory usage information
         if (
