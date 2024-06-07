@@ -5,8 +5,8 @@ from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
 from engine.clients.qdrant.config import (
-    QDRANT_COLLECTION_NAME,
     QDRANT_API_KEY,
+    QDRANT_COLLECTION_NAME,
     QDRANT_URL,
 )
 

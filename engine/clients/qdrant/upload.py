@@ -7,9 +7,13 @@ from qdrant_client.http.models import Batch, CollectionStatus, OptimizersConfigD
 
 from engine.base_client.upload import BaseUploader
 from engine.clients.qdrant.config import (
-    QDRANT_COLLECTION_NAME,
+    QDRANT_ACCOUNT_ID,
     QDRANT_API_KEY,
+    QDRANT_AUTH_TOKEN,
+    QDRANT_CLUSTER_ID,
+    QDRANT_COLLECTION_NAME,
     QDRANT_URL,
+    get_qdrant_cloud_usage,
 )
 
 
@@ -30,7 +34,7 @@ class QdrantUploader(BaseUploader):
                 url=QDRANT_URL,
                 api_key=QDRANT_API_KEY,
                 prefer_grpc=True,
-                **connection_params
+                **connection_params,
             )
         cls.upload_params = upload_params
 
@@ -81,3 +85,22 @@ class QdrantUploader(BaseUploader):
     def delete_client(cls):
         if cls.client is not None:
             del cls.client
+
+    def get_memory_usage(cls):
+        collection_info = cls.client.collection_info(QDRANT_COLLECTION_NAME)
+        used_memory = {}
+        # Extract memory usage information
+        if (
+            QDRANT_ACCOUNT_ID is not None
+            and QDRANT_CLUSTER_ID is not None
+            and QDRANT_AUTH_TOKEN is not None
+        ):
+            print(f"Tring to fetch Qdrant cloud usage from Cluster {QDRANT_CLUSTER_ID}")
+            used_memory = get_qdrant_cloud_usage(
+                QDRANT_ACCOUNT_ID, QDRANT_CLUSTER_ID, QDRANT_AUTH_TOKEN
+            )
+
+        return {
+            "used_memory": used_memory,
+            "collection_info": collection_info,
+        }
