@@ -1,6 +1,7 @@
 import os
 import time
 from typing import List, Optional
+import json 
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Batch, CollectionStatus, OptimizersConfigDiff
@@ -87,7 +88,9 @@ class QdrantUploader(BaseUploader):
             del cls.client
 
     def get_memory_usage(cls):
-        collection_info = cls.client.get_collection(QDRANT_COLLECTION_NAME)
+        collection_info = json.loads(
+            str(cls.client.get_collection(QDRANT_COLLECTION_NAME))
+        )
         used_memory = {}
         # Extract memory usage information
         if (
