@@ -14,6 +14,7 @@ from engine.clients.qdrant.config import (
     QDRANT_CLUSTER_ID,
     QDRANT_COLLECTION_NAME,
     QDRANT_URL,
+    QDRANT_MAX_OPTIMIZATION_THREADS,
     get_qdrant_cloud_usage,
     get_collection_info,
 )
@@ -56,11 +57,14 @@ class QdrantUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
+        max_optimization_threads = QDRANT_MAX_OPTIMIZATION_THREADS
+        if max_optimization_threads is not None:
+            max_optimization_threads = int(max_optimization_threads)
         cls.client.update_collection(
             collection_name=QDRANT_COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
                 # indexing_threshold=10_000,
-                max_optimization_threads=1,
+                max_optimization_threads=max_optimization_threads,
             ),
         )
 

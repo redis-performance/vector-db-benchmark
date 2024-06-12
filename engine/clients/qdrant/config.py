@@ -8,6 +8,7 @@ QDRANT_URL = os.getenv("QDRANT_URL", None)
 QDRANT_ACCOUNT_ID = os.getenv("QDRANT_ACCOUNT_ID", None)
 QDRANT_CLUSTER_ID = os.getenv("QDRANT_CLUSTER_ID", None)
 QDRANT_AUTH_TOKEN = os.getenv("QDRANT_AUTH_TOKEN", None)
+QDRANT_MAX_OPTIMIZATION_THREADS = os.getenv("QDRANT_MAX_OPTIMIZATION_THREADS", None)
 
 
 def get_collection_info(endpoint, collection, api_key):
