@@ -1,7 +1,7 @@
+import json
 import os
 import time
 from typing import List, Optional
-import json
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Batch, CollectionStatus, OptimizersConfigDiff
@@ -13,10 +13,10 @@ from engine.clients.qdrant.config import (
     QDRANT_AUTH_TOKEN,
     QDRANT_CLUSTER_ID,
     QDRANT_COLLECTION_NAME,
-    QDRANT_URL,
     QDRANT_MAX_OPTIMIZATION_THREADS,
-    get_qdrant_cloud_usage,
+    QDRANT_URL,
     get_collection_info,
+    get_qdrant_cloud_usage,
 )
 
 

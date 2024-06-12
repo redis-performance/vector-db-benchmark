@@ -8,6 +8,7 @@ from engine.clients.qdrant.config import (
     QDRANT_API_KEY,
     QDRANT_COLLECTION_NAME,
     QDRANT_URL,
+    retry_with_exponential_backoff,
 )
 
 
@@ -40,7 +41,8 @@ class QdrantConfigurator(BaseConfigurator):
         res = self.client.delete_collection(collection_name=QDRANT_COLLECTION_NAME)
 
     def recreate(self, dataset: Dataset, collection_params):
-        self.client.recreate_collection(
+        retry_with_exponential_backoff(
+            self.client.recreate_collection,
             collection_name=QDRANT_COLLECTION_NAME,
             vectors_config=rest.VectorParams(
                 size=dataset.config.vector_size,
