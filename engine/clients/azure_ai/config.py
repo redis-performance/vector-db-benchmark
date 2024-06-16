@@ -74,9 +74,7 @@ def add_docs(service_endpoint, api_version, api_key, index_name, docs):
     response = requests.post(endpoint, headers=headers, data=json.dumps(docs))
 
     # Print the results
-    if response.status_code == 200:
-        print(f"Doc successfully. - {response.text}")
-    else:
+    if response.status_code != 200:
         raise Exception(
             f"Error while adding docs: {response.status_code} - {response.text}"
         )
