@@ -9,6 +9,7 @@ from engine.clients.azure_ai.config import (
     AZUREAI_SERVICE_NAME,
     AZUREAI_INDEX_NAME,
     add_docs,
+    list_indices_statssummary,
 )
 
 
@@ -50,7 +51,37 @@ class AzureAIUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
+        indexstats = list_indices_statssummary(
+            cls.service_endpoint, cls.api_version, AZUREAI_API_KEY
+        )
+        # {'@odata.context': 'https://vecsim-s2.search.windows.net/$metadata#Collection(Microsoft.Azure.Search.V2023_11_01.IndexStatisticsSummary)', 'value': [{'name': 'idx', 'documentCount': 1183514, 'storageSize': 529452670, 'vectorIndexSize': 183084912}]}
+        len_indices = len(indexstats["value"])
+        print(f"within clean, detected {len_indices} indices.")
+        for index in indexstats["value"]:
+            if index["name"] == AZUREAI_INDEX_NAME:
+                print(
+                    f"Found existing index with name {AZUREAI_INDEX_NAME}. deleting it..."
+                )
+                print(index)
         return {}
+
+    def get_memory_usage(cls):
+        stats = {}
+        indexstats = list_indices_statssummary(
+            cls.service_endpoint, cls.api_version, AZUREAI_API_KEY
+        )
+        # {'@odata.context': 'https://vecsim-s2.search.windows.net/$metadata#Collection(Microsoft.Azure.Search.V2023_11_01.IndexStatisticsSummary)', 'value': [{'name': 'idx', 'documentCount': 1183514, 'storageSize': 529452670, 'vectorIndexSize': 183084912}]}
+        len_indices = len(indexstats["value"])
+        print(f"within clean, detected {len_indices} indices.")
+        for index in indexstats["value"]:
+            if index["name"] == AZUREAI_INDEX_NAME:
+                print(
+                    f"Found existing index with name {AZUREAI_INDEX_NAME}. deleting it..."
+                )
+                print(index)
+                stats = index
+
+        return stats
 
     @classmethod
     def delete_client(cls):

@@ -76,3 +76,17 @@ def add_docs(service_endpoint, api_version, api_key, index_name, docs):
         raise Exception(
             f"Error while adding docs: {response.status_code} - {response.text}"
         )
+
+
+def list_indices_statssummary(service_endpoint, api_version, api_key):
+    # Endpoint URL
+    endpoint = f"{service_endpoint}/indexes/statssummary?api-version={api_version}"
+
+    headers = {"Content-Type": "application/json", "api-key": api_key}
+
+    response = requests.get(endpoint, headers=headers)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return f"Error: {response.status_code} - {response.text}"
