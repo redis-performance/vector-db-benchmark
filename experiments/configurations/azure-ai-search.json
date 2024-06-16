@@ -4,7 +4,7 @@
     "engine": "azureai",
     "connection_params": {},
     "collection_params": {
-      "hnsw_config": { "m": 16, "efConstruction": 128 }
+      "hnsw_config": { "m": 4, "efConstruction": 64 }
     },
     "search_params": [
       { "parallel": 1, "config": { "EF": 64 } }, { "parallel": 1, "config": { "EF": 128 } }, { "parallel": 1, "config": { "EF": 256 } }, { "parallel": 1, "config": { "EF": 512 } },

@@ -45,7 +45,7 @@ class AzureAIConfigurator(BaseConfigurator):
         vector_size = dataset.config.vector_size
         distance = dataset.config.distance
         hnsw_config = self.collection_params.get(
-            "hnsw_config", {"m": 16, "efConstruction": 64}
+            "hnsw_config", {"m": 4, "efConstruction": 64}
         )
         m = hnsw_config["m"]
         efConstruction = hnsw_config["efConstruction"]
