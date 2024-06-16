@@ -1,0 +1,15 @@
+[
+  {
+    "name": "azureai-default",
+    "engine": "azureai",
+    "connection_params": {},
+    "collection_params": {
+      "hnsw_config": { "m": 16, "efConstruction": 128 }
+    },
+    "search_params": [
+      { "parallel": 1, "config": { "EF": 64 } }, { "parallel": 1, "config": { "EF": 128 } }, { "parallel": 1, "config": { "EF": 256 } }, { "parallel": 1, "config": { "EF": 512 } },
+      { "parallel": 100, "config": { "EF": 64 } }, { "parallel": 100, "config": { "EF": 128 } }, { "parallel": 100, "config": { "EF": 256 } }, { "parallel": 100, "config": { "EF": 512 } }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  }
+]
