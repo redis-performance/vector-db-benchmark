@@ -6,6 +6,7 @@ from engine.clients.azure_ai.config import (
     AZUREAI_API_VERSION,
     AZUREAI_SERVICE_NAME,
     AZUREAI_INDEX_NAME,
+    list_indices,
     delete_index,
     create_index,
 )
@@ -22,9 +23,20 @@ class AzureAIConfigurator(BaseConfigurator):
         self.service_endpoint = f"https://{AZUREAI_SERVICE_NAME}.search.windows.net"
 
     def clean(self):
-        delete_index(
-            self.service_endpoint, self.api_version, AZUREAI_INDEX_NAME, AZUREAI_API_KEY
-        )
+        indices = list_indices(self.service_endpoint, self.api_version, AZUREAI_API_KEY)
+        print(f"within clean, detected {len(indices)} indices.")
+        for index in indices:
+            if index["name"] == AZUREAI_INDEX_NAME:
+                print(
+                    f"Found existing index with name {AZUREAI_INDEX_NAME}. deleting it..."
+                )
+                res = delete_index(
+                    self.service_endpoint,
+                    self.api_version,
+                    AZUREAI_INDEX_NAME,
+                    AZUREAI_API_KEY,
+                )
+                print(f"\tindex delete result: {res}")
 
     def recreate(self, dataset: Dataset, collection_params):
         if dataset.config.type == "sparse":
