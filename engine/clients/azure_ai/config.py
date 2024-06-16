@@ -17,9 +17,7 @@ def delete_index(service_endpoint, api_version, idx, api_key):
 
     response = requests.delete(endpoint, headers=headers)
 
-    if response.status_code in [200, 204]:
-        return response.json()
-    else:
+    if response.status_code not in [200, 204]:
         raise Exception(
             f"Error while deleting index: {response.status_code} - {response.text}"
         )
