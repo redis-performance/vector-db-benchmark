@@ -24,8 +24,9 @@ class AzureAIConfigurator(BaseConfigurator):
 
     def clean(self):
         indices = list_indices(self.service_endpoint, self.api_version, AZUREAI_API_KEY)
-        print(f"within clean, detected {len(indices)} indices.")
-        for index in indices:
+        len_indices = len(indices["value"])
+        print(f"within clean, detected {len_indices} indices.")
+        for index in indices["value"]:
             if index["name"] == AZUREAI_INDEX_NAME:
                 print(
                     f"Found existing index with name {AZUREAI_INDEX_NAME}. deleting it..."
