@@ -12,14 +12,16 @@ from engine.clients.azure_ai.config import (
 )
 
 
-class QdrantUploader(BaseUploader):
+class AzureAIUploader(BaseUploader):
     client = None
     upload_params = {}
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
         if AZUREAI_API_VERSION is None:
-            raise Exception("An api key is required to use Azure AI Search...")
+            raise Exception(
+                "An api key is required to use Azure AI Search. Specify it via AZUREAI_API_KEY=..."
+            )
         cls.api_version = AZUREAI_API_VERSION
         cls.service_endpoint = f"https://{AZUREAI_SERVICE_NAME}.search.windows.net"
         cls.upload_params = upload_params

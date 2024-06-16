@@ -1,4 +1,3 @@
-import os
 from typing import List, Tuple
 
 
@@ -10,7 +9,7 @@ from engine.clients.azure_ai.config import (
 )
 
 
-class QdrantSearcher(BaseSearcher):
+class AzureAISearcher(BaseSearcher):
     search_params = {}
 
     @classmethod
