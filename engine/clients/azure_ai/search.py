@@ -48,22 +48,40 @@ class AzureAISearcher(BaseSearcher):
                 }
             ],
         }
-        reply = search_azure(
-            cls.service_endpoint,
-            AZUREAI_INDEX_NAME,
-            cls.api_version,
-            AZUREAI_API_KEY,
-            query,
-        )
-        if VERBOSE:
-            print(f"query: {query}")
-            print(f"reply: {reply}")
         result = []
-        for value in reply["value"]:
-            id = int(value["Id"])
-            score = float(value["@search.score"])
-            if cls.normalize_cosine:
-                score = cosineScoreToSimilarity(score)
-            result.append((id, score))
+        total_requests = 0
+        searchNextPage = True
+        while searchNextPage is True:
+            total_requests = total_requests + 1
+            reply = search_azure(
+                cls.service_endpoint,
+                AZUREAI_INDEX_NAME,
+                cls.api_version,
+                AZUREAI_API_KEY,
+                query,
+            )
+            if VERBOSE:
+                print(f"query: {query}")
+                print(f"reply: {reply}")
+
+            for value in reply["value"]:
+                id = int(value["Id"])
+                score = float(value["@search.score"])
+                if cls.normalize_cosine:
+                    score = cosineScoreToSimilarity(score)
+                result.append((id, score))
+
+            # Continuation of Partial Search Responses
+            # reference: https://learn.microsoft.com/en-us/rest/api/searchservice/search-documents
+            # Sometimes Azure AI Search can't return all the requested results in a single Search response. This can happen for different reasons, such as when the query requests too many documents by not specifying $top or specifying a value for $top that is too large. In such cases, Azure AI Search includes the @odata.nextLink annotation in the response body, and also @search.nextPageParameters if it was a POST request. You can use the values of these annotations to formulate another Search request to get the next part of the search response. This is called a continuation of the original Search request, and the annotations are generally called continuation tokens. See the example in Response below for details on the syntax of these annotations and where they appear in the response body.
+            if "@search.nextPageParameters" in reply:
+                query = reply["@search.nextPageParameters"]
+            else:
+                searchNextPage = False
+                if VERBOSE:
+                    len_replies = len(result)
+                    print(
+                        f"finished query after {total_requests} and a total of {len_replies}"
+                    )
 
         return result
