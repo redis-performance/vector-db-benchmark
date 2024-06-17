@@ -2,9 +2,9 @@ import json
 
 experiments = []
 
-for m in [4, 8, 10]:
-    for efConstruction in [128, 256, 512]:
-        for efSearch in [128, 256, 512]:
+for m in [4, 10]:
+    for efConstruction in [100,500,1000]:
+        for efSearch in [100,500,1000]:
             name = f"azureai-m-{m}-efConstruction-{efConstruction}-efSearch-{efSearch}"
 
             config = {
