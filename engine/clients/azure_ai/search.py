@@ -56,8 +56,8 @@ class AzureAISearcher(BaseSearcher):
             query,
         )
         if VERBOSE:
-            print("query: {query}")
-            print("reply: {reply}")
+            print(f"query: {query}")
+            print(f"reply: {reply}")
         result = []
         for value in reply["value"]:
             id = int(value["Id"])
