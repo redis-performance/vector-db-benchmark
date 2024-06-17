@@ -14,7 +14,8 @@
     "distance": "cosine",
     "type": "h5",
     "path": "glove-100-angular/glove-100-angular.hdf5",
-    "link": "http://ann-benchmarks.com/glove-100-angular.hdf5"
+    "link": "http://ann-benchmarks.com/glove-100-angular.hdf5",
+    "doc_count": 1183514
   },
   {
     "name": "yandex-t2i-gt-100k",
