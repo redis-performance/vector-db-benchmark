@@ -51,4 +51,4 @@ class AzureAISearcher(BaseSearcher):
             (int(value["Id"]), float(value["@search.score"])) for value in reply["value"]
         ]
 
-        raise result
+        return result
