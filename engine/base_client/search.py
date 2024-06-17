@@ -5,10 +5,13 @@ from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import tqdm
+import os 
 
 from dataset_reader.base_reader import Query
 
 DEFAULT_TOP = 10
+VERBOSE = bool(os.getenv("VERBOSE",0))
+
 
 
 class BaseSearcher:
@@ -50,7 +53,11 @@ class BaseSearcher:
         if query.expected_result:
             ids = set(x[0] for x in search_res)
             precision = len(ids.intersection(query.expected_result[:top])) / top
-        return precision, end - start
+        duration = end - start
+        if VERBOSE:
+            print(f"query {query}.")
+            print(f"precision {precision}; duration {duration}.")
+        return precision, duration
 
     def search_all(
         self,
