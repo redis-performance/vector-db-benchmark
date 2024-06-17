@@ -28,7 +28,10 @@ class AzureAISearcher(BaseSearcher):
         cls.service_endpoint = f"https://{AZUREAI_SERVICE_NAME}.search.windows.net"
         cls.normalize_cosine = False
         if distance == Distance.COSINE:
+            print("Going to normalize distance due to cosine.")
             cls.normalize_cosine = True
+        else:
+            print(f"distance: {distance}")
 
     @classmethod
     def search_one(cls, query: Query, top: int) -> List[Tuple[int, float]]:
