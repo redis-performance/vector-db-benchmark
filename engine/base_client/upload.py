@@ -82,10 +82,7 @@ class BaseUploader:
             "upload_time": upload_time,
             "total_time": total_time,
             "latencies": latencies,
-<<<<<<< HEAD
             "memory_usage": memory_usage,
-=======
->>>>>>> origin/general.improvements
             "parallel": parallel,
             "batch_size": batch_size,
         }
