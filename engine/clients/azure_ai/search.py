@@ -1,5 +1,5 @@
 from typing import List, Tuple
-
+import os
 from engine.base_client.distances import Distance
 
 from dataset_reader.base_reader import Query
@@ -13,6 +13,8 @@ from engine.clients.azure_ai.config import (
     search_azure,
     cosineScoreToSimilarity,
 )
+
+VERBOSE = bool(os.getenv("VERBOSE", 0))
 
 
 class AzureAISearcher(BaseSearcher):
@@ -53,6 +55,9 @@ class AzureAISearcher(BaseSearcher):
             AZUREAI_API_KEY,
             query,
         )
+        if VERBOSE:
+            print("query: {query}")
+            print("reply: {reply}")
         result = []
         for value in reply["value"]:
             id = int(value["Id"])

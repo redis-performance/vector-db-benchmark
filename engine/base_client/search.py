@@ -55,7 +55,7 @@ class BaseSearcher:
             precision = len(ids.intersection(query.expected_result[:top])) / top
 
             if VERBOSE:
-                print(f"query {query}.")
+                print(f"query {query}. top: {top}")
                 print(f"precision {precision}; duration {duration}.")
                 print(f"\texpected_result: {query.expected_result[:top]}")
                 print(f"\tactual_result: {ids}")
