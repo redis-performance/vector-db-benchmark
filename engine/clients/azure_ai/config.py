@@ -5,7 +5,7 @@ import json
 AZUREAI_API_KEY = os.getenv("AZUREAI_API_KEY", None)
 AZUREAI_SERVICE_NAME = os.getenv("AZUREAI_SERVICE_NAME", "vecsim-s2")
 AZUREAI_INDEX_NAME = os.getenv("AZUREAI_INDEX_NAME", "idx")
-AZUREAI_API_VERSION = os.getenv("AZUREAI_API_VERSION", "2023-11-01")
+AZUREAI_API_VERSION = os.getenv("AZUREAI_API_VERSION", "2024-05-01-preview")
 
 
 # Define the function to list indices
@@ -99,9 +99,7 @@ def search_azure(service_endpoint, index_name, api_version, api_key, query):
     )
     headers = {"Content-Type": "application/json", "api-key": api_key}
 
-    search_data = {"search": query}
-
-    response = requests.post(endpoint, headers=headers, data=json.dumps(search_data))
+    response = requests.post(endpoint, headers=headers, data=json.dumps(query))
 
     if response.status_code == 200:
         return response.json()
