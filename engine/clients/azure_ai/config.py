@@ -5,6 +5,8 @@ import json
 AZUREAI_API_KEY = os.getenv("AZUREAI_API_KEY", None)
 AZUREAI_SERVICE_NAME = os.getenv("AZUREAI_SERVICE_NAME", "vecsim-s2")
 AZUREAI_INDEX_NAME = os.getenv("AZUREAI_INDEX_NAME", "idx")
+# invokes exhaustive KNN at query time, even if the field is indexed for HNSW.
+AZUREAI_EXHAUSTIVE_KNN = bool(os.getenv("AZUREAI_EXHAUSTIVE_KNN", "0"))
 AZUREAI_API_VERSION = os.getenv("AZUREAI_API_VERSION", "2024-05-01-preview")
 
 

@@ -13,6 +13,15 @@ from engine.clients.azure_ai.config import (
 
 
 class AzureAIConfigurator(BaseConfigurator):
+    # https://github.com/MicrosoftDocs/azure-docs/blob/main/articles/search/vector-search-how-to-query.md#similarity-metric
+    # The similarity metric specified in the index vectorSearch section for a vector-only query.
+    # Valid values are cosine, euclidean, and dotProduct
+    DISTANCE_MAPPING = {
+        Distance.L2: "euclidean",
+        Distance.DOT: "dotProduct",
+        Distance.COSINE: "cosine",
+    }
+
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
         if AZUREAI_API_VERSION is None:
@@ -43,7 +52,8 @@ class AzureAIConfigurator(BaseConfigurator):
         if dataset.config.type == "sparse":
             raise Exception("Sparse vector not implemented.")
         vector_size = dataset.config.vector_size
-        distance = dataset.config.distance
+        distance = self.DISTANCE_MAPPING[dataset.config.distance]
+
         hnsw_config = self.collection_params.get(
             "hnsw_config", {"m": 4, "efConstruction": 100, "efSearch": 100}
         )

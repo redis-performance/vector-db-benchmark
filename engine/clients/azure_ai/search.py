@@ -9,6 +9,7 @@ from engine.clients.azure_ai.config import (
     AZUREAI_SERVICE_NAME,
     AZUREAI_API_KEY,
     AZUREAI_INDEX_NAME,
+    AZUREAI_EXHAUSTIVE_KNN,
     search_azure,
     cosineScoreToSimilarity,
 )
@@ -41,7 +42,7 @@ class AzureAISearcher(BaseSearcher):
                     "k": top,
                     "fields": "VectorField",
                     "kind": "vector",
-                    "exhaustive": True,
+                    "exhaustive": AZUREAI_EXHAUSTIVE_KNN,
                 }
             ],
         }
