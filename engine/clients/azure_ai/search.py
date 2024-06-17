@@ -44,7 +44,7 @@ class AzureAISearcher(BaseSearcher):
                     "k": top,
                     "fields": "VectorField",
                     "kind": "vector",
-                    "exhaustive": False,
+                    "exhaustive": True,
                 }
             ],
         }
