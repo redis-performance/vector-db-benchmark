@@ -154,6 +154,8 @@ class BaseClient:
                 search_stats = searcher.search_all(
                     dataset.config.distance, reader.read_queries()
                 )
+                # ensure we specify the client count in the results
+                search_params["parallel"] = client_count
                 if not DETAILED_RESULTS:
                     # Remove verbose stats from search results
                     search_stats.pop("latencies", None)
