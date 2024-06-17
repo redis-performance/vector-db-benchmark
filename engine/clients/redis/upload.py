@@ -1,9 +1,8 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from redis import Redis, RedisCluster
 
-from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
 from engine.clients.redis.config import (
     REDIS_AUTH,
@@ -16,7 +15,6 @@ from engine.clients.redis.helper import convert_to_redis_coords
 
 class RedisUploader(BaseUploader):
     client = None
-    client_decode = None
     upload_params = {}
 
     @classmethod
@@ -25,28 +23,23 @@ class RedisUploader(BaseUploader):
         cls.client = redis_constructor(
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
-        cls.client_decode = redis_constructor(
-            host=host,
-            port=REDIS_PORT,
-            password=REDIS_AUTH,
-            username=REDIS_USER,
-            decode_responses=True,
-        )
         cls.upload_params = upload_params
 
     @classmethod
-    def upload_batch(cls, batch: List[Record]):
+    def upload_batch(
+        cls, ids: List[int], vectors: List[list], metadata: Optional[List[dict]]
+    ):
         p = cls.client.pipeline(transaction=False)
-        for record in batch:
-            idx = record.id
-            vec = record.vector
-            meta = record.metadata or {}
+        for i in range(len(ids)):
+            idx = ids[i]
+            vec = vectors[i]
+            meta = metadata[i] if metadata else {}
             geopoints = {}
             payload = {}
             if meta is not None:
                 for k, v in meta.items():
                     # This is a patch for arxiv-titles dataset where we have a list of "labels", and
-                    # we want to index all of them under the same TAG field (whose separator is ';').
+                    # we want to index all of them under the same TAG field (whose seperator is ';').
                     if k == "labels":
                         payload[k] = ";".join(v)
                     if (
@@ -73,10 +66,5 @@ class RedisUploader(BaseUploader):
         p.execute()
 
     @classmethod
-    def post_upload(cls, _distance, doc_count):
+    def post_upload(cls, _distance):
         return {}
-
-    def get_memory_usage(cls):
-        used_memory = cls.client_decode.info("memory")["used_memory"]
-        index_info = cls.client_decode.ft().info()
-        return {"used_memory": used_memory, "index_info": index_info}
