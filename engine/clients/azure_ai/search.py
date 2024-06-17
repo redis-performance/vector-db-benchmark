@@ -6,6 +6,9 @@ from engine.base_client.search import BaseSearcher
 from engine.clients.azure_ai.config import (
     AZUREAI_API_VERSION,
     AZUREAI_SERVICE_NAME,
+    AZUREAI_API_KEY,
+    AZUREAI_INDEX_NAME,
+    search_azure,
 )
 
 
@@ -24,4 +27,29 @@ class AzureAISearcher(BaseSearcher):
 
     @classmethod
     def search_one(cls, query: Query, top: int) -> List[Tuple[int, float]]:
-        raise Exception("not implemented yet")
+        query = {
+            "count": True,
+            "select": "Id",
+            "vectorQueries": [
+                {
+                    "vector": query.vector,
+                    "k": top,
+                    "fields": "VectorField",
+                    "kind": "vector",
+                    "exhaustive": True,
+                }
+            ],
+        }
+
+        reply = search_azure(
+            cls.service_endpoint,
+            AZUREAI_INDEX_NAME,
+            cls.api_version,
+            AZUREAI_API_KEY,
+            query,
+        )
+        result = [
+            (int(value["Id"]), float(value["@search.score"])) for value in reply.value
+        ]
+
+        raise result

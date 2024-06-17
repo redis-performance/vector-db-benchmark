@@ -53,7 +53,7 @@ class AzureAIUploader(BaseUploader):
     def post_upload(cls, _distance, doc_count):
         indexing = True
         sleep_secs = 10
-        while(indexing is True):
+        while indexing is True:
             indexstats = list_indices_statssummary(
                 cls.service_endpoint, cls.api_version, AZUREAI_API_KEY
             )
@@ -71,9 +71,13 @@ class AzureAIUploader(BaseUploader):
                         indexing = False
                     else:
                         indexed_docs = index["documentCount"]
-                        print(f"checking if indexed docs({indexed_docs}) == doc_count ({doc_count}) of dataset.")
+                        print(
+                            f"checking if indexed docs({indexed_docs}) == doc_count ({doc_count}) of dataset."
+                        )
                         if indexed_docs < doc_count:
-                            print(f"Indexing still in progress... {indexed_docs} < {doc_count}. Sleeping for {sleep_secs} secs")
+                            print(
+                                f"Indexing still in progress... {indexed_docs} < {doc_count}. Sleeping for {sleep_secs} secs"
+                            )
                             time.sleep(sleep_secs)
                         else:
                             indexing = False

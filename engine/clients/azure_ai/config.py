@@ -90,3 +90,22 @@ def list_indices_statssummary(service_endpoint, api_version, api_key):
         return response.json()
     else:
         return f"Error: {response.status_code} - {response.text}"
+
+
+# Define the search function
+def search_azure(service_endpoint, index_name, api_version, api_key, query):
+    endpoint = (
+        f"{service_endpoint}/indexes/{index_name}/docs/search?api-version={api_version}"
+    )
+    headers = {"Content-Type": "application/json", "api-key": api_key}
+
+    search_data = {"search": query}
+
+    response = requests.post(endpoint, headers=headers, data=json.dumps(search_data))
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(
+            f"Error while searching: {response.status_code} - {response.text}"
+        )
