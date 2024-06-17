@@ -45,10 +45,11 @@ class AzureAIConfigurator(BaseConfigurator):
         vector_size = dataset.config.vector_size
         distance = dataset.config.distance
         hnsw_config = self.collection_params.get(
-            "hnsw_config", {"m": 4, "efConstruction": 100}
+            "hnsw_config", {"m": 4, "efConstruction": 100, "efSearch": 100}
         )
         m = hnsw_config["m"]
         efConstruction = hnsw_config["efConstruction"]
+        efSearch = hnsw_config["efSearch"]
         # Index definition
         index_definition = {
             "name": AZUREAI_INDEX_NAME,
@@ -79,6 +80,7 @@ class AzureAIConfigurator(BaseConfigurator):
                         "kind": "hnsw",
                         "hnswParameters": {
                             "m": m,
+                            "efSearch": efSearch,
                             "efConstruction": efConstruction,
                             "metric": distance,
                         },
