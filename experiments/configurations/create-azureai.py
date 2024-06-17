@@ -20,7 +20,7 @@ for m in [4, 8, 10]:
                 },
                 "search_params": [
                     {"parallel": 1, "config": {}},
-                    {"parallel": 100, "config": {}},
+                    {"parallel": 50, "config": {}},
                 ],
                 "upload_params": {"parallel": 16, "batch_size": 1024},
             }
