@@ -41,13 +41,30 @@ class AzureAIUploader(BaseUploader):
             }
             docs["value"].append(doc)
 
-        add_docs(
-            cls.service_endpoint,
-            cls.api_version,
-            AZUREAI_API_KEY,
-            AZUREAI_INDEX_NAME,
-            docs,
-        )
+        retries = 6
+        delay = 2
+        for attempt in range(retries):
+            try:
+                add_docs(
+                    cls.service_endpoint,
+                    cls.api_version,
+                    AZUREAI_API_KEY,
+                    AZUREAI_INDEX_NAME,
+                    docs,
+                )
+                break
+            except Exception as e:
+                if attempt < retries - 1:
+                    print(
+                        f"received exception {e.__str__}. sleeping for {delay} secs and trying again."
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    print(
+                        f"received exception {e.__str__}. failing after {retries} tries..."
+                    )
+                    raise e
 
     @classmethod
     def post_upload(cls, _distance, doc_count):
