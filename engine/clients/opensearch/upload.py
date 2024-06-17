@@ -61,7 +61,7 @@ class OpenSearchUploader(BaseUploader):
         )
 
     @classmethod
-    def post_upload(cls, _distance):
+    def post_upload(cls, _distance, doc_count):
         cls.client.indices.forcemerge(
             index=OPENSEARCH_INDEX,
             params={

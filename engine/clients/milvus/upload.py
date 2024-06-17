@@ -65,7 +65,7 @@ class MilvusUploader(BaseUploader):
         cls.collection.insert([ids, vectors] + field_values)
 
     @classmethod
-    def post_upload(cls, distance):
+    def post_upload(cls, distance, doc_count):
         index_params = {
             "metric_type": cls.distance,
             "index_type": cls.upload_params.get("index_type", "HNSW"),

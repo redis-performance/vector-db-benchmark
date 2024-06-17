@@ -106,7 +106,9 @@ class BaseClient:
 
             print("Experiment stage: Upload")
             upload_stats = self.uploader.upload(
-                distance=dataset.config.distance, records=reader.read_data()
+                distance=dataset.config.distance,
+                records=reader.read_data(),
+                doc_count=dataset.config.doc_count,
             )
 
             if not DETAILED_RESULTS:
@@ -125,7 +127,6 @@ class BaseClient:
         if not skip_search:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
-
                 if skip_if_exists:
                     glob_pattern = (
                         f"{self.name}-{dataset.config.name}-search-{search_id}-*.json"

@@ -47,7 +47,6 @@ def run(
             print(f"Running experiment: {engine_name} - {dataset_name}")
             client = ClientFactory(host).build_client(engine_config)
             try:
-
                 dataset = Dataset(dataset_config)
                 if dataset.config.type == "sparse" and not client.sparse_vector_support:
                     raise IncompatibilityError(

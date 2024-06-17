@@ -44,7 +44,7 @@ class PgVectorUploader(BaseUploader):
                 copy.write_row((i, embedding))
 
     @classmethod
-    def post_upload(cls, distance):
+    def post_upload(cls, distance, doc_count):
         try:
             hnsw_distance_type = cls.DISTANCE_MAPPING[distance]
         except KeyError:

@@ -24,6 +24,8 @@ class DatasetConfig:
     # None in case of sparse vectors:
     vector_size: Optional[int] = None
     distance: Optional[str] = None
+    # None in case info not present
+    doc_count: Optional[int] = None
 
 
 READER_TYPE = {

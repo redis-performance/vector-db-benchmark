@@ -73,7 +73,7 @@ class RedisUploader(BaseUploader):
         p.execute()
 
     @classmethod
-    def post_upload(cls, _distance):
+    def post_upload(cls, _distance, doc_count):
         return {}
 
     def get_memory_usage(cls):

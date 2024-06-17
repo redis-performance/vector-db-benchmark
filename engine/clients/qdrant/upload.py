@@ -57,7 +57,7 @@ class QdrantUploader(BaseUploader):
         )
 
     @classmethod
-    def post_upload(cls, _distance):
+    def post_upload(cls, _distance, doc_count):
         cls.client.update_collection(
             collection_name=QDRANT_COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
