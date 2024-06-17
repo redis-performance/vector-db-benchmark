@@ -40,7 +40,6 @@ class AzureAISearcher(BaseSearcher):
                 }
             ],
         }
-
         reply = search_azure(
             cls.service_endpoint,
             AZUREAI_INDEX_NAME,
@@ -49,7 +48,7 @@ class AzureAISearcher(BaseSearcher):
             query,
         )
         result = [
-            (int(value["Id"]), float(value["@search.score"])) for value in reply.value
+            (int(value["Id"]), float(value["@search.score"])) for value in reply["value"]
         ]
 
         raise result
