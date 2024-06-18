@@ -4,22 +4,24 @@ experiments = []
 
 for m in [4, 10]:
     for efConstruction in [100, 500, 1000]:
-        config = (
-            {
-                "name": "redis-m-{m}-ef-{efConstruction}",
-                "engine": "redis",
-                "connection_params": {},
-                "collection_params": {
-                    "hnsw_config": {"M": m, "EF_CONSTRUCTION": efConstruction}
-                },
-                "search_params": [],
-                "upload_params": {"parallel": 16},
+        search_params = []
+        config = {
+            "name": f"redis-m-{m}-ef-{efConstruction}",
+            "engine": "redis",
+            "connection_params": {},
+            "collection_params": {
+                "hnsw_config": {"M": m, "EF_CONSTRUCTION": efConstruction}
             },
-        )
+            "search_params": [],
+            "upload_params": {"parallel": 16},
+        }
 
         for efSearch in [100, 500, 1000]:
-            config["search_params"].append({"parallel": 1, "config": {"EF": efSearch}})
-            config["search_params"].append({"parallel": 50, "config": {"EF": efSearch}})
+            single_client_config = {"parallel": 1, "config": {"EF": efSearch}}
+            multi_client_config = {"parallel": 50, "config": {"EF": efSearch}}
+            search_params.append(single_client_config)
+            search_params.append(multi_client_config)
+        config["search_params"] = search_params
 
         experiments.append(config)
 
