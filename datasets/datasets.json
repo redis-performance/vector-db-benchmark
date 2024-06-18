@@ -69,7 +69,7 @@
     "type": "tar",
     "path": "dbpedia-openai-1M-1536-angular/dbpedia_openai_1M",
     "link": "https://storage.googleapis.com/ann-filtered-benchmark/datasets/dbpedia_openai_1M.tgz",
-    "doc_count": 1000000
+    "doc_count": 975000
   },
   {
     "name": "dbpedia-openai-100K-1536-angular",
