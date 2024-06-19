@@ -12,38 +12,38 @@
         "search_params": [
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             }
         ],
@@ -64,38 +64,38 @@
         "search_params": [
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             }
         ],
@@ -116,38 +116,38 @@
         "search_params": [
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             }
         ],
@@ -168,38 +168,38 @@
         "search_params": [
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             }
         ],
@@ -220,38 +220,38 @@
         "search_params": [
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             }
         ],
@@ -272,38 +272,38 @@
         "search_params": [
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 100
+                "search_params": {
+                    "ef": 100
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 500
+                "search_params": {
+                    "ef": 500
                 }
             },
             {
                 "parallel": 1,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             },
             {
                 "parallel": 50,
-                "config": {
-                    "EF": 1000
+                "search_params": {
+                    "ef": 1000
                 }
             }
         ],
