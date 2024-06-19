@@ -52,6 +52,58 @@
         }
     },
     {
+        "name": "redis-m-4-ef-256",
+        "engine": "redis",
+        "connection_params": {},
+        "collection_params": {
+            "hnsw_config": {
+                "M": 4,
+                "EF_CONSTRUCTION": 256
+            }
+        },
+        "search_params": [
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 1000
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 1000
+                }
+            }
+        ],
+        "upload_params": {
+            "parallel": 16
+        }
+    },
+    {
         "name": "redis-m-4-ef-500",
         "engine": "redis",
         "connection_params": {},
@@ -208,6 +260,58 @@
         }
     },
     {
+        "name": "redis-m-10-ef-256",
+        "engine": "redis",
+        "connection_params": {},
+        "collection_params": {
+            "hnsw_config": {
+                "M": 10,
+                "EF_CONSTRUCTION": 256
+            }
+        },
+        "search_params": [
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 1000
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 1000
+                }
+            }
+        ],
+        "upload_params": {
+            "parallel": 16
+        }
+    },
+    {
         "name": "redis-m-10-ef-500",
         "engine": "redis",
         "connection_params": {},
@@ -266,6 +370,214 @@
         "collection_params": {
             "hnsw_config": {
                 "M": 10,
+                "EF_CONSTRUCTION": 1000
+            }
+        },
+        "search_params": [
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 1000
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 1000
+                }
+            }
+        ],
+        "upload_params": {
+            "parallel": 16
+        }
+    },
+    {
+        "name": "redis-m-64-ef-100",
+        "engine": "redis",
+        "connection_params": {},
+        "collection_params": {
+            "hnsw_config": {
+                "M": 64,
+                "EF_CONSTRUCTION": 100
+            }
+        },
+        "search_params": [
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 1000
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 1000
+                }
+            }
+        ],
+        "upload_params": {
+            "parallel": 16
+        }
+    },
+    {
+        "name": "redis-m-64-ef-256",
+        "engine": "redis",
+        "connection_params": {},
+        "collection_params": {
+            "hnsw_config": {
+                "M": 64,
+                "EF_CONSTRUCTION": 256
+            }
+        },
+        "search_params": [
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 1000
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 1000
+                }
+            }
+        ],
+        "upload_params": {
+            "parallel": 16
+        }
+    },
+    {
+        "name": "redis-m-64-ef-500",
+        "engine": "redis",
+        "connection_params": {},
+        "collection_params": {
+            "hnsw_config": {
+                "M": 64,
+                "EF_CONSTRUCTION": 500
+            }
+        },
+        "search_params": [
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 100
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 500
+                }
+            },
+            {
+                "parallel": 1,
+                "search_params": {
+                    "ef": 1000
+                }
+            },
+            {
+                "parallel": 50,
+                "search_params": {
+                    "ef": 1000
+                }
+            }
+        ],
+        "upload_params": {
+            "parallel": 16
+        }
+    },
+    {
+        "name": "redis-m-64-ef-1000",
+        "engine": "redis",
+        "connection_params": {},
+        "collection_params": {
+            "hnsw_config": {
+                "M": 64,
                 "EF_CONSTRUCTION": 1000
             }
         },
