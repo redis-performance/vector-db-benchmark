@@ -41,8 +41,8 @@ class RedisSearcher(BaseSearcher):
         cls._ft = cls.conns[random.randint(0, len(cls.conns)) - 1].ft()
 
     @classmethod
-    def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
-        conditions = cls.parser.parse(meta_conditions)
+    def search_one(cls, query: Query, top: int) -> List[Tuple[int, float]]:
+        conditions = cls.parser.parse(query.meta_conditions)
         if conditions is None:
             prefilter_condition = "*"
             params = {}
@@ -62,7 +62,7 @@ class RedisSearcher(BaseSearcher):
             .timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
-            "vec_param": np.array(vector).astype(np.float32).tobytes(),
+            "vec_param": np.array(query.vector).astype(np.float32).tobytes(),
             "K": top,
             "EF": cls.search_params["search_params"]["ef"],
             **params,
