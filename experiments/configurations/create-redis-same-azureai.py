@@ -17,8 +17,8 @@ for m in [4, 10]:
         }
 
         for efSearch in [100, 500, 1000]:
-            single_client_config = {"parallel": 1, "config": {"EF": efSearch}}
-            multi_client_config = {"parallel": 50, "config": {"EF": efSearch}}
+            single_client_config = {"parallel": 1, "search_params": {"ef": efSearch}}
+            multi_client_config = {"parallel": 50, "search_params": {"ef": efSearch}}
             search_params.append(single_client_config)
             search_params.append(multi_client_config)
         config["search_params"] = search_params
