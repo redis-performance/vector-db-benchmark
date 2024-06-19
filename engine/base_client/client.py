@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
+import warnings
 
 from benchmark import ROOT_DIR
 from benchmark.dataset import Dataset
@@ -14,6 +15,9 @@ RESULTS_DIR = ROOT_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 DETAILED_RESULTS = bool(int(os.getenv("DETAILED_RESULTS", False)))
+REPETITIONS = int(os.getenv("REPETITIONS", 3))
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 class BaseClient:
@@ -81,6 +85,7 @@ class BaseClient:
         skip_upload: bool = False,
         skip_search: bool = False,
         skip_if_exists: bool = True,
+        parallels: [int] = [],
     ):
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
@@ -122,7 +127,6 @@ class BaseClient:
         if not skip_search:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
-
                 if skip_if_exists:
                     glob_pattern = (
                         f"{self.name}-{dataset.config.name}-search-{search_id}-*.json"
@@ -136,17 +140,33 @@ class BaseClient:
                         continue
 
                 search_params = {**searcher.search_params}
-                search_stats = searcher.search_all(
-                    dataset.config.distance, reader.read_queries()
-                )
-                if not DETAILED_RESULTS:
-                    # Remove verbose stats from search results
-                    search_stats.pop("latencies", None)
-                    search_stats.pop("precisions", None)
+                ef = "default"
+                if "search_params" in search_params:
+                    ef = search_params["search_params"].get("ef", "default")
+                client_count = search_params.get("parallel", 1)
+                filter_client_count = len(parallels) > 0
+                if filter_client_count and (client_count not in parallels):
+                    print(f"\tSkipping ef runtime: {ef}; #clients {client_count}")
+                    continue
+                for repetition in range(1, REPETITIONS + 1):
+                    print(
+                        f"\tRunning repetition {repetition} ef runtime: {ef}; #clients {client_count}"
+                    )
 
-                self.save_search_results(
-                    dataset.config.name, search_stats, search_id, search_params
-                )
+                    search_stats = searcher.search_all(
+                        dataset.config.distance, reader.read_queries()
+                    )
+                    # ensure we specify the client count in the results
+                    search_params["parallel"] = client_count
+                    if not DETAILED_RESULTS:
+                        # Remove verbose stats from search results
+                        search_stats.pop("latencies", None)
+                        search_stats.pop("precisions", None)
+
+                    self.save_search_results(
+                        dataset.config.name, search_stats, search_id, search_params
+                    )
+
         print("Experiment stage: Done")
         print("Results saved to: ", RESULTS_DIR)
 

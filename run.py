@@ -17,6 +17,7 @@ app = typer.Typer()
 def run(
     engines: List[str] = typer.Option(["*"]),
     datasets: List[str] = typer.Option(["*"]),
+    parallels: List[int] = typer.Option([]),
     host: str = "localhost",
     skip_upload: bool = False,
     skip_search: bool = False,
@@ -51,7 +52,7 @@ def run(
             try:
                 with stopit.ThreadingTimeout(timeout) as tt:
                     client.run_experiment(
-                        dataset, skip_upload, skip_search, skip_if_exists
+                        dataset, skip_upload, skip_search, skip_if_exists, parallels
                     )
                 client.delete_client()
 

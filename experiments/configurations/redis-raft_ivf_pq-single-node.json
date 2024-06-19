@@ -1,0 +1,626 @@
+[
+  {
+    "name": "redis-raft_ivf_pq-n_lists-256-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-256-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-256-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-256-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-256-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-256-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 256,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-512-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-512-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-512-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-512-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-512-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-512-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 512,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1024-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1024-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1024-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1024-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1024-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1024-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1024,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1536-n_probes-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1536-n_probes-20",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 20
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1536-n_probes-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1536-n_probes-64",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 64
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1536-n_probes-128",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 128
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  },
+  {
+    "name": "redis-raft_ivf_pq-n_lists-1536-n_probes-256",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "raft_ivf_pq",
+      "raft_ivf_pq_config": {
+        "N_LISTS": 1536,
+        "N_PROBES": 256
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "algorithm": "raft_ivf_pq"
+      },
+      {
+        "parallel": 100,
+        "algorithm": "raft_ivf_pq"
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "algorithm": "raft_ivf_pq"
+    }
+  }
+]
