@@ -96,6 +96,14 @@
     "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-400M-cosine.hdf5"
   },
   {
+    "name": "laion-img-emb-768-1G-cosine",
+    "vector_size": 768,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-768/laion-img-emb-768-1G-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-768-1G-cosine.hdf5"
+  },
+  {
     "name": "gist-960-angular",
     "vector_size": 960,
     "distance": "dot",
