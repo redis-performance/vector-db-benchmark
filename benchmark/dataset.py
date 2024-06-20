@@ -45,9 +45,20 @@ class Dataset:
 
         if self.config.link:
             print(f"Downloading {self.config.link}...")
-            tmp_path, _ = urllib.request.urlretrieve(
-                self.config.link, None, show_progress
-            )
+
+            remaining_download_tries = 15
+            while remaining_download_tries > 0 :
+                try: 
+                    tmp_path, _ = urllib.request.urlretrieve(
+                        self.config.link, None, show_progress
+                    )
+                    print(f"Download succeded.")
+                except: 
+                    print(f"Download failed. Retrying...")
+                    remaining_download_tries = remaining_download_tries - 1
+                    continue
+                else: 
+                    break
 
             if self.config.link.endswith(".tgz") or self.config.link.endswith(
                 ".tar.gz"
