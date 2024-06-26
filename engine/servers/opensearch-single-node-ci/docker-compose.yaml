@@ -2,11 +2,20 @@ version: '3.5'
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:2.10.0
+    image: opensearchproject/opensearch:2.14.0
     environment:
       discovery.type: "single-node"
-      plugins.security.disabled: true
       OPENSEARCH_JAVA_OPTS: "-Xms2g -Xmx2g"
+      DISABLE_SECURITY_PLUGIN: true
+      DISABLE_INSTALL_DEMO_CONFIG: true
+      bootstrap.memory_lock: true
+    ulimits:
+      memlock:
+        soft: -1 # Set memlock to unlimited (no soft or hard limit)
+        hard: -1
+      nofile:
+        soft: 65536 # Maximum number of open files for the opensearch user - set to at least 65536
+        hard: 65536
     ports:
       - "9200:9200"
       - "9300:9300"
@@ -18,4 +27,4 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4Gb
+          memory: 5Gb
