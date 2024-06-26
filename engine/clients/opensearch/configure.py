@@ -44,18 +44,48 @@ class OpenSearchConfigurator(BaseConfigurator):
         if dataset.config.vector_size > 16000:
             raise IncompatibilityError
 
-        index_settings = (
-            {
-                "knn": True,
-                "number_of_replicas": 0,
-                "refresh_interval": -1,  # no refresh is required because we index all the data at once
-            },
-        )
+        nodes_stats_res = self.client.nodes.info(filter_path="nodes.*.roles,nodes.*.os")
+        nodes_data = nodes_stats_res.get("nodes")
+
+        data_node_count = 0
+        total_processors = 0
+        for node_id in nodes_data:
+            node_info = nodes_data.get(node_id)
+            roles = node_info["roles"]
+            os_info = node_info["os"]
+            if 'data' in roles:
+                data_node_count += 1
+                total_processors += int(os_info['allocated_processors'])
+
+        processors_per_node = total_processors // data_node_count
+
+        index_thread_qty = max(1, processors_per_node // 2)
+
+        cluster_settings_body = {
+            "persistent": {
+                "knn.memory.circuit_breaker.limit": "75%",
+                "knn.algo_param.index_thread_qty": index_thread_qty
+            }
+        }
+
+        self.client.cluster.put_settings(cluster_settings_body)
+
+        index_settings = {
+            "knn": True,
+            "number_of_replicas": 0,
+            "refresh_interval": -1,  # no refresh is required because we index all the data at once
+        }
         index_config = collection_params.get("index")
 
         # if we specify the number_of_shards on the config, enforce it. otherwise use the default
-        if "number_of_shards" in index_config:
+        if index_config is not None and index_config.has_key("number_of_shards"):
             index_settings["number_of_shards"] = 1
+
+        field_config = self._prepare_fields_config(dataset)
+
+        engine = "faiss"
+        if field_config == {} or field_config is None:
+            engine = "nmslib"
 
         # Followed the bellow link for tuning for ingestion and querying
         # https://opensearch.org/docs/1.1/search-plugins/knn/performance-tuning/#indexing-performance-tuning
@@ -73,7 +103,7 @@ class OpenSearchConfigurator(BaseConfigurator):
                             "method": {
                                 **{
                                     "name": "hnsw",
-                                    "engine": "lucene",
+                                    "engine": engine,
                                     "space_type": self.DISTANCE_MAPPING[
                                         dataset.config.distance
                                     ],
@@ -85,7 +115,8 @@ class OpenSearchConfigurator(BaseConfigurator):
                                 **collection_params.get("method"),
                             },
                         },
-                        **self._prepare_fields_config(dataset),
+                        # this doesn't work for nmslib, we need see what to do here, may be remove them
+                        **field_config
                     }
                 },
             },

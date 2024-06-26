@@ -1,5 +1,6 @@
 import multiprocessing as mp
 import uuid
+import time
 from typing import List
 
 import backoff
@@ -12,7 +13,7 @@ from engine.clients.opensearch.config import (
     OPENSEARCH_BULK_INDEX_TIMEOUT,
     OPENSEARCH_FULL_INDEX_TIMEOUT,
     OPENSEARCH_INDEX,
-    _wait_for_es_status,
+    _wait_for_os_status,
     get_opensearch_client,
 )
 
@@ -75,6 +76,15 @@ class OpenSearchUploader(BaseUploader):
         on_backoff=_index_backoff_handler,
     )
     def post_upload(cls, _distance):
+        force_merge_endpoint = f'/{OPENSEARCH_INDEX}/_forcemerge?max_num_segments=1&wait_for_completion=false'
+        force_merge_task_id = cls.client.transport.perform_request('POST', force_merge_endpoint)['task']
+        SECONDS_WAITING_FOR_FORCE_MERGE_API_CALL_SEC = 30
+        while True:
+            time.sleep(SECONDS_WAITING_FOR_FORCE_MERGE_API_CALL_SEC)
+            task_status = cls.client.tasks.get(task_id=force_merge_task_id)
+            if task_status['completed']:
+                break
+
         print(
             "Updated the index settings back to the default and waiting for indexing to be completed."
         )
@@ -84,7 +94,7 @@ class OpenSearchUploader(BaseUploader):
             index=OPENSEARCH_INDEX,
             body={"index": {"refresh_interval": refresh_interval}},
         )
-        _wait_for_es_status(cls.client)
+        _wait_for_os_status(cls.client)
         return {}
 
     def get_memory_usage(cls):

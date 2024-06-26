@@ -1,8 +1,8 @@
 import multiprocessing as mp
 import uuid
 from typing import List, Tuple
-
 import backoff
+
 from opensearchpy import OpenSearch
 from opensearchpy.exceptions import TransportError
 
@@ -75,9 +75,12 @@ class OpenSearchSearcher(BaseSearcher):
             params={
                 "timeout": OPENSEARCH_TIMEOUT,
             },
+            _source=False,
+            docvalue_fields=["_id"],
+            stored_fields="_none_",
         )
         return [
-            (uuid.UUID(hex=hit["_id"]).int, hit["_score"])
+            (uuid.UUID(hex=hit["fields"]["_id"][0]).int, hit["_score"])
             for hit in res["hits"]["hits"]
         ]
 
@@ -87,3 +90,6 @@ class OpenSearchSearcher(BaseSearcher):
             cls.client.indices.put_settings(
                 body=cls.search_params["config"], index=OPENSEARCH_INDEX
             )
+        # Load the graphs in memory
+        warmup_endpoint = f'/_plugins/_knn/warmup/{OPENSEARCH_INDEX}'
+        print(cls.client.transport.perform_request('GET', warmup_endpoint))

@@ -47,7 +47,7 @@ def get_opensearch_client(host, connection_params):
     return client
 
 
-def _wait_for_es_status(client, status="yellow"):
+def _wait_for_os_status(client, status="yellow"):
     print(f"waiting for OpenSearch cluster health {status} status...")
     for _ in range(100):
         try:
