@@ -91,6 +91,7 @@ class RedisConfigurator(BaseConfigurator):
         algorithm_config = {}
         # by default we use hnsw
         algo = collection_params.get("algorithm", "hnsw")
+        data_type = collection_params.get("data_type", "float32")
         algorithm_config = collection_params.get(f"{algo}_config", {})
         print(f"Using algorithm {algo} with config {algorithm_config}")
         index_fields = [
@@ -98,7 +99,7 @@ class RedisConfigurator(BaseConfigurator):
                 name="vector",
                 algorithm=algo,
                 attributes={
-                    "TYPE": "FLOAT32",
+                    "TYPE": data_type,
                     "DIM": dataset.config.vector_size,
                     "DISTANCE_METRIC": self.DISTANCE_MAPPING[dataset.config.distance],
                     **algorithm_config,

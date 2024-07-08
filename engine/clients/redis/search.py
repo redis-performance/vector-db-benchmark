@@ -1,6 +1,6 @@
 import random
 from typing import List, Tuple
-
+from ml_dtypes import bfloat16
 import numpy as np
 from redis import Redis, RedisCluster
 from redis.commands.search.query import Query
@@ -32,7 +32,15 @@ class RedisSearcher(BaseSearcher):
         cls.algorithm = cls.search_params.get("algorithm", "hnsw").upper()
         if cls.algorithm == "HNSW":
             cls.knn_conditions = "EF_RUNTIME $EF"
+        cls.data_type = cls.search_params.get("data_type", "FLOAT32").upper()
+        print(f"data_type: {cls.data_type}; search_params: {cls.search_params}")
+        cls.np_data_type = np.float32
+        if cls.data_type == "FLOAT16":
+            cls.np_data_type = np.float16
+        if cls.data_type == "BFLOAT16":
+            cls.np_data_type = bfloat16
         cls._is_cluster = True if REDIS_CLUSTER else False
+
         # In the case of CLUSTER API enabled we randomly select the starting primary shard
         # when doing the client initialization to evenly distribute the load among the cluster
         cls.conns = [cls.client]
@@ -65,7 +73,7 @@ class RedisSearcher(BaseSearcher):
             .timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
-            "vec_param": np.array(vector).astype(np.float32).tobytes(),
+            "vec_param": np.array(vector).astype(cls.data_type).tobytes(),
             "K": top,
             **params,
         }

@@ -1,5 +1,6 @@
 import time
 from typing import List, Optional
+from ml_dtypes import bfloat16
 import requests
 import json
 
@@ -39,6 +40,12 @@ class RedisUploader(BaseUploader):
         )
         cls.upload_params = upload_params
         cls.algorithm = cls.upload_params.get("algorithm", "hnsw").upper()
+        cls.data_type = cls.upload_params.get("data_type", "FLOAT32").upper()
+        cls.np_data_type = np.float32
+        if cls.data_type == "FLOAT16":
+            cls.np_data_type = np.float16
+        if cls.data_type == "BFLOAT16":
+            cls.np_data_type = bfloat16
 
     @classmethod
     def upload_batch(
@@ -73,7 +80,7 @@ class RedisUploader(BaseUploader):
             cls.client.hset(
                 str(idx),
                 mapping={
-                    "vector": np.array(vec).astype(np.float32).tobytes(),
+                    "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
                     **payload,
                     **geopoints,
                 },
