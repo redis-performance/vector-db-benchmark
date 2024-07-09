@@ -32,7 +32,11 @@ class RedisSearcher(BaseSearcher):
         cls.algorithm = cls.search_params.get("algorithm", "hnsw").upper()
         if cls.algorithm == "HNSW":
             cls.knn_conditions = "EF_RUNTIME $EF"
-        cls.data_type = cls.search_params.get("data_type", "FLOAT32").upper()
+        cls.data_type = "FLOAT32"
+        if "search_params" in cls.search_params:
+            cls.data_type = (
+                cls.search_params["search_params"].get("data_type", "FLOAT32").upper()
+            )
         cls.np_data_type = np.float32
         if cls.data_type == "FLOAT64":
             cls.np_data_type = np.float64
