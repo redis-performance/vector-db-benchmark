@@ -33,8 +33,9 @@ class RedisSearcher(BaseSearcher):
         if cls.algorithm == "HNSW":
             cls.knn_conditions = "EF_RUNTIME $EF"
         cls.data_type = cls.search_params.get("data_type", "FLOAT32").upper()
-        print(f"data_type: {cls.data_type}; search_params: {cls.search_params}")
         cls.np_data_type = np.float32
+        if cls.data_type == "FLOAT64":
+            cls.np_data_type = np.float64
         if cls.data_type == "FLOAT16":
             cls.np_data_type = np.float16
         if cls.data_type == "BFLOAT16":
@@ -73,7 +74,7 @@ class RedisSearcher(BaseSearcher):
             .timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
-            "vec_param": np.array(vector).astype(cls.data_type).tobytes(),
+            "vec_param": np.array(vector).astype(cls.np_data_type).tobytes(),
             "K": top,
             **params,
         }

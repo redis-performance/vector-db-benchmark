@@ -42,6 +42,8 @@ class RedisUploader(BaseUploader):
         cls.algorithm = cls.upload_params.get("algorithm", "hnsw").upper()
         cls.data_type = cls.upload_params.get("data_type", "FLOAT32").upper()
         cls.np_data_type = np.float32
+        if cls.data_type == "FLOAT64":
+            cls.np_data_type = np.float64
         if cls.data_type == "FLOAT16":
             cls.np_data_type = np.float16
         if cls.data_type == "BFLOAT16":
