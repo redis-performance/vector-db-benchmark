@@ -2,7 +2,7 @@ import json
 
 experiments = []
 
-for data_type in ["FLOAT16", "BFLOAT16", "FLOAT32"]:
+for data_type in ["FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     for m in [16,32,64]:
         for efConstruction in [128, 256, 512]:
             search_params = []
