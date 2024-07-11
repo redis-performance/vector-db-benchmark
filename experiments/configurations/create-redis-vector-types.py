@@ -3,8 +3,8 @@ import json
 experiments = []
 
 for data_type in ["FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
-    for m in [16,32,64]:
-        for efConstruction in [128, 256, 512]:
+    for m in [16, 32, 64]:
+        for efConstruction in [32, 64, 128, 256, 512]:
             search_params = []
             config = {
                 "name": f"redis-{data_type.lower()}-m-{m}-ef-{efConstruction}",
@@ -18,7 +18,7 @@ for data_type in ["FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
                 "upload_params": {"parallel": 16, "data_type": data_type},
             }
 
-            for efSearch in [64, 128, 256, 512]:
+            for efSearch in [16, 32, 64, 128, 256, 512, 1024]:
                 single_client_config = {
                     "parallel": 1,
                     "search_params": {"ef": efSearch, "data_type": data_type},
