@@ -1,10 +1,11 @@
 [
   {
-    "name": "redis-intel-hnsw-m-16-ef-16",
+    "name": "redis-intel-float16-hnsw-m-16-ef-16",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 16,
         "EF_CONSTRUCTION": 16
@@ -302,15 +303,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-16-ef-512",
+    "name": "redis-intel-float16-hnsw-m-16-ef-512",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 16,
         "EF_CONSTRUCTION": 512
@@ -608,15 +611,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-16-ef-1024",
+    "name": "redis-intel-float16-hnsw-m-16-ef-1024",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 16,
         "EF_CONSTRUCTION": 1024
@@ -914,15 +919,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-64-ef-16",
+    "name": "redis-intel-float16-hnsw-m-64-ef-16",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 64,
         "EF_CONSTRUCTION": 16
@@ -1220,15 +1227,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-64-ef-512",
+    "name": "redis-intel-float16-hnsw-m-64-ef-512",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 64,
         "EF_CONSTRUCTION": 512
@@ -1526,15 +1535,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-64-ef-1024",
+    "name": "redis-intel-float16-hnsw-m-64-ef-1024",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 64,
         "EF_CONSTRUCTION": 1024
@@ -1832,15 +1843,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-256-ef-16",
+    "name": "redis-intel-float16-hnsw-m-256-ef-16",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 256,
         "EF_CONSTRUCTION": 16
@@ -2138,15 +2151,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-256-ef-512",
+    "name": "redis-intel-float16-hnsw-m-256-ef-512",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 256,
         "EF_CONSTRUCTION": 512
@@ -2444,15 +2459,17 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   },
   {
-    "name": "redis-intel-hnsw-m-256-ef-1024",
+    "name": "redis-intel-float16-hnsw-m-256-ef-1024",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
       "algorithm": "hnsw",
+      "data_type": "FLOAT16",
       "hnsw_config": {
         "M": 256,
         "EF_CONSTRUCTION": 1024
@@ -2750,7 +2767,8 @@
     ],
     "upload_params": {
       "parallel": 128,
-      "algorithm": "hnsw"
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
     }
   }
 ]
