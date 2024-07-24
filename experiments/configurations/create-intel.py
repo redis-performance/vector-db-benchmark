@@ -1,8 +1,8 @@
 import json
 
-ms = [16, 64, 256]
-ef_constructs = [16, 512, 1024]
-ef_runtimes = [16, 32, 64, 128, 256, 512, 1024, 2048]
+ms = [4, 8, 16, 32]
+ef_constructs = [4, 8, 16, 32]
+ef_runtimes = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 data_type = "FLOAT16"
 for algo in ["hnsw"]:
     configs = []
@@ -24,7 +24,7 @@ for algo in ["hnsw"]:
                     "data_type": data_type,
                 },
             }
-            for client in [100, 200, 400, 800, 1600, 3200]:
+            for client in [50, 100, 200]:
                 for ef_runtime in ef_runtimes:
                     test_config = {
                         "parallel": client,
