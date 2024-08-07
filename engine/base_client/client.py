@@ -85,6 +85,7 @@ class BaseClient:
         skip_upload: bool = False,
         skip_search: bool = False,
         skip_if_exists: bool = True,
+        only_configure: bool = False,
         parallels: [int] = [],
     ):
         execution_params = self.configurator.execution_params(
@@ -102,10 +103,11 @@ class BaseClient:
                 )
                 return
 
-        if not skip_upload:
+        if not (not only_configure and skip_upload):
             print("Experiment stage: Configure")
             self.configurator.configure(dataset)
 
+        if not skip_upload and not only_configure:
             print("Experiment stage: Upload")
             upload_stats = self.uploader.upload(
                 distance=dataset.config.distance, records=reader.read_data()

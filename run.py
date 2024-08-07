@@ -22,6 +22,7 @@ def run(
     skip_upload: bool = False,
     skip_search: bool = False,
     skip_if_exists: bool = True,
+    only_configure: bool = False,
     exit_on_error: bool = True,
     timeout: float = 86400.0,
 ):
@@ -52,7 +53,7 @@ def run(
             try:
                 with stopit.ThreadingTimeout(timeout) as tt:
                     client.run_experiment(
-                        dataset, skip_upload, skip_search, skip_if_exists, parallels
+                        dataset, skip_upload, skip_search, skip_if_exists, only_configure, parallels
                     )
                 client.delete_client()
 
