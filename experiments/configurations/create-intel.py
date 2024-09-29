@@ -24,11 +24,11 @@ for algo in ["hnsw"]:
                     "data_type": data_type,
                 },
             }
-            for client in [50, 100, 200]:
+            for client in [1, 50, 100, 200]:
                 for ef_runtime in ef_runtimes:
                     test_config = {
                         "parallel": client,
-                        "search_params": {"ef": ef_runtime},
+                        "search_params": {"ef": ef_runtime, "data_type": data_type},
                     }
                     config["search_params"].append(test_config)
             configs.append(config)

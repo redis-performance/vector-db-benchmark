@@ -62,17 +62,19 @@ class BaseClient:
         return result_path
 
     def save_upload_results(
-        self, dataset_name: str, results: dict, upload_params: dict
+        self, dataset_name: str, results: dict, upload_params: dict,upload_start_idx:int,upload_end_idx:int,
     ):
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
-        experiments_file = f"{self.name}-{dataset_name}-upload-{timestamp}.json"
+        experiments_file = f"{self.name}-{dataset_name}-upload-{upload_start_idx}-{upload_end_idx}-{timestamp}.json"
         with open(RESULTS_DIR / experiments_file, "w") as out:
             upload_stats = {
                 "params": {
                     "experiment": self.name,
                     "engine": self.engine,
                     "dataset": dataset_name,
+                    "start_idx": upload_start_idx,
+                    "end_idx": upload_end_idx,
                     **upload_params,
                 },
                 "results": results,
@@ -86,11 +88,12 @@ class BaseClient:
         skip_search: bool = False,
         skip_if_exists: bool = True,
         parallels: [int] = [],
+        upload_start_idx: int = 0,
+        upload_end_idx: int = -1,
     ):
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
         )
-
         reader = dataset.get_reader(execution_params.get("normalize", False))
 
         if skip_if_exists:
@@ -105,10 +108,12 @@ class BaseClient:
         if not skip_upload:
             print("Experiment stage: Configure")
             self.configurator.configure(dataset)
-
-            print("Experiment stage: Upload")
+            range_max_str = ":"
+            if upload_end_idx > 0:
+                range_max_str += f"{upload_end_idx}"
+            print(f"Experiment stage: Upload. Vector range [{upload_start_idx}{range_max_str}]")
             upload_stats = self.uploader.upload(
-                distance=dataset.config.distance, records=reader.read_data()
+                distance=dataset.config.distance, records=reader.read_data(upload_start_idx,upload_end_idx)
             )
 
             if not DETAILED_RESULTS:
@@ -122,6 +127,7 @@ class BaseClient:
                     **self.uploader.upload_params,
                     **self.configurator.collection_params,
                 },
+                upload_start_idx,upload_end_idx,
             )
 
         if not skip_search:

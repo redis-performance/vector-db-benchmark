@@ -24,6 +24,8 @@ def run(
     skip_if_exists: bool = True,
     exit_on_error: bool = True,
     timeout: float = 86400.0,
+    upload_start_idx: int = 0,
+    upload_end_idx: int = -1,
 ):
     """
     Example:
@@ -47,12 +49,24 @@ def run(
         for dataset_name, dataset_config in selected_datasets.items():
             print(f"Running experiment: {engine_name} - {dataset_name}")
             client = ClientFactory(host).build_client(engine_config)
-            dataset = Dataset(dataset_config)
+            dataset = Dataset(
+                dataset_config,
+                skip_upload,
+                skip_search,
+                upload_start_idx,
+                upload_end_idx,
+            )
             dataset.download()
             try:
                 with stopit.ThreadingTimeout(timeout) as tt:
                     client.run_experiment(
-                        dataset, skip_upload, skip_search, skip_if_exists, parallels
+                        dataset,
+                        skip_upload,
+                        skip_search,
+                        skip_if_exists,
+                        parallels,
+                        upload_start_idx,
+                        upload_end_idx,
                     )
                 client.delete_client()
 
