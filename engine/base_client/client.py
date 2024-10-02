@@ -127,7 +127,8 @@ class BaseClient:
                     **self.uploader.upload_params,
                     **self.configurator.collection_params,
                 },
-                upload_start_idx,upload_end_idx,
+                upload_start_idx=upload_start_idx,
+                upload_end_idx=upload_end_idx,
             )
 
         if not skip_search:
