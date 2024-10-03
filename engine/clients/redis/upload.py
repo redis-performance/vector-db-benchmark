@@ -86,11 +86,13 @@ class RedisUploader(BaseUploader):
                     }
                 cls.client.hsetnx(
                     str(idx),
-                    mapping={
-                        "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
-                        **payload,
-                        **geopoints,
-                    },
+                    "vector",
+                    np.array(vec).astype(cls.np_data_type).tobytes()
+                    # mapping={
+                    #     "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
+                    #     **payload,
+                    #     **geopoints,
+                    # },
                 )
             #p.execute()
 
