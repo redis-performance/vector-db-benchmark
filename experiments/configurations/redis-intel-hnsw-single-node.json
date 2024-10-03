@@ -13,224 +13,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -249,224 +370,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -485,224 +727,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -721,224 +1084,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -957,224 +1441,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -1193,224 +1798,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -1429,224 +2155,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -1665,224 +2512,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -1901,224 +2869,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -2137,224 +3226,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -2373,224 +3583,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -2609,224 +3940,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -2845,224 +4297,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -3081,224 +4654,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -3317,224 +5011,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }
@@ -3553,224 +5368,345 @@
     },
     "search_params": [
       {
-        "parallel": 50,
+        "parallel": 1,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 16
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 32
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 64
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 128
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 256
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 512
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 1024
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 2048
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 4096
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 50,
         "search_params": {
-          "ef": 8192
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 100,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4
+          "ef": 4,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8
+          "ef": 8,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 16
+          "ef": 16,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 32
+          "ef": 32,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 64
+          "ef": 64,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 128
+          "ef": 128,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 256
+          "ef": 256,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 512
+          "ef": 512,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 1024
+          "ef": 1024,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 2048
+          "ef": 2048,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 4096
+          "ef": 4096,
+          "data_type": "FLOAT16"
         }
       },
       {
         "parallel": 200,
         "search_params": {
-          "ef": 8192
+          "ef": 8192,
+          "data_type": "FLOAT16"
         }
       }
     ],
     "upload_params": {
-      "parallel": 128,
+      "parallel": 5,
+      "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
     }

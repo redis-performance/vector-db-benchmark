@@ -19,7 +19,8 @@ for algo in ["hnsw"]:
                 },
                 "search_params": [],
                 "upload_params": {
-                    "parallel": 128,
+                    "parallel":5,
+                    "batch_size": 1,
                     "algorithm": algo,
                     "data_type": data_type,
                 },
