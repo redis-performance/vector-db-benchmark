@@ -105,7 +105,7 @@
   },
   {
     "name": "laion-img-emb-768d-1Billion-cosine",
-    "vector_size": 25,
+    "vector_size": 768,
     "distance": "cosine",
     "type": "h5-multi",
     "path": {
@@ -914,7 +914,7 @@
         "queries": [
             {
                 "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-queries.hdf5",
-                "link": "http://ann-benchmarks.com/glove-25-angular.hdf5",
+                "link": "https://s3.amazonaws.com/benchmarks.redislabs/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-queries.hdf5",
                 "file_size": "38.7 MB"
             }
         ]
