@@ -3,7 +3,7 @@ from typing import List, Optional
 from ml_dtypes import bfloat16
 import requests
 import json
-
+import random
 import numpy as np
 from redis import Redis, RedisCluster
 from engine.base_client.upload import BaseUploader
@@ -14,6 +14,7 @@ from engine.clients.redis.config import (
     REDIS_CLUSTER,
     GPU_STATS,
     GPU_STATS_ENDPOINT,
+    REDIS_KEEP_DOCUMENTS,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
 
@@ -48,46 +49,50 @@ class RedisUploader(BaseUploader):
             cls.np_data_type = np.float16
         if cls.data_type == "BFLOAT16":
             cls.np_data_type = bfloat16
+        cls._is_cluster = True if REDIS_CLUSTER else False
 
     @classmethod
     def upload_batch(
         cls, ids: List[int], vectors: List[list], metadata: Optional[List[dict]]
     ):
-        p = cls.client.pipeline(transaction=False)
-        for i in range(len(ids)):
-            idx = ids[i]
-            vec = vectors[i]
-            meta = metadata[i] if metadata else {}
-            geopoints = {}
-            payload = {}
-            if meta is not None:
-                for k, v in meta.items():
-                    # This is a patch for arxiv-titles dataset where we have a list of "labels", and
-                    # we want to index all of them under the same TAG field (whose separator is ';').
-                    if k == "labels":
-                        payload[k] = ";".join(v)
-                    if (
-                        v is not None
-                        and not isinstance(v, dict)
-                        and not isinstance(v, list)
-                    ):
-                        payload[k] = v
-                # Redis treats geopoints differently and requires putting them as
-                # a comma-separated string with lat and lon coordinates
-                geopoints = {
-                    k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
-                    for k, v in meta.items()
-                    if isinstance(v, dict)
-                }
-            cls.client.hset(
-                str(idx),
-                mapping={
-                    "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
-                    **payload,
-                    **geopoints,
-                },
-            )
-        p.execute()
+        # if we don't delete the docs we can skip sending them again
+        # By default we always send the docs
+        if REDIS_KEEP_DOCUMENTS is False:
+            p = cls.client.pipeline(transaction=False)
+            for i in range(len(ids)):
+                idx = ids[i]
+                vec = vectors[i]
+                meta = metadata[i] if metadata else {}
+                geopoints = {}
+                payload = {}
+                if meta is not None:
+                    for k, v in meta.items():
+                        # This is a patch for arxiv-titles dataset where we have a list of "labels", and
+                        # we want to index all of them under the same TAG field (whose separator is ';').
+                        if k == "labels":
+                            payload[k] = ";".join(v)
+                        if (
+                            v is not None
+                            and not isinstance(v, dict)
+                            and not isinstance(v, list)
+                        ):
+                            payload[k] = v
+                    # Redis treats geopoints differently and requires putting them as
+                    # a comma-separated string with lat and lon coordinates
+                    geopoints = {
+                        k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
+                        for k, v in meta.items()
+                        if isinstance(v, dict)
+                    }
+                cls.client.hset(
+                    str(idx),
+                    mapping={
+                        "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
+                        **payload,
+                        **geopoints,
+                    },
+                )
+            p.execute()
 
     @classmethod
     def post_upload(cls, _distance):
@@ -120,7 +125,16 @@ class RedisUploader(BaseUploader):
         return {}
 
     def get_memory_usage(cls):
-        used_memory = cls.client_decode.info("memory")["used_memory"]
+        used_memory = []
+        conns = [cls.client_decode]
+        if cls._is_cluster:
+            conns = [
+                cls.client_decode.get_redis_connection(node)
+                for node in cls.client_decode.get_primaries()
+            ]
+        for conn in conns:
+            used_memory_shard = conn.info("memory")["used_memory"]
+            used_memory.append(used_memory_shard)
         index_info = {}
         device_info = {}
         if cls.algorithm != "HNSW" and cls.algorithm != "FLAT":
