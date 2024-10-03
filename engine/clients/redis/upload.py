@@ -58,7 +58,7 @@ class RedisUploader(BaseUploader):
         # if we don't delete the docs we can skip sending them again
         # By default we always send the docs
         if REDIS_KEEP_DOCUMENTS is False:
-            p = cls.client.pipeline(transaction=False)
+            #p = cls.client.pipeline(transaction=False)
             for i in range(len(ids)):
                 idx = ids[i]
                 vec = vectors[i]
@@ -84,7 +84,7 @@ class RedisUploader(BaseUploader):
                         for k, v in meta.items()
                         if isinstance(v, dict)
                     }
-                cls.client.hset(
+                cls.client.hsetnx(
                     str(idx),
                     mapping={
                         "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
@@ -92,7 +92,7 @@ class RedisUploader(BaseUploader):
                         **geopoints,
                     },
                 )
-            p.execute()
+            #p.execute()
 
     @classmethod
     def post_upload(cls, _distance):

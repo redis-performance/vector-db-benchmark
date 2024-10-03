@@ -350,7 +350,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -707,7 +707,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -1064,7 +1064,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -1421,7 +1421,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -1778,7 +1778,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -2135,7 +2135,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -2492,7 +2492,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -2849,7 +2849,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -3206,7 +3206,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -3563,7 +3563,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -3920,7 +3920,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -4277,7 +4277,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -4634,7 +4634,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -4991,7 +4991,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -5348,7 +5348,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
@@ -5705,7 +5705,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 5,
+      "parallel": 10,
       "batch_size": 1,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
