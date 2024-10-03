@@ -51,7 +51,9 @@ class AnnH5MultiReader(BaseReader):
                     expected_scores=expected_scores.tolist(),
                 )
 
-    def read_data(self, start_idx: int = 0, end_idx: int = None) -> Iterator[Record]:
+    def read_data(
+        self, start_idx: int = 0, end_idx: int = None, chunk_size: int = 10_000
+    ) -> Iterator[Record]:
         """
         Reads the 'train' data vectors from multiple HDF5 files based on the specified range.
 
@@ -80,20 +82,27 @@ class AnnH5MultiReader(BaseReader):
             # Only read the file if it overlaps with the requested range
             if file_start < end_idx and file_end > start_idx:
                 with h5py.File(path, "r") as data:
+                    train_vectors = data["train"]
                     # Determine the slice to read from the current file
                     file_data_start = max(file_start, start_idx) - file_start
                     file_data_end = min(file_end, end_idx) - file_start
 
-                    train_vectors = data["train"][file_data_start:file_data_end]
-                    for i, vector in enumerate(train_vectors):
-                        if self.normalize:
-                            vector /= np.linalg.norm(vector)
-                        yield Record(
-                            id=current_idx + vectors_yielded,
-                            vector=vector.tolist(),
-                            metadata=None,
-                        )
-                        vectors_yielded += 1
+                    # Read in chunks instead of the whole slice
+                    for chunk_start in range(
+                        file_data_start, file_data_end, chunk_size
+                    ):
+                        chunk_end = min(chunk_start + chunk_size, file_data_end)
+                        vectors_chunk = train_vectors[chunk_start:chunk_end]
+
+                        for vector in vectors_chunk:
+                            if self.normalize:
+                                vector /= np.linalg.norm(vector)
+                            yield Record(
+                                id=current_idx + vectors_yielded,
+                                vector=vector.tolist(),
+                                metadata=None,
+                            )
+                            vectors_yielded += 1
 
 
 if __name__ == "__main__":
