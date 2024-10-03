@@ -13,7 +13,7 @@ wait_for_available_screen_slot() {
 }
 
 # Create the output directory if it doesn't exist
-mkdir -p logs
+mkdir -p logs-new
 
 for i in {0..99}; do
   # Wait until there's an available screen slot
@@ -24,7 +24,7 @@ for i in {0..99}; do
   end_idx=$(((i + 1) * part_size))
 
   # Log file path
-  log_file="logs/loader_$i.log"
+  log_file="logs-new/loader_$i.log"
 
   # Launch each process in a new screen session and log stdout and stderr to the log file
   screen -dmS loader_$i bash -c "REDIS_PORT=30001 REDIS_CLUSTER=1 python3 run.py --host 192.168.2.6 --engines redis-intel-float16-hnsw-m-16-ef-32 --datasets laion-img-emb-768d-1Billion-cosine --skip-search --upload-start-idx $start_idx --upload-end-idx $end_idx &> $log_file"
