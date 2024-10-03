@@ -3,7 +3,7 @@
 set -x
 
 part_size=10000000  # 10 million elements per part
-max_screens=5       # Maximum number of screens running simultaneously
+max_screens=50       # Maximum number of screens running simultaneously
 
 # Function to wait until the number of running screens is below the limit
 wait_for_available_screen_slot() {
@@ -15,7 +15,7 @@ wait_for_available_screen_slot() {
 
 # Create the output directory if it doesn't exist
 
-for i in {0..99}; do
+for i in {10..99}; do
   # Wait until there's an available screen slot
   wait_for_available_screen_slot
 
