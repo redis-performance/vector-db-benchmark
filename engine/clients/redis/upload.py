@@ -55,48 +55,41 @@ class RedisUploader(BaseUploader):
     def upload_batch(
         cls, ids: List[int], vectors: List[list], metadata: Optional[List[dict]]
     ):
-        # if we don't delete the docs we can skip sending them again
-        # By default we always send the docs
-        if REDIS_KEEP_DOCUMENTS is False:
-            #p = cls.client.pipeline(transaction=False)
-            for i in range(len(ids)):
-                idx = ids[i]
-                vector_key = str(idx) 
-                if cls.client.exists(vector_key) is False:
-                    print(f"Setting missing key: {vector_key}")
-                    vec = vectors[i]
-                    meta = metadata[i] if metadata else {}
-                    geopoints = {}
-                    payload = {}
-                    if meta is not None:
-                        for k, v in meta.items():
-                            # This is a patch for arxiv-titles dataset where we have a list of "labels", and
-                            # we want to index all of them under the same TAG field (whose separator is ';').
-                            if k == "labels":
-                                payload[k] = ";".join(v)
-                            if (
-                                v is not None
-                                and not isinstance(v, dict)
-                                and not isinstance(v, list)
-                            ):
-                                payload[k] = v
-                        # Redis treats geopoints differently and requires putting them as
-                        # a comma-separated string with lat and lon coordinates
-                        geopoints = {
-                            k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
-                            for k, v in meta.items()
-                            if isinstance(v, dict)
-                        }
-                    cls.client.hset(
-                        vector_key,
-                        mapping={
-                            "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
-                            **payload,
-                            **geopoints,
-                        },
-                    )
-                    
-            #p.execute()
+        for i in range(len(ids)):
+            idx = ids[i]
+            vector_key = str(idx)
+            vec = vectors[i]
+            meta = metadata[i] if metadata else {}
+            geopoints = {}
+            payload = {}
+            if meta is not None:
+                for k, v in meta.items():
+                    # This is a patch for arxiv-titles dataset where we have a list of "labels", and
+                    # we want to index all of them under the same TAG field (whose separator is ';').
+                    if k == "labels":
+                        payload[k] = ";".join(v)
+                    if (
+                        v is not None
+                        and not isinstance(v, dict)
+                        and not isinstance(v, list)
+                    ):
+                        payload[k] = v
+                # Redis treats geopoints differently and requires putting them as
+                # a comma-separated string with lat and lon coordinates
+                geopoints = {
+                    k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
+                    for k, v in meta.items()
+                    if isinstance(v, dict)
+                }
+            cls.client.hset(
+                vector_key,
+                mapping={
+                    "vector": np.array(vec).astype(cls.np_data_type).tobytes(),
+                    **payload,
+                    **geopoints,
+                },
+            )
+                
 
     @classmethod
     def post_upload(cls, _distance):
