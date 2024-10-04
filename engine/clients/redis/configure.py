@@ -66,7 +66,8 @@ class RedisConfigurator(BaseConfigurator):
                         print(
                             "Given the FT.DROPINDEX command failed, we're flushing the entire DB..."
                         )
-                        conn.flushall()
+                        if REDIS_KEEP_DOCUMENTS is False:
+                            conn.flushall()
                     else:
                         raise e
 
@@ -122,18 +123,6 @@ class RedisConfigurator(BaseConfigurator):
             except redis.ResponseError as e:
                 if "Index already exists" not in e.__str__():
                     raise e
-            if REDIS_KEEP_DOCUMENTS:
-                percent_index = float(search_namespace.info().get("percent_indexed"))
-                while percent_index < 1.0:
-                    print(
-                        "waiting for index to be fully processed. current percent index: {}".format(
-                            percent_index * 100.0
-                        )
-                    )
-                    time.sleep(5)
-                    percent_index = float(
-                        search_namespace.info().get("percent_indexed")
-                    )
 
 
 if __name__ == "__main__":
