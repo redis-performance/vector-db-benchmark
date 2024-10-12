@@ -2,6 +2,7 @@ import functools
 import time
 from multiprocessing import get_context
 from typing import Iterable, List, Optional, Tuple
+import itertools
 
 import numpy as np
 import tqdm
@@ -72,9 +73,11 @@ class BaseSearcher:
 
         search_one = functools.partial(self.__class__._search_one, top=top)
         used_queries = queries
+
+
         if MAX_QUERIES > 0:
-            used_queries = queries[0:MAX_QUERIES-1]
-            print(f"limitting queries to [0:{MAX_QUERIES}]")
+            used_queries = itertools.islice(queries, MAX_QUERIES)
+            print(f"Limiting queries to [0:{MAX_QUERIES-1}]")
 
         if parallel == 1:
             start = time.perf_counter()
