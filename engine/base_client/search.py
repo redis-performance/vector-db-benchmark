@@ -5,10 +5,13 @@ from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import tqdm
+import os 
 
 from dataset_reader.base_reader import Query
 
 DEFAULT_TOP = 10
+MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
+
 
 
 class BaseSearcher:
@@ -68,11 +71,15 @@ class BaseSearcher:
         self.setup_search()
 
         search_one = functools.partial(self.__class__._search_one, top=top)
+        used_queries = queries
+        if MAX_QUERIES > 0:
+            used_queries = queries[0:MAX_QUERIES-1]
+            print(f"limitting queries to [0:{MAX_QUERIES}]")
 
         if parallel == 1:
             start = time.perf_counter()
             precisions, latencies = list(
-                zip(*[search_one(query) for query in tqdm.tqdm(queries)])
+                zip(*[search_one(query) for query in tqdm.tqdm(used_queries)])
             )
         else:
             ctx = get_context(self.get_mp_start_method())
@@ -91,7 +98,7 @@ class BaseSearcher:
                     time.sleep(15)  # Wait for all processes to start
                 start = time.perf_counter()
                 precisions, latencies = list(
-                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(queries)))
+                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(used_queries)))
                 )
 
         total_time = time.perf_counter() - start
