@@ -2,7 +2,7 @@ import json
 
 ms = [4, 8, 16, 32]
 ef_constructs = [4, 8, 16, 32]
-ef_runtimes = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+ef_runtimes = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
 data_type = "FLOAT16"
 for algo in ["hnsw"]:
     configs = []

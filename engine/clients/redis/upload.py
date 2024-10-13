@@ -14,7 +14,7 @@ from engine.clients.redis.config import (
     REDIS_CLUSTER,
     GPU_STATS,
     GPU_STATS_ENDPOINT,
-    REDIS_KEEP_DOCUMENTS,
+    REDIS_JUST_INDEX,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
 
@@ -55,6 +55,8 @@ class RedisUploader(BaseUploader):
     def upload_batch(
         cls, ids: List[int], vectors: List[list], metadata: Optional[List[dict]]
     ):
+        if REDIS_JUST_INDEX:
+            return
         for i in range(len(ids)):
             idx = ids[i]
             vector_key = str(idx)
