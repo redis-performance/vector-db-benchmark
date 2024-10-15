@@ -8,7 +8,7 @@ from weaviate.collections import Collection
 from weaviate.connect import ConnectionParams
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 from engine.clients.weaviate.parser import WeaviateConditionParser
 
 
@@ -20,16 +20,10 @@ class WeaviateSearcher(BaseSearcher):
 
     @classmethod
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
-        url = f"http://{host}:{connection_params.get('port', WEAVIATE_DEFAULT_PORT)}"
-        client = WeaviateClient(
-            ConnectionParams.from_url(url, 50051), skip_init_checks=True
-        )
-        client.connect()
-        cls.collection = client.collections.get(
-            WEAVIATE_CLASS_NAME, skip_argument_validation=True
-        )
+        cls.client = setup_client(connection_params, host)
         cls.search_params = search_params
-        cls.client = client
+        # Ping Weaviate's ready state
+        assert cls.client.is_ready() is True
 
     @classmethod
     def search_one(self, vector, meta_conditions, top) -> List[Tuple[int, float]]:

@@ -7,7 +7,11 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
 
 from engine.base_client.search import BaseSearcher
-from engine.clients.qdrant.config import QDRANT_COLLECTION_NAME
+from engine.clients.qdrant.config import (
+    QDRANT_API_KEY,
+    QDRANT_COLLECTION_NAME,
+    QDRANT_URL,
+)
 from engine.clients.qdrant.parser import QdrantConditionParser
 
 
@@ -20,12 +24,23 @@ class QdrantSearcher(BaseSearcher):
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
         os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "true"
         os.environ["GRPC_POLL_STRATEGY"] = "epoll,poll"
-        cls.client: QdrantClient = QdrantClient(
-            host,
-            prefer_grpc=True,
-            limits=httpx.Limits(max_connections=None, max_keepalive_connections=0),
-            **connection_params
-        )
+        if QDRANT_URL is None:
+            cls.client: QdrantClient = QdrantClient(
+                host,
+                api_key=QDRANT_API_KEY,
+                prefer_grpc=True,
+                limits=httpx.Limits(max_connections=None, max_keepalive_connections=0),
+                **connection_params
+            )
+        else:
+            cls.client: QdrantClient = QdrantClient(
+                url=QDRANT_URL,
+                api_key=QDRANT_API_KEY,
+                prefer_grpc=True,
+                limits=httpx.Limits(max_connections=None, max_keepalive_connections=0),
+                **connection_params
+            )
+
         cls.search_params = search_params
 
     # Uncomment for gRPC

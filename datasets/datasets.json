@@ -40,6 +40,887 @@
     "link": "http://ann-benchmarks.com/gist-960-euclidean.hdf5"
   },
   {
+    "name": "laion-img-emb-512-1M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-1M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-1M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-512-10M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-10M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-10M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-512-20M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-20M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-20M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-512-40M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-40M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-40M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-512-100M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-100M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-512-200M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-200M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-200M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-512-400M-cosine",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-512/laion-img-emb-512-400M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-400M-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-768-1G-cosine",
+    "vector_size": 768,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-768/laion-img-emb-768-1G-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-768-1G-cosine.hdf5"
+  },
+  {
+    "name": "laion-img-emb-768d-1Billion-cosine",
+    "vector_size": 768,
+    "distance": "cosine",
+    "type": "h5-multi",
+    "path": {
+        "data": [
+            {
+                "file_number": "1",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part1-0_to_10000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part1-0_to_10000000.hdf5",
+                "start_idx": 0,
+                "end_idx": 10000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "10",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part10-90000000_to_100000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part10-90000000_to_100000000.hdf5",
+                "start_idx": 90000000,
+                "end_idx": 100000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "100",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part100-990000000_to_1000000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part100-990000000_to_1000000000.hdf5",
+                "start_idx": 990000000,
+                "end_idx": 1000000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "11",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part11-100000000_to_110000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part11-100000000_to_110000000.hdf5",
+                "start_idx": 100000000,
+                "end_idx": 110000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "12",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part12-110000000_to_120000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part12-110000000_to_120000000.hdf5",
+                "start_idx": 110000000,
+                "end_idx": 120000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "13",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part13-120000000_to_130000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part13-120000000_to_130000000.hdf5",
+                "start_idx": 120000000,
+                "end_idx": 130000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "14",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part14-130000000_to_140000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part14-130000000_to_140000000.hdf5",
+                "start_idx": 130000000,
+                "end_idx": 140000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "15",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part15-140000000_to_150000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part15-140000000_to_150000000.hdf5",
+                "start_idx": 140000000,
+                "end_idx": 150000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "16",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part16-150000000_to_160000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part16-150000000_to_160000000.hdf5",
+                "start_idx": 150000000,
+                "end_idx": 160000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "17",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part17-160000000_to_170000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part17-160000000_to_170000000.hdf5",
+                "start_idx": 160000000,
+                "end_idx": 170000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "18",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part18-170000000_to_180000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part18-170000000_to_180000000.hdf5",
+                "start_idx": 170000000,
+                "end_idx": 180000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "19",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part19-180000000_to_190000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part19-180000000_to_190000000.hdf5",
+                "start_idx": 180000000,
+                "end_idx": 190000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "2",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part2-10000000_to_20000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part2-10000000_to_20000000.hdf5",
+                "start_idx": 10000000,
+                "end_idx": 20000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "20",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part20-190000000_to_200000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part20-190000000_to_200000000.hdf5",
+                "start_idx": 190000000,
+                "end_idx": 200000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "21",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part21-200000000_to_210000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part21-200000000_to_210000000.hdf5",
+                "start_idx": 200000000,
+                "end_idx": 210000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "22",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part22-210000000_to_220000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part22-210000000_to_220000000.hdf5",
+                "start_idx": 210000000,
+                "end_idx": 220000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "23",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part23-220000000_to_230000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part23-220000000_to_230000000.hdf5",
+                "start_idx": 220000000,
+                "end_idx": 230000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "24",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part24-230000000_to_240000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part24-230000000_to_240000000.hdf5",
+                "start_idx": 230000000,
+                "end_idx": 240000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "25",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part25-240000000_to_250000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part25-240000000_to_250000000.hdf5",
+                "start_idx": 240000000,
+                "end_idx": 250000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "26",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part26-250000000_to_260000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part26-250000000_to_260000000.hdf5",
+                "start_idx": 250000000,
+                "end_idx": 260000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "27",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part27-260000000_to_270000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part27-260000000_to_270000000.hdf5",
+                "start_idx": 260000000,
+                "end_idx": 270000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "28",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part28-270000000_to_280000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part28-270000000_to_280000000.hdf5",
+                "start_idx": 270000000,
+                "end_idx": 280000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "29",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part29-280000000_to_290000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part29-280000000_to_290000000.hdf5",
+                "start_idx": 280000000,
+                "end_idx": 290000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "3",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part3-20000000_to_30000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part3-20000000_to_30000000.hdf5",
+                "start_idx": 20000000,
+                "end_idx": 30000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "30",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part30-290000000_to_300000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part30-290000000_to_300000000.hdf5",
+                "start_idx": 290000000,
+                "end_idx": 300000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "31",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part31-300000000_to_310000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part31-300000000_to_310000000.hdf5",
+                "start_idx": 300000000,
+                "end_idx": 310000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "32",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part32-310000000_to_320000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part32-310000000_to_320000000.hdf5",
+                "start_idx": 310000000,
+                "end_idx": 320000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "33",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part33-320000000_to_330000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part33-320000000_to_330000000.hdf5",
+                "start_idx": 320000000,
+                "end_idx": 330000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "34",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part34-330000000_to_340000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part34-330000000_to_340000000.hdf5",
+                "start_idx": 330000000,
+                "end_idx": 340000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "35",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part35-340000000_to_350000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part35-340000000_to_350000000.hdf5",
+                "start_idx": 340000000,
+                "end_idx": 350000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "36",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part36-350000000_to_360000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part36-350000000_to_360000000.hdf5",
+                "start_idx": 350000000,
+                "end_idx": 360000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "37",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part37-360000000_to_370000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part37-360000000_to_370000000.hdf5",
+                "start_idx": 360000000,
+                "end_idx": 370000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "38",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part38-370000000_to_380000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part38-370000000_to_380000000.hdf5",
+                "start_idx": 370000000,
+                "end_idx": 380000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "39",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part39-380000000_to_390000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part39-380000000_to_390000000.hdf5",
+                "start_idx": 380000000,
+                "end_idx": 390000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "4",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part4-30000000_to_40000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part4-30000000_to_40000000.hdf5",
+                "start_idx": 30000000,
+                "end_idx": 40000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "40",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part40-390000000_to_400000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part40-390000000_to_400000000.hdf5",
+                "start_idx": 390000000,
+                "end_idx": 400000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "41",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part41-400000000_to_410000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part41-400000000_to_410000000.hdf5",
+                "start_idx": 400000000,
+                "end_idx": 410000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "42",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part42-410000000_to_420000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part42-410000000_to_420000000.hdf5",
+                "start_idx": 410000000,
+                "end_idx": 420000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "43",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part43-420000000_to_430000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part43-420000000_to_430000000.hdf5",
+                "start_idx": 420000000,
+                "end_idx": 430000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "44",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part44-430000000_to_440000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part44-430000000_to_440000000.hdf5",
+                "start_idx": 430000000,
+                "end_idx": 440000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "45",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part45-440000000_to_450000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part45-440000000_to_450000000.hdf5",
+                "start_idx": 440000000,
+                "end_idx": 450000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "46",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part46-450000000_to_460000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part46-450000000_to_460000000.hdf5",
+                "start_idx": 450000000,
+                "end_idx": 460000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "47",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part47-460000000_to_470000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part47-460000000_to_470000000.hdf5",
+                "start_idx": 460000000,
+                "end_idx": 470000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "48",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part48-470000000_to_480000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part48-470000000_to_480000000.hdf5",
+                "start_idx": 470000000,
+                "end_idx": 480000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "49",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part49-480000000_to_490000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part49-480000000_to_490000000.hdf5",
+                "start_idx": 480000000,
+                "end_idx": 490000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "5",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part5-40000000_to_50000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part5-40000000_to_50000000.hdf5",
+                "start_idx": 40000000,
+                "end_idx": 50000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "50",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part50-490000000_to_500000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part50-490000000_to_500000000.hdf5",
+                "start_idx": 490000000,
+                "end_idx": 500000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "51",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part51-500000000_to_510000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part51-500000000_to_510000000.hdf5",
+                "start_idx": 500000000,
+                "end_idx": 510000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "52",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part52-510000000_to_520000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part52-510000000_to_520000000.hdf5",
+                "start_idx": 510000000,
+                "end_idx": 520000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "53",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part53-520000000_to_530000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part53-520000000_to_530000000.hdf5",
+                "start_idx": 520000000,
+                "end_idx": 530000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "54",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part54-530000000_to_540000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part54-530000000_to_540000000.hdf5",
+                "start_idx": 530000000,
+                "end_idx": 540000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "55",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part55-540000000_to_550000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part55-540000000_to_550000000.hdf5",
+                "start_idx": 540000000,
+                "end_idx": 550000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "56",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part56-550000000_to_560000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part56-550000000_to_560000000.hdf5",
+                "start_idx": 550000000,
+                "end_idx": 560000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "57",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part57-560000000_to_570000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part57-560000000_to_570000000.hdf5",
+                "start_idx": 560000000,
+                "end_idx": 570000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "58",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part58-570000000_to_580000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part58-570000000_to_580000000.hdf5",
+                "start_idx": 570000000,
+                "end_idx": 580000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "59",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part59-580000000_to_590000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part59-580000000_to_590000000.hdf5",
+                "start_idx": 580000000,
+                "end_idx": 590000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "6",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part6-50000000_to_60000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part6-50000000_to_60000000.hdf5",
+                "start_idx": 50000000,
+                "end_idx": 60000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "60",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part60-590000000_to_600000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part60-590000000_to_600000000.hdf5",
+                "start_idx": 590000000,
+                "end_idx": 600000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "61",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part61-600000000_to_610000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part61-600000000_to_610000000.hdf5",
+                "start_idx": 600000000,
+                "end_idx": 610000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "62",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part62-610000000_to_620000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part62-610000000_to_620000000.hdf5",
+                "start_idx": 610000000,
+                "end_idx": 620000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "63",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part63-620000000_to_630000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part63-620000000_to_630000000.hdf5",
+                "start_idx": 620000000,
+                "end_idx": 630000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "64",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part64-630000000_to_640000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part64-630000000_to_640000000.hdf5",
+                "start_idx": 630000000,
+                "end_idx": 640000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "65",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part65-640000000_to_650000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part65-640000000_to_650000000.hdf5",
+                "start_idx": 640000000,
+                "end_idx": 650000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "66",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part66-650000000_to_660000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part66-650000000_to_660000000.hdf5",
+                "start_idx": 650000000,
+                "end_idx": 660000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "67",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part67-660000000_to_670000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part67-660000000_to_670000000.hdf5",
+                "start_idx": 660000000,
+                "end_idx": 670000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "68",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part68-670000000_to_680000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part68-670000000_to_680000000.hdf5",
+                "start_idx": 670000000,
+                "end_idx": 680000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "69",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part69-680000000_to_690000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part69-680000000_to_690000000.hdf5",
+                "start_idx": 680000000,
+                "end_idx": 690000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "7",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part7-60000000_to_70000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part7-60000000_to_70000000.hdf5",
+                "start_idx": 60000000,
+                "end_idx": 70000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "70",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part70-690000000_to_700000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part70-690000000_to_700000000.hdf5",
+                "start_idx": 690000000,
+                "end_idx": 700000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "71",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part71-700000000_to_710000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part71-700000000_to_710000000.hdf5",
+                "start_idx": 700000000,
+                "end_idx": 710000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "72",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part72-710000000_to_720000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part72-710000000_to_720000000.hdf5",
+                "start_idx": 710000000,
+                "end_idx": 720000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "73",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part73-720000000_to_730000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part73-720000000_to_730000000.hdf5",
+                "start_idx": 720000000,
+                "end_idx": 730000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "74",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part74-730000000_to_740000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part74-730000000_to_740000000.hdf5",
+                "start_idx": 730000000,
+                "end_idx": 740000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "75",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part75-740000000_to_750000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part75-740000000_to_750000000.hdf5",
+                "start_idx": 740000000,
+                "end_idx": 750000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "76",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part76-750000000_to_760000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part76-750000000_to_760000000.hdf5",
+                "start_idx": 750000000,
+                "end_idx": 760000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "77",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part77-760000000_to_770000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part77-760000000_to_770000000.hdf5",
+                "start_idx": 760000000,
+                "end_idx": 770000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "78",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part78-770000000_to_780000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part78-770000000_to_780000000.hdf5",
+                "start_idx": 770000000,
+                "end_idx": 780000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "79",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part79-780000000_to_790000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part79-780000000_to_790000000.hdf5",
+                "start_idx": 780000000,
+                "end_idx": 790000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "8",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part8-70000000_to_80000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part8-70000000_to_80000000.hdf5",
+                "start_idx": 70000000,
+                "end_idx": 80000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "80",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part80-790000000_to_800000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part80-790000000_to_800000000.hdf5",
+                "start_idx": 790000000,
+                "end_idx": 800000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "81",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part81-800000000_to_810000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part81-800000000_to_810000000.hdf5",
+                "start_idx": 800000000,
+                "end_idx": 810000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "82",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part82-810000000_to_820000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part82-810000000_to_820000000.hdf5",
+                "start_idx": 810000000,
+                "end_idx": 820000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "83",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part83-820000000_to_830000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part83-820000000_to_830000000.hdf5",
+                "start_idx": 820000000,
+                "end_idx": 830000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "84",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part84-830000000_to_840000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part84-830000000_to_840000000.hdf5",
+                "start_idx": 830000000,
+                "end_idx": 840000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "85",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part85-840000000_to_850000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part85-840000000_to_850000000.hdf5",
+                "start_idx": 840000000,
+                "end_idx": 850000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "86",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part86-850000000_to_860000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part86-850000000_to_860000000.hdf5",
+                "start_idx": 850000000,
+                "end_idx": 860000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "87",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part87-860000000_to_870000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part87-860000000_to_870000000.hdf5",
+                "start_idx": 860000000,
+                "end_idx": 870000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "88",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part88-870000000_to_880000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part88-870000000_to_880000000.hdf5",
+                "start_idx": 870000000,
+                "end_idx": 880000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "89",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part89-880000000_to_890000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part89-880000000_to_890000000.hdf5",
+                "start_idx": 880000000,
+                "end_idx": 890000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "9",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part9-80000000_to_90000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part9-80000000_to_90000000.hdf5",
+                "start_idx": 80000000,
+                "end_idx": 90000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "90",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part90-890000000_to_900000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part90-890000000_to_900000000.hdf5",
+                "start_idx": 890000000,
+                "end_idx": 900000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "91",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part91-900000000_to_910000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part91-900000000_to_910000000.hdf5",
+                "start_idx": 900000000,
+                "end_idx": 910000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "92",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part92-910000000_to_920000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part92-910000000_to_920000000.hdf5",
+                "start_idx": 910000000,
+                "end_idx": 920000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "93",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part93-920000000_to_930000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part93-920000000_to_930000000.hdf5",
+                "start_idx": 920000000,
+                "end_idx": 930000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "94",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part94-930000000_to_940000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part94-930000000_to_940000000.hdf5",
+                "start_idx": 930000000,
+                "end_idx": 940000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "95",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part95-940000000_to_950000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part95-940000000_to_950000000.hdf5",
+                "start_idx": 940000000,
+                "end_idx": 950000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "96",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part96-950000000_to_960000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part96-950000000_to_960000000.hdf5",
+                "start_idx": 950000000,
+                "end_idx": 960000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "97",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part97-960000000_to_970000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part97-960000000_to_970000000.hdf5",
+                "start_idx": 960000000,
+                "end_idx": 970000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "98",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part98-970000000_to_980000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part98-970000000_to_980000000.hdf5",
+                "start_idx": 970000000,
+                "end_idx": 980000000,
+                "file_size": "30.7 GB"
+            },
+            {
+                "file_number": "99",
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-data-part99-980000000_to_990000000.hdf5",
+                "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-data-part99-980000000_to_990000000.hdf5",
+                "start_idx": 980000000,
+                "end_idx": 990000000,
+                "file_size": "30.7 GB"
+            }
+        ],
+        "queries": [
+            {
+                "path": "laion-1b/laion-img-emb-768d-1Billion-cosine-queries.hdf5",
+                "link": "https://s3.amazonaws.com/benchmarks.redislabs/vecsim/laion-1b/laion-img-emb-768d-1Billion-cosine-queries.hdf5",
+                "file_size": "38.7 MB"
+            }
+        ]
+    }
+},
+  {
     "name": "gist-960-angular",
     "vector_size": 960,
     "distance": "dot",

@@ -1,21 +1,23 @@
 import redis
+import time
 from redis import Redis, RedisCluster
 from redis.commands.search.field import (
     GeoField,
     NumericField,
-    TagField,
     TextField,
     VectorField,
+    TagField,
 )
 
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
 from engine.clients.redis.config import (
-    REDIS_AUTH,
-    REDIS_CLUSTER,
     REDIS_PORT,
+    REDIS_AUTH,
     REDIS_USER,
+    REDIS_CLUSTER,
+    REDIS_KEEP_DOCUMENTS,
 )
 
 
@@ -51,10 +53,23 @@ class RedisConfigurator(BaseConfigurator):
         for conn in conns:
             index = conn.ft()
             try:
-                index.dropindex(delete_documents=True)
+                index.dropindex(delete_documents=(not REDIS_KEEP_DOCUMENTS))
             except redis.ResponseError as e:
-                if "Unknown Index name" not in e.__str__():
-                    print(e)
+                str_err = e.__str__()
+                if (
+                    "Unknown Index name" not in str_err
+                    and "Index does not exist" not in str_err
+                ):
+                    # google memorystore does not support the DD argument.
+                    # in that case we can flushall
+                    if "wrong number of arguments for FT.DROPINDEX command" in str_err:
+                        print(
+                            "Given the FT.DROPINDEX command failed, we're flushing the entire DB..."
+                        )
+                        if REDIS_KEEP_DOCUMENTS is False:
+                            conn.flushall()
+                    else:
+                        raise e
 
     def recreate(self, dataset: Dataset, collection_params):
         self.clean()
@@ -76,15 +91,21 @@ class RedisConfigurator(BaseConfigurator):
             for field_name, field_type in dataset.config.schema.items()
             if field_type == "keyword"
         ]
+        algorithm_config = {}
+        # by default we use hnsw
+        algo = collection_params.get("algorithm", "hnsw")
+        data_type = collection_params.get("data_type", "float32")
+        algorithm_config = collection_params.get(f"{algo}_config", {})
+        print(f"Using algorithm {algo} with config {algorithm_config}")
         index_fields = [
             VectorField(
                 name="vector",
-                algorithm="HNSW",
+                algorithm=algo,
                 attributes={
-                    "TYPE": "FLOAT32",
+                    "TYPE": data_type,
                     "DIM": dataset.config.vector_size,
                     "DISTANCE_METRIC": self.DISTANCE_MAPPING[dataset.config.distance],
-                    **self.collection_params.get("hnsw_config", {}),
+                    **algorithm_config,
                 },
             )
         ] + payload_fields

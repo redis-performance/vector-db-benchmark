@@ -2,14 +2,14 @@ import multiprocessing as mp
 import uuid
 from typing import List, Optional
 
-from elasticsearch import Elasticsearch
+import elastic_transport
+from elasticsearch import Elasticsearch, ApiError
 
 from engine.base_client.upload import BaseUploader
 from engine.clients.elasticsearch.config import (
     ELASTIC_INDEX,
-    ELASTIC_PASSWORD,
-    ELASTIC_PORT,
-    ELASTIC_USER,
+    get_es_client,
+    _wait_for_es_status,
 )
 
 
@@ -28,19 +28,7 @@ class ElasticUploader(BaseUploader):
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
-        init_params = {
-            **{
-                "verify_certs": False,
-                "request_timeout": 90,
-                "retry_on_timeout": True,
-            },
-            **connection_params,
-        }
-        cls.client = Elasticsearch(
-            f"http://{host}:{ELASTIC_PORT}",
-            basic_auth=(ELASTIC_USER, ELASTIC_PASSWORD),
-            **init_params,
-        )
+        cls.client = get_es_client(host, connection_params)
         cls.upload_params = upload_params
 
     @classmethod
@@ -65,7 +53,23 @@ class ElasticUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        cls.client.indices.forcemerge(
-            index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
-        )
+        print("forcing the merge into 1 segment...")
+        tries = 30
+        for i in range(tries + 1):
+            try:
+                cls.client.indices.forcemerge(
+                    index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
+                )
+            except (elastic_transport.TlsError, ApiError) as e:
+                if i < tries:  # i is zero indexed
+                    print(
+                        "Received the following error during retry {}/{} while waiting for ES index to be ready... {}".format(
+                            i, tries, e.__str__()
+                        )
+                    )
+                    continue
+                else:
+                    raise
+            _wait_for_es_status(cls.client)
+            break
         return {}
