@@ -18,7 +18,7 @@ class Query:
 
 
 class BaseReader:
-    def read_data(self) -> Iterator[Record]:
+    def read_data(self, *args, **kwargs) -> Iterator[Record]:
         raise NotImplementedError()
 
     def read_queries(self) -> Iterator[Query]:
