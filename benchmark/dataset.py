@@ -5,6 +5,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 import boto3
+import botocore.exceptions
 from benchmark import DATASETS_DIR
 from dataset_reader.ann_compound_reader import AnnCompoundReader
 from dataset_reader.ann_h5_reader import AnnH5Reader
@@ -109,10 +110,15 @@ class Dataset:
                 return
 
             if self.config.link:
+                downloaded_withboto = False
                 if is_s3_link(self.config.link):
                     print("Use boto3 to download from S3. Faster!")
-                    self._download_from_s3(self.config.link, target_path)
-                else:
+                    try:
+                        self._download_from_s3(self.config.link, target_path)
+                        downloaded_withboto = True
+                    except botocore.exceptions.NoCredentialsError:
+                        print("Credentials not found, downloading without boto3")
+                if not downloaded_withboto:
                     print(f"Downloading from URL {self.config.link}...")
                     tmp_path, _ = urllib.request.urlretrieve(
                         self.config.link, None, show_progress
