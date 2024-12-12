@@ -1,5 +1,18 @@
 [
   {
+    "name": "redis-test",
+    "engine": "redis",
+    "algorithm": "hnsw",
+    "connection_params": {},
+    "collection_params": {
+      "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "ef": 64 } }
+    ],
+    "upload_params": { "parallel": 16 }
+  },
+  {
     "name": "redis-hnsw-m-16-ef-128",
     "engine": "redis",
     "algorithm": "hnsw",
