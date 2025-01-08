@@ -2,7 +2,7 @@ import json
 
 experiments = []
 
-for data_type in ["FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
+for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     for m in [8, 16, 32, 64]:
         # for efConstruction in [32, 64]:
         for efConstruction in [16, 32, 64, 128, 256, 512]:

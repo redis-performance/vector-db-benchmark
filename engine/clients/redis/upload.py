@@ -17,7 +17,7 @@ from engine.clients.redis.config import (
     REDIS_JUST_INDEX,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
-
+from sentence_transformers.quantization import quantize_embeddings
 
 class RedisUploader(BaseUploader):
     client = None
@@ -49,6 +49,10 @@ class RedisUploader(BaseUploader):
             cls.np_data_type = np.float16
         if cls.data_type == "BFLOAT16":
             cls.np_data_type = bfloat16
+        if cls.data_type == "INT8":
+            cls.np_data_type = np.int8
+        if cls.data_type == "UINT8":
+            cls.np_data_type = np.uint8
         cls._is_cluster = True if REDIS_CLUSTER else False
 
     @classmethod
@@ -57,10 +61,14 @@ class RedisUploader(BaseUploader):
     ):
         if REDIS_JUST_INDEX:
             return
+        final_embeddings = vectors
+        if cls.data_type == "INT8" or cls.data_type == "UINT8":
+            final_embeddings = quantize_embeddings(vectors, precision=cls.data_type.lower())
+
         for i in range(len(ids)):
             idx = ids[i]
             vector_key = str(idx)
-            vec = vectors[i]
+            vec = final_embeddings[i]
             meta = metadata[i] if metadata else {}
             geopoints = {}
             payload = {}
