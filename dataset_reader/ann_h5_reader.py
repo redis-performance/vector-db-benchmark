@@ -26,8 +26,7 @@ class AnnH5Reader(BaseReader):
                 expected_result=expected_result.tolist(),
                 expected_scores=expected_scores.tolist(),
             )
-
-    def read_data(self) -> Iterator[Record]:
+    def read_data(self, start_idx: int = 0, end_idx: int = None) -> Iterator[Record]:   
         data = h5py.File(self.path)
 
         for idx, vector in enumerate(data["train"]):

@@ -17,5 +17,4 @@ sentence_transformers==3.3.1
 stopit==1.1.2
 tqdm==4.66.2
 typer==0.15.1
-urllib3==1.26.19
-urllib3==1.26.9
+urllib3

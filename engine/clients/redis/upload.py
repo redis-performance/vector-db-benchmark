@@ -19,6 +19,10 @@ from engine.clients.redis.config import (
 from engine.clients.redis.helper import convert_to_redis_coords
 from sentence_transformers.quantization import quantize_embeddings
 
+import logging
+logging.basicConfig(level=logging.ERROR)
+
+
 class RedisUploader(BaseUploader):
     client = None
     host = None
