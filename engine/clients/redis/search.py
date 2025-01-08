@@ -2,6 +2,7 @@ import random
 from typing import List, Tuple
 from ml_dtypes import bfloat16
 import numpy as np
+import logging
 from redis import Redis, RedisCluster
 from redis.commands.search.query import Query
 from engine.base_client.search import BaseSearcher
@@ -14,6 +15,10 @@ from engine.clients.redis.config import (
 )
 
 from engine.clients.redis.parser import RedisConditionParser
+from sentence_transformers.quantization import quantize_embeddings
+
+# we need to set log level higher than warning due to sentence_transformers's quantize_embeddings
+logging.basicConfig(level=logging.ERROR)
 
 
 class RedisSearcher(BaseSearcher):
@@ -44,6 +49,10 @@ class RedisSearcher(BaseSearcher):
             cls.np_data_type = np.float16
         if cls.data_type == "BFLOAT16":
             cls.np_data_type = bfloat16
+        if cls.data_type == "INT8":
+            cls.np_data_type = np.int8
+        if cls.data_type == "UINT8":
+            cls.np_data_type = np.uint8
         cls._is_cluster = True if REDIS_CLUSTER else False
 
         # In the case of CLUSTER API enabled we randomly select the starting primary shard
@@ -65,6 +74,10 @@ class RedisSearcher(BaseSearcher):
         else:
             prefilter_condition, params = conditions
 
+        final_embedding = vector
+        if cls.data_type == "INT8" or cls.data_type == "UINT8":
+            final_embedding = quantize_embeddings(vector, precision=cls.data_type.lower())
+
         q = (
             Query(
                 f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]"
@@ -78,7 +91,7 @@ class RedisSearcher(BaseSearcher):
             .timeout(REDIS_QUERY_TIMEOUT)
         )
         params_dict = {
-            "vec_param": np.array(vector).astype(cls.np_data_type).tobytes(),
+            "vec_param": np.array(final_embedding).astype(cls.np_data_type).tobytes(),
             "K": top,
             **params,
         }

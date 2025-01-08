@@ -20,6 +20,8 @@ from engine.clients.redis.helper import convert_to_redis_coords
 from sentence_transformers.quantization import quantize_embeddings
 
 import logging
+
+# we need to set log level higher than warning due to sentence_transformers's quantize_embeddings
 logging.basicConfig(level=logging.ERROR)
 
 
