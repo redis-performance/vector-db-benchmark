@@ -126,7 +126,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -256,7 +257,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -386,7 +388,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -516,7 +519,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -646,7 +650,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -776,7 +781,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -906,7 +912,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1036,7 +1043,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1166,7 +1174,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1296,7 +1305,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1426,7 +1436,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1556,7 +1567,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1686,7 +1698,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1816,7 +1829,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -1946,7 +1960,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2076,7 +2091,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2206,7 +2222,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2336,7 +2353,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2466,7 +2484,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2596,7 +2615,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2726,7 +2746,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2856,7 +2877,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -2986,7 +3008,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -3116,7 +3139,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "INT8"
+            "data_type": "INT8",
+            "batch_size": 1000
         }
     },
     {
@@ -3246,7 +3270,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -3376,7 +3401,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -3506,7 +3532,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -3636,7 +3663,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -3766,7 +3794,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -3896,7 +3925,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4026,7 +4056,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4156,7 +4187,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4286,7 +4318,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4416,7 +4449,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4546,7 +4580,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4676,7 +4711,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4806,7 +4842,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -4936,7 +4973,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5066,7 +5104,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5196,7 +5235,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5326,7 +5366,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5456,7 +5497,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5586,7 +5628,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5716,7 +5759,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5846,7 +5890,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -5976,7 +6021,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6106,7 +6152,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6236,7 +6283,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT16"
+            "data_type": "FLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6366,7 +6414,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6496,7 +6545,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6626,7 +6676,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6756,7 +6807,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -6886,7 +6938,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7016,7 +7069,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7146,7 +7200,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7276,7 +7331,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7406,7 +7462,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7536,7 +7593,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7666,7 +7724,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7796,7 +7855,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -7926,7 +7986,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8056,7 +8117,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8186,7 +8248,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8316,7 +8379,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8446,7 +8510,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8576,7 +8641,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8706,7 +8772,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8836,7 +8903,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -8966,7 +9034,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -9096,7 +9165,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -9226,7 +9296,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -9356,7 +9427,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "BFLOAT16"
+            "data_type": "BFLOAT16",
+            "batch_size": 1000
         }
     },
     {
@@ -9486,7 +9558,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -9616,7 +9689,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -9746,7 +9820,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -9876,7 +9951,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10006,7 +10082,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10136,7 +10213,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10266,7 +10344,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10396,7 +10475,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10526,7 +10606,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10656,7 +10737,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10786,7 +10868,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -10916,7 +10999,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11046,7 +11130,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11176,7 +11261,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11306,7 +11392,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11436,7 +11523,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11566,7 +11654,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11696,7 +11785,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11826,7 +11916,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -11956,7 +12047,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -12086,7 +12178,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -12216,7 +12309,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -12346,7 +12440,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -12476,7 +12571,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT32"
+            "data_type": "FLOAT32",
+            "batch_size": 1000
         }
     },
     {
@@ -12606,7 +12702,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -12736,7 +12833,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -12866,7 +12964,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -12996,7 +13095,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13126,7 +13226,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13256,7 +13357,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13386,7 +13488,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13516,7 +13619,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13646,7 +13750,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13776,7 +13881,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -13906,7 +14012,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14036,7 +14143,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14166,7 +14274,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14296,7 +14405,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14426,7 +14536,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14556,7 +14667,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14686,7 +14798,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14816,7 +14929,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -14946,7 +15060,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -15076,7 +15191,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -15206,7 +15322,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -15336,7 +15453,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -15466,7 +15584,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     },
     {
@@ -15596,7 +15715,8 @@
         ],
         "upload_params": {
             "parallel": 16,
-            "data_type": "FLOAT64"
+            "data_type": "FLOAT64",
+            "batch_size": 1000
         }
     }
 ]

@@ -1,6 +1,7 @@
 import json
 
 experiments = []
+batch_size = 1000
 
 for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     for m in [8, 16, 32, 64]:
@@ -16,7 +17,7 @@ for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
                     "hnsw_config": {"M": m, "EF_CONSTRUCTION": efConstruction},
                 },
                 "search_params": [],
-                "upload_params": {"parallel": 16, "data_type": data_type},
+                "upload_params": {"parallel": 16, "data_type": data_type, "batch_size": batch_size},
             }
             #            for efSearch in [16, 32, 1024]:
             for efSearch in [8, 16, 32, 64, 128, 256, 512, 1024]:
