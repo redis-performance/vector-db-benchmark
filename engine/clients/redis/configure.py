@@ -59,6 +59,7 @@ class RedisConfigurator(BaseConfigurator):
                 if (
                     "Unknown Index name" not in str_err
                     and "Index does not exist" not in str_err
+                    and "no such index" not in str_err
                 ):
                     # google memorystore does not support the DD argument.
                     # in that case we can flushall
