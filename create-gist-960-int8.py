@@ -114,7 +114,7 @@ if __name__ == "__main__":
     output_path = os.path.join(DATASETS_DIR, "gist-960-euclidean-int8.hdf5")
 
     with h5py.File(output_path, "w") as h5f:
-        h5f.create_dataset("train", data=quantized_dataset)
-        h5f.create_dataset("test", data=quantized_queries)
-        h5f.create_dataset("neighbors", data=neighbors)
-        h5f.create_dataset("distances", data=distances)
+        h5f.create_dataset("train", data=quantized_dataset, compression=None)
+        h5f.create_dataset("test", data=quantized_queries, compression=None)
+        h5f.create_dataset("neighbors", data=neighbors, compression=None)
+        h5f.create_dataset("distances", data=distances, compression=None)
