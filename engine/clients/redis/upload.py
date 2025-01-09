@@ -17,12 +17,6 @@ from engine.clients.redis.config import (
     REDIS_JUST_INDEX,
 )
 from engine.clients.redis.helper import convert_to_redis_coords
-from sentence_transformers.quantization import quantize_embeddings
-
-import logging
-
-# we need to set log level higher than warning due to sentence_transformers's quantize_embeddings
-logging.basicConfig(level=logging.ERROR)
 
 
 class RedisUploader(BaseUploader):
@@ -67,14 +61,11 @@ class RedisUploader(BaseUploader):
     ):
         if REDIS_JUST_INDEX:
             return
-        final_embeddings = vectors
-        if cls.data_type == "INT8" or cls.data_type == "UINT8":
-            final_embeddings = quantize_embeddings(vectors, precision=cls.data_type.lower())
 
         for i in range(len(ids)):
             idx = ids[i]
             vector_key = str(idx)
-            vec = final_embeddings[i]
+            vec = vectors[i]
             meta = metadata[i] if metadata else {}
             geopoints = {}
             payload = {}

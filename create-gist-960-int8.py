@@ -62,8 +62,8 @@ if __name__ == "__main__":
     data = AnnH5Reader(test_path).read_data()
     queries = AnnH5Reader(test_path).read_queries()
 
-    train_dataset_size = 10000
-    full_dataset_size = 100000
+    train_dataset_size = 100000
+    full_dataset_size = 1000000
     train_dataset = []
     full_dataset = []
     test = []

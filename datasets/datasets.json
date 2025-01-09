@@ -40,6 +40,14 @@
     "link": "http://ann-benchmarks.com/gist-960-euclidean.hdf5"
   },
   {
+    "name": "gist-960-euclidean-int8",
+    "vector_size": 960,
+    "distance": "l2",
+    "type": "h5",
+    "path": "gist-960-euclidean-int8/gist-960-euclidean-int8.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/gist-960-euclidean-int8/gist-960-euclidean-int8.hdf5"
+  },
+  {
     "name": "laion-img-emb-512-1M-cosine",
     "vector_size": 512,
     "distance": "cosine",
