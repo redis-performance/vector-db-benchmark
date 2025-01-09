@@ -33,10 +33,10 @@ class ScalarQuantization:
 
     def quantize(self, dataset: np.ndarray):
         q_vals = np.floor((dataset - self.x_min) / self.delta)
-        # use int32 to avoid overflow if type is uint8
-        q_vals = np.clip(q_vals, 0, self.N).astype(numpy_types_dict[self.precision])
+        # use int32 to avoid overflow during offset subtraction
+        q_vals = np.clip(q_vals, 0, self.N).astype(np.int32)
         q_vals -= self.offset
-        return q_vals
+        return q_vals.astype(numpy_types_dict[self.precision])
 
     def decompress(self, x):
         return (self.delta * (x + 0.5 + self.offset).astype(np.float32)) + self.x_min
