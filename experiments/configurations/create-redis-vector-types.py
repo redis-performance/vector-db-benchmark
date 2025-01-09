@@ -1,7 +1,7 @@
 import json
 
 experiments = []
-batch_size = 1000
+batch_size = 64
 
 for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     for m in [8, 16, 32, 64]:
