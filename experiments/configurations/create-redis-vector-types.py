@@ -4,9 +4,9 @@ experiments = []
 batch_size = 64
 
 for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
-    for m in [8, 16, 32, 64]:
+    for m in [8, 16, 32, 64, 128, 256]:
         # for efConstruction in [32, 64]:
-        for efConstruction in [16, 32, 64, 128, 256, 512]:
+        for efConstruction in [16, 32, 64, 128, 256, 512, 1024, 2048]:
             search_params = []
             config = {
                 "name": f"redis-{data_type.lower()}-m-{m}-ef-{efConstruction}",
@@ -20,7 +20,7 @@ for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
                 "upload_params": {"parallel": 16, "data_type": data_type, "batch_size": batch_size},
             }
             #            for efSearch in [16, 32, 1024]:
-            for efSearch in [8, 16, 32, 64, 128, 256, 512, 1024]:
+            for efSearch in [8, 16, 32, 64, 128, 256, 512, 1024, 1024, 2048, 4096]:
                 single_client_config = {
                     "parallel": 1,
                     "search_params": {"ef": efSearch, "data_type": data_type},
