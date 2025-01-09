@@ -13,22 +13,23 @@ numpy_types_dict = {"float32": np.float32, "int8": np.int8, "uint8": np.uint8}
 
 # quantize vectors pre-dimension
 class ScalarQuantization:
-    def __init__(self, dim, precision: str = "uint8"):
+    def __init__(self, dim, precision: str = "uint8", quantile: float = 0.99):
         self.N = 255  # 2^B - 1
         self.dim = dim
         self.precision = precision
+        self.quantile = quantile
         if precision == "uint8":
             self.offset = 0
         elif precision == "int8":
             self.offset = 128
 
     def train(self, train_dataset: np.ndarray):
-        # Assuming train_dataset is a numpy array with shape (n_train_vec, self.dim)
-        self.x_min = train_dataset.min(
-            axis=0
-        )  # Find the minimum value in each dimension
+        # Use quantiles to calculate x_min and x_max
+        lower_quantile = 1 - self.quantile
+        self.x_min = np.quantile(train_dataset, lower_quantile, axis=0)
+        self.x_max = np.quantile(train_dataset, self.quantile, axis=0)
         self.delta = (
-            train_dataset.max(axis=0) - self.x_min
+            self.x_max - self.x_min
         ) / self.N  # Calculate delta for each dimension
 
     def quantize(self, dataset: np.ndarray):
@@ -42,7 +43,7 @@ class ScalarQuantization:
         return (self.delta * (x + 0.5 + self.offset).astype(np.float32)) + self.x_min
 
     def get_quantization_params(self) -> Dict:
-        return {"x_min": self.x_min, "delta": self.delta}
+        return {"x_min": self.x_min, "x_max": self.x_max, "delta": self.delta}
 
 
 if __name__ == "__main__":
@@ -87,7 +88,7 @@ if __name__ == "__main__":
     print("n vectors = ", len(train_dataset))
     print("vector shape = ", train_dataset[0].shape)
     precision = "int8"
-    quantizer = ScalarQuantization(train_dataset[0].shape, precision)
+    quantizer = ScalarQuantization(train_dataset[0].shape, precision, .99)
     print("Creating quantizer for type = ", precision)
 
     print("\nTraining dataset ... ")
