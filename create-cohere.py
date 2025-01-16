@@ -306,7 +306,7 @@ class Benchmark:
         dim = len(int8_vector_embeddings[0])
 
         # Create a new HDF5 file and write the data
-        output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-float32.hdf5")
+        output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-angular-float32", f"cohere-{dim}-angular-float32.hdf5")
         neighbors = np.array()
         distances = np.array()
         for res in self.gt_res:
@@ -336,7 +336,7 @@ class Benchmark:
         if VERBOSE_MODE:
             print(f"Quantized embeddings. Example vec slice = {sq_embeddings[0][:10]}")
         
-        output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-int8.hdf5")
+        output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-angular-int8", f"cohere-{dim}-angular-int8.hdf5")
 
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=sq_embeddings, compression=None)
