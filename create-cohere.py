@@ -23,7 +23,7 @@ LANG = "en" # Use the English Wikipedia subset
 DATASET_SIZE = 1_000_000
 CALIBRATION_SET_SIZE = DATASET_SIZE // 10
 QUERIES_DATASET_SIZE = 1000
-QUERIES_NUM = 100
+QUERIES_NUM = int(os.getenv("QUERIES_NUM","100"))
 K = 100
 
 numpy_types_dict = {
@@ -190,7 +190,7 @@ class QuantizationProcessor:
         if precision == "uint8":
             self.offset = np.array(0, dtype=np.uint8)
         elif precision == "int8":
-            self.offset = np.array(128, dtype=np.int8) 
+            self.offset = np.array(128, dtype=np.uint8) 
 
     def train(self, train_dataset: np.ndarray):
         # Assuming train_dataset is a numpy array with shape (n_train_vec, self.dim)
