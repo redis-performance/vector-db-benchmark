@@ -307,11 +307,12 @@ class Benchmark:
 
         # Create a new HDF5 file and write the data
         output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-angular-float32", f"cohere-{dim}-angular-float32.hdf5")
-        neighbors = np.array()
-        distances = np.array()
-        for res in self.gt_res:
-            neighbors.append(res[1])
-            distances.append(res[0])
+        neighbors = []
+        distances = []
+        for i, res in enumerate(self.gt_res):
+            for inner_res in res:
+                neighbors[i].append(int(inner_res[1]))
+                distances[i].append(float(inner_res[0]))
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=float32_vector_embeddings, compression=None)
             h5f.create_dataset("test", data=float32_queries_embeddings, compression=None)
