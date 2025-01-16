@@ -188,9 +188,9 @@ class QuantizationProcessor:
         self.dim = dim
         self.precision = precision
         if precision == "uint8":
-            self.offset = 0
+            self.offset = np.array(0, dtype=np.uint8)
         elif precision == "int8":
-            self.offset = 128
+            self.offset = np.array(128, dtype=np.int8) 
 
     def train(self, train_dataset: np.ndarray):
         # Assuming train_dataset is a numpy array with shape (n_train_vec, self.dim)
