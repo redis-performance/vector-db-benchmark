@@ -201,7 +201,12 @@ class QuantizationProcessor:
         q_vals = np.floor((dataset - self.x_min) / self.delta)
         # use int32 to avoid overflow if type is uint8
         q_vals = np.clip(q_vals, 0, self.N).astype(numpy_types_dict[self.precision])
-        q_vals -= self.offset
+
+        # Ensure self.offset is cast to the same type before subtraction
+        self.offset = self.offset.astype(q_vals.dtype)
+
+        # Subtract offset safely
+        q_vals = np.clip(q_vals - self.offset, -128, 127)
         return q_vals
 
     def decompress(self, x):
