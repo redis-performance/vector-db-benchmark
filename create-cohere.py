@@ -307,12 +307,16 @@ class Benchmark:
 
         # Create a new HDF5 file and write the data
         output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-float32.hdf5")
-
+        neighbors = np.array()
+        distances = np.array()
+        for res in self.gt_res:
+            neighbors.append(res[1])
+            distances.append(res[0])
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=float32_vector_embeddings, compression=None)
             h5f.create_dataset("test", data=float32_queries_embeddings, compression=None)
-            h5f.create_dataset("neighbors", data=self.gt_res, compression=None)
-            h5f.create_dataset("distances", data=self.gt_res, compression=None)
+            h5f.create_dataset("neighbors", data=neighbors, compression=None)
+            h5f.create_dataset("distances", data=distances, compression=None)
 
         if VERBOSE_MODE:
             print(f"float32 Example query_{QUERIES_NUM - 1} res: {self.gt_res[QUERIES_NUM - 1]}")
@@ -337,8 +341,8 @@ class Benchmark:
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=sq_embeddings, compression=None)
             h5f.create_dataset("test", data=sq_queries_embeddings, compression=None)
-            h5f.create_dataset("neighbors", data=self.gt_res, compression=None)
-            h5f.create_dataset("distances", data=self.gt_res, compression=None)
+            h5f.create_dataset("neighbors", data=neighbors, compression=None)
+            h5f.create_dataset("distances", data=distances, compression=None)
 
         SQ_recall = self.timed_compute_recall(distance_func, sq_queries_embeddings, sq_embeddings)
         print("\nCalculate recall in decompressed space")
