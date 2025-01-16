@@ -10,6 +10,7 @@ import cohere
 import csv
 from benchmark import DATASETS_DIR
 import h5py
+from tqdm import tqdm 
 
 # Load COHERE_API_KEY from .env file
 load_dotenv()
@@ -253,7 +254,7 @@ class Benchmark:
     def batch_knn(self, queries_num, queries_embeddings, dataset_embeddings, distance_func, k=K):
         res = []
         start_time = time.time()
-        for query in queries_embeddings[:queries_num]:
+        for query in tqdm(queries_embeddings[:queries_num], desc="Processing Queries", unit="query"):
             res.append(distance_func(query, dataset_embeddings, k))
         batch_knn_time = time.time() - start_time
         print(f"Search took {batch_knn_time} seconds")
@@ -263,7 +264,7 @@ class Benchmark:
     def timed_compute_recall(self, distance_func, queries, vectors):
         start_time = time.time()
         correct = 0
-        for i, query in enumerate(queries[:QUERIES_NUM]):
+        for i, query in enumerate(tqdm(queries[:QUERIES_NUM], desc="Processing Queries")):
             res = distance_func(query, vectors)
             correct += self.count_correct(self.gt_res[i], res)
         recall = correct / (K * QUERIES_NUM)
