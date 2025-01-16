@@ -310,9 +310,13 @@ class Benchmark:
         neighbors = []
         distances = []
         for i, res in enumerate(self.gt_res):
+            neighbors.append([])
+            distances.append([])
+
             for inner_res in res:
-                neighbors[i].append(int(inner_res[1]))
-                distances[i].append(float(inner_res[0]))
+                neighbor, distance =  inner_res
+                neighbors[i].append(int(neighbor))
+                distances[i].append(distance)
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=float32_vector_embeddings, compression=None)
             h5f.create_dataset("test", data=float32_queries_embeddings, compression=None)
