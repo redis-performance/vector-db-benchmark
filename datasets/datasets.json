@@ -44,7 +44,7 @@
     "vector_size": 1024,
     "distance": "angular",
     "type": "h5",
-    "path": "cohere-1024-angular-int8/cohere-1024-angular-float32.hdf5",
+    "path": "cohere-1024-angular-float32/cohere-1024-angular-float32.hdf5",
     "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/cohere-1024-angular/cohere-1024-angular-float32.hdf5"
   },
   {
