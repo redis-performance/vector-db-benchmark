@@ -317,6 +317,7 @@ class Benchmark:
                 neighbor, distance =  inner_res
                 neighbors[i].append(int(neighbor))
                 distances[i].append(distance)
+            print()
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=float32_vector_embeddings, compression=None)
             h5f.create_dataset("test", data=float32_queries_embeddings, compression=None)
@@ -332,30 +333,36 @@ class Benchmark:
         print("Calculate recall for int8 embeddings")
         int8_recall = self.timed_compute_recall(distance_func, int8_queries_embeddings, int8_vector_embeddings)
 
-        print("\n====================\n")
-        print("\nCalculate recall with scalar quantization")
-        print(f"Quantizing embeddings using calibration set of size {CALIBRATION_SET_SIZE}")
-        quantizer = QuantizationProcessor(dim=float32_vector_embeddings.shape[1], precision="int8")
-        print("\nCalculate recall in compressed space")
-        sq_embeddings, sq_queries_embeddings = quantizer.dataset_and_queries_SQ_embeddings(float32_vector_embeddings, float32_queries_embeddings)
-        if VERBOSE_MODE:
-            print(f"Quantized embeddings. Example vec slice = {sq_embeddings[0][:10]}")
-        
-        output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-angular-int8", f"cohere-{dim}-angular-int8.hdf5")
-
         with h5py.File(output_path, "w") as h5f:
-            h5f.create_dataset("train", data=sq_embeddings, compression=None)
-            h5f.create_dataset("test", data=sq_queries_embeddings, compression=None)
+            h5f.create_dataset("train", data=int8_vector_embeddings, compression=None)
+            h5f.create_dataset("test", data=int8_queries_embeddings, compression=None)
             h5f.create_dataset("neighbors", data=neighbors, compression=None)
             h5f.create_dataset("distances", data=distances, compression=None)
 
-        SQ_recall = self.timed_compute_recall(distance_func, sq_queries_embeddings, sq_embeddings)
-        print("\nCalculate recall in decompressed space")
-        decompressed_sq_embeddings = quantizer.decompress(sq_embeddings)
-        assert decompressed_sq_embeddings.dtype == np.float32, f"expected float32 but got {decompressed_sq_embeddings.dtype}"
-        assert float32_queries_embeddings.dtype == np.float32, f"expected float32 but got {float32_queries_embeddings.dtype}"
-        SQ_recall_decomp = self.timed_compute_recall(distance_func, float32_queries_embeddings, decompressed_sq_embeddings)
-        self.write_recall_to_csv(distance_func.__name__, int8_recall, SQ_recall, SQ_recall_decomp)
+        print("\n====================\n")
+        # print("\nCalculate recall with scalar quantization")
+        # print(f"Quantizing embeddings using calibration set of size {CALIBRATION_SET_SIZE}")
+        # quantizer = QuantizationProcessor(dim=float32_vector_embeddings.shape[1], precision="int8")
+        # print("\nCalculate recall in compressed space")
+        # sq_embeddings, sq_queries_embeddings = quantizer.dataset_and_queries_SQ_embeddings(float32_vector_embeddings, float32_queries_embeddings)
+        # if VERBOSE_MODE:
+        #     print(f"Quantized embeddings. Example vec slice = {sq_embeddings[0][:10]}")
+        
+        # output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-angular-int8", f"cohere-{dim}-angular-int8.hdf5")
+
+        # with h5py.File(output_path, "w") as h5f:
+        #     h5f.create_dataset("train", data=sq_embeddings, compression=None)
+        #     h5f.create_dataset("test", data=sq_queries_embeddings, compression=None)
+        #     h5f.create_dataset("neighbors", data=neighbors, compression=None)
+        #     h5f.create_dataset("distances", data=distances, compression=None)
+
+        # SQ_recall = self.timed_compute_recall(distance_func, sq_queries_embeddings, sq_embeddings)
+        # print("\nCalculate recall in decompressed space")
+        # decompressed_sq_embeddings = quantizer.decompress(sq_embeddings)
+        # assert decompressed_sq_embeddings.dtype == np.float32, f"expected float32 but got {decompressed_sq_embeddings.dtype}"
+        # assert float32_queries_embeddings.dtype == np.float32, f"expected float32 but got {float32_queries_embeddings.dtype}"
+        # SQ_recall_decomp = self.timed_compute_recall(distance_func, float32_queries_embeddings, decompressed_sq_embeddings)
+        # self.write_recall_to_csv(distance_func.__name__, int8_recall, SQ_recall, SQ_recall_decomp)
 
     @staticmethod
     def print_query_answer(query_idx: int, vec_idx: int, loader):
