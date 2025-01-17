@@ -3,7 +3,7 @@ import json
 experiments = []
 batch_size = 64
 
-for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
+for data_type in ["INT8", "FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     # flat
     search_params = []
     config = {
@@ -15,7 +15,11 @@ for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
             "flat_config": {},
         },
         "search_params": [],
-        "upload_params": {"parallel": 16, "data_type": data_type, "batch_size": batch_size},
+        "upload_params": {
+            "parallel": 16,
+            "data_type": data_type,
+            "batch_size": batch_size,
+        },
     }
     single_client_config = {
         "parallel": 1,
@@ -30,9 +34,9 @@ for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     config["search_params"] = search_params
     experiments.append(config)
 
-    for m in [8, 16, 32, 64, 128, 256]:
+    for m in [32, 64, 128, 256]:
         # for efConstruction in [32, 64]:
-        for efConstruction in [16, 32, 64, 128, 256, 512, 1024, 2048]:
+        for efConstruction in [32, 64, 128, 256]:
             search_params = []
             config = {
                 "name": f"redis-{data_type.lower()}-m-{m}-ef-{efConstruction}",
@@ -43,10 +47,14 @@ for data_type in ["INT8","FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
                     "hnsw_config": {"M": m, "EF_CONSTRUCTION": efConstruction},
                 },
                 "search_params": [],
-                "upload_params": {"parallel": 16, "data_type": data_type, "batch_size": batch_size},
+                "upload_params": {
+                    "parallel": 16,
+                    "data_type": data_type,
+                    "batch_size": batch_size,
+                },
             }
             #            for efSearch in [16, 32, 1024]:
-            for efSearch in [8, 16, 32, 64, 128, 256, 512, 1024, 1024, 2048, 4096]:
+            for efSearch in [8, 16, 32, 64, 128, 256, 512, 1024]:
                 single_client_config = {
                     "parallel": 1,
                     "search_params": {"ef": efSearch, "data_type": data_type},
