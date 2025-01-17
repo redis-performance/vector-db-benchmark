@@ -11,6 +11,8 @@ import csv
 from benchmark import DATASETS_DIR
 import h5py
 from tqdm import tqdm 
+from redis import Redis, RedisCluster
+from redis.commands.search.query import Query
 
 # Load COHERE_API_KEY from .env file
 load_dotenv()
@@ -291,33 +293,67 @@ class Benchmark:
 
         int8_vector_embeddings = self.int8_loader.load_embeddings()
         int8_queries_embeddings = self.int8_loader.load_queries()
-        if VERBOSE_MODE:
-            print(f"\n\t Example vec slice = {int8_vector_embeddings[0][:5]}"
-                f"\n\t Example query slice = {int8_queries_embeddings[0][:5]}\n")
+    #     if VERBOSE_MODE:
+    #         print(f"\n\t Example vec slice = {int8_vector_embeddings[0][:5]}"
+    #             f"\n\t Example query slice = {int8_queries_embeddings[0][:5]}\n")
 
-        print(f"\nRunning benchmark with distance function: {distance_func.__name__}\n")
+    #     print(f"\nRunning benchmark with distance function: {distance_func.__name__}\n")
 
-        print(f"\nCalculate Ground truth (float32) IDs for {distance_func.__name__} search with {QUERIES_NUM} queries")
-        self.gt_res = self.batch_knn(QUERIES_NUM, float32_queries_embeddings, float32_vector_embeddings, distance_func)
+    #     print(f"\nCalculate Ground truth (float32) IDs for {distance_func.__name__} search with {QUERIES_NUM} queries")
+    #     self.gt_res = self.batch_knn(QUERIES_NUM, float32_queries_embeddings, float32_vector_embeddings, distance_func)
 
-       # print(f"Quantization took {dur} seconds.")
-      #  print("vector 1 shape = ", quantized_dataset[0].shape)
-      #  print("vector 1 sample = ", quantized_dataset[0])
+    #    # print(f"Quantization took {dur} seconds.")
+    #   #  print("vector 1 shape = ", quantized_dataset[0].shape)
+    #   #  print("vector 1 sample = ", quantized_dataset[0])
         dim = len(int8_vector_embeddings[0])
 
         # Create a new HDF5 file and write the data
         output_path = os.path.join(DATASETS_DIR, f"cohere-{dim}-angular-float32", f"cohere-{dim}-angular-float32.hdf5")
         neighbors = []
         distances = []
-        for i, res in enumerate(self.gt_res):
+        top = 100
+        prefilter_condition = "*"
+        REDIS_QUERY_TIMEOUT = 120
+        client_ft = Redis(
+            
+        )
+
+        q = (
+            Query(
+                f"{prefilter_condition}=>[KNN $K @vector $vec_param AS vector_score]"
+            )
+            .sort_by("vector_score", asc=True)
+            .paging(0, top)
+            .return_fields("vector_score")
+            # performance is optimized for sorting operations on DIALECT 4 in different scenarios.
+            # check SORTBY details in https://redis.io/commands/ft.search/
+            .dialect(4)
+            .timeout(REDIS_QUERY_TIMEOUT)
+        )
+        params = {}
+
+        for i, query_vector in enumerate(float32_queries_embeddings[:QUERIES_NUM]):
             neighbors.append([])
             distances.append([])
 
-            for inner_res in res:
-                neighbor, distance =  inner_res
-                neighbors[i].append(int(neighbor))
-                distances[i].append(distance)
-            print()
+            
+            params_dict = {
+                "vec_param": np.array(query_vector).astype(np.float32).tobytes(),
+                "K": top,
+                **params,
+            }
+            results = client_ft.search(q, query_params=params_dict)
+            for result in results.docs:
+                neighbors.append(int(result.id))
+                distances.append( float(result.vector_score))
+
+        
+
+            # for inner_res in res:
+            #     neighbor, distance =  inner_res
+            #     neighbors[i].append(int(neighbor))
+            #     distances[i].append(distance)
+            # print()
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=float32_vector_embeddings, compression=None)
             h5f.create_dataset("test", data=float32_queries_embeddings, compression=None)
