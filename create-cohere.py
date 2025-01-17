@@ -367,7 +367,7 @@ class Benchmark:
 
         print("\n====================\n")
         print("Calculate recall for int8 embeddings")
-        int8_recall = self.timed_compute_recall(distance_func, int8_queries_embeddings, int8_vector_embeddings)
+       # int8_recall = self.timed_compute_recall(distance_func, int8_queries_embeddings, int8_vector_embeddings)
 
         with h5py.File(output_path, "w") as h5f:
             h5f.create_dataset("train", data=int8_vector_embeddings, compression=None)
