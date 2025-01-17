@@ -344,8 +344,8 @@ class Benchmark:
             }
             results = client_ft.search(q, query_params=params_dict)
             for result in results.docs:
-                neighbors.append(int(result.id))
-                distances.append( float(result.vector_score))
+                neighbors[i].append(int(result.id))
+                distances[i].append( float(result.vector_score))
 
         
 
