@@ -316,7 +316,7 @@ class Benchmark:
         REDIS_QUERY_TIMEOUT = 120
         client_ft = Redis(
             
-        )
+        ).ft()
 
         q = (
             Query(
