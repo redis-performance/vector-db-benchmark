@@ -51,26 +51,29 @@ class RedisConfigurator(BaseConfigurator):
                 for node in self.client.get_primaries()
             ]
         for conn in conns:
-            index = conn.ft()
-            try:
-                index.dropindex(delete_documents=(not REDIS_KEEP_DOCUMENTS))
-            except redis.ResponseError as e:
-                str_err = e.__str__()
-                if (
-                    "Unknown Index name" not in str_err
-                    and "Index does not exist" not in str_err
-                    and "no such index" not in str_err
-                ):
-                    # google memorystore does not support the DD argument.
-                    # in that case we can flushall
-                    if "wrong number of arguments for FT.DROPINDEX command" in str_err:
-                        print(
-                            "Given the FT.DROPINDEX command failed, we're flushing the entire DB..."
-                        )
-                        if REDIS_KEEP_DOCUMENTS is False:
-                            conn.flushall()
-                    else:
-                        raise e
+            if REDIS_KEEP_DOCUMENTS is False:
+                conn.flushall()
+            else:
+                index = conn.ft()
+                try:
+                    index.dropindex(delete_documents=(not REDIS_KEEP_DOCUMENTS))
+                except redis.ResponseError as e:
+                    str_err = e.__str__()
+                    if (
+                        "Unknown Index name" not in str_err
+                        and "Index does not exist" not in str_err
+                        and "no such index" not in str_err
+                    ):
+                        # google memorystore does not support the DD argument.
+                        # in that case we can flushall
+                        if "wrong number of arguments for FT.DROPINDEX command" in str_err:
+                            print(
+                                "Given the FT.DROPINDEX command failed, we're flushing the entire DB..."
+                            )
+                            if REDIS_KEEP_DOCUMENTS is False:
+                                conn.flushall()
+                        else:
+                            raise e
 
     def recreate(self, dataset: Dataset, collection_params):
         self.clean()
