@@ -26,13 +26,21 @@ class AnnH5Reader(BaseReader):
                 expected_result=expected_result.tolist(),
                 expected_scores=expected_scores.tolist(),
             )
+
     def read_data(self, start_idx: int = 0, end_idx: int = None) -> Iterator[Record]:
         data = h5py.File(self.path)
-
+        has_metadata = "metadata" in data  # Check if metadata exists
         for idx, vector in enumerate(data["train"]):
             if self.normalize:
                 vector /= np.linalg.norm(vector)
-            yield Record(id=idx, vector=vector.tolist(), metadata=None)
+            metadata = None
+            if has_metadata:
+                try:
+                    metadata = data["metadata"][idx].decode("utf-8")
+                except (IndexError, AttributeError, UnicodeDecodeError):
+                    metadata = None  # Handle cases where metadata retrieval fails
+
+            yield Record(id=idx, vector=vector.tolist(), metadata=metadata)
 
 
 if __name__ == "__main__":
