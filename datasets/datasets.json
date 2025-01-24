@@ -32,20 +32,20 @@
     "link": "http://ann-benchmarks.com/deep-image-96-angular.hdf5"
   },
   {
-    "name": "cohere-1024-angular-int8",
+    "name": "cohere-wikipedia-1024-angular-int8",
     "vector_size": 1024,
     "distance": "cosine",
     "type": "h5",
-    "path": "cohere-1024-angular-int8/cohere-1024-angular-int8.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/cohere-1024-angular/cohere-1024-angular-int8.hdf5"
+    "path": "cohere-wikipedia-1024-angular-int8/cohere-wikipedia-1024-angular-int8.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/cohere-wikipedia-1024-angular/cohere-wikipedia-1024-angular-int8.hdf5"
   },
   {
-    "name": "cohere-1024-angular-float32",
+    "name": "cohere-wikipedia-1024-angular-float32",
     "vector_size": 1024,
     "distance": "cosine",
     "type": "h5",
-    "path": "cohere-1024-angular-float32/cohere-1024-angular-float32.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/cohere-1024-angular/cohere-1024-angular-float32.hdf5"
+    "path": "cohere-wikipedia-1024-angular-float32/cohere-wikipedia-1024-angular-float32.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/cohere-wikipedia-1024-angular/cohere-wikipedia-1024-angular-float32.hdf5"
   },
   {
     "name": "gist-960-euclidean",

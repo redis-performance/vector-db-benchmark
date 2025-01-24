@@ -161,12 +161,12 @@ def run():
     vector_dimension = len(vectors[0])
     output_dir = os.path.join(
         DATASETS_DIR,
-        f"cohere-wikipedia-multilingual-{vector_dimension}-angular-{vector_type}",
+        f"cohere-wikipedia-{vector_dimension}-angular-{vector_type}",
     )
     os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
     output_path = os.path.join(
         output_dir,
-        f"cohere-wikipedia-multilingual-{vector_dimension}-angular-{vector_type}.hdf5",
+        f"cohere-wikipedia-{vector_dimension}-angular-{vector_type}.hdf5",
     )
 
     metadata_json = np.array(
