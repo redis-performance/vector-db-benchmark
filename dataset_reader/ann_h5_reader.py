@@ -1,5 +1,5 @@
 from typing import Iterator
-
+import json
 import h5py
 import numpy as np
 
@@ -36,8 +36,12 @@ class AnnH5Reader(BaseReader):
             metadata = None
             if has_metadata:
                 try:
-                    metadata = data["metadata"][idx].decode("utf-8")
-                except (IndexError, AttributeError, UnicodeDecodeError):
+                    metadata_str = data["metadata"][idx].decode("utf-8").strip()
+                    if metadata_str.startswith("{") and metadata_str.endswith("}"):
+                        metadata = json.loads(metadata_str)
+                    else:
+                        metadata = None
+                except (IndexError, AttributeError, UnicodeDecodeError, json.JSONDecodeError) as e :
                     metadata = None  # Handle cases where metadata retrieval fails
 
             yield Record(id=idx, vector=vector.tolist(), metadata=metadata)
