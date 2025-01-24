@@ -97,7 +97,7 @@ def load_vectors(vector_type, vector_dtype, dataset_name, emb_fieldname):
 def ingest_vectors(vectors, metadata, vector_type):
     client = Redis()
     client.flushdb()  # Clean DB before ingestion
-    create_redis_index()  # Ensure index is created before ingestion
+    create_redis_index(vector_type)  # Ensure index is created before ingestion
     pipeline = client.pipeline()
     for i, (vector, meta) in enumerate(
         tqdm(zip(vectors, metadata), desc="Ingesting vectors", total=len(vectors))
@@ -125,6 +125,9 @@ def run():
     dataset_name = dataset_name_type_dict[VECTOR_TYPE]
     vector_dtype = dataset_vector_dtype_dict[VECTOR_TYPE]
     emb_fieldname = dataset_embed_type_dict[VECTOR_TYPE]
+    print(
+        f"Creating dataset for vector type={vector_type}. Using dataset {dataset_name} and field {emb_fieldname} for the embeddings"
+    )
     vectors, metadata, queries = load_vectors(
         vector_type, vector_dtype, dataset_name, emb_fieldname
     )
