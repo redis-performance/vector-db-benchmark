@@ -18,13 +18,24 @@ load_dotenv()
 # Constants
 LANG = "en"
 DATASET_SIZE = int(os.getenv("DATASET_SIZE", "1000000"))
+VECTOR_TYPE = os.getenv("VECTOR_TYPE", "INT8").lower()
 QUERIES_NUM = 1000
 K = 100
 
-def create_redis_index():
+dataset_embed_type_dict = {"float32": "emb", "int8": "emb_int8"}
+dataset_vector_dtype_dict = {"float32": np.float32, "int8": np.int8}
+dataset_name_type_dict = {
+    "float32": "Cohere/wikipedia-2023-11-embed-multilingual-v3",
+    "int8": "Cohere/wikipedia-2023-11-embed-multilingual-v3-int8-binary",
+}
+
+
+def create_redis_index(vector_type):
     client = Redis()
     try:
-        client.ft().dropindex(delete_documents=True)  # Remove existing index if it exists
+        client.ft().dropindex(
+            delete_documents=True
+        )  # Remove existing index if it exists
     except:
         pass
     index_def = IndexDefinition(index_type=IndexType.HASH)
@@ -32,54 +43,71 @@ def create_redis_index():
         TextField("_id"),
         TextField("title"),
         TextField("text"),
-        VectorField("vector", "FLAT", {
-            "TYPE": "INT8",
-            "DIM": 1024,
-            "DISTANCE_METRIC": "COSINE"
-        })
+        VectorField(
+            "vector",
+            "FLAT",
+            {"TYPE": vector_type, "DIM": 1024, "DISTANCE_METRIC": "COSINE"},
+        ),
     )
     client.ft().create_index(schema, definition=index_def)
     print("Redis search index created.")
 
-def load_vectors():
-    embeddings_file = f"int8_embeddings_{DATASET_SIZE}.pkl"
+
+def load_vectors(vector_type, vector_dtype, dataset_name, emb_fieldname):
+    embeddings_file = f"{vector_type}_embeddings_{DATASET_SIZE}.pkl"
     if os.path.exists(embeddings_file):
         with open(embeddings_file, "rb") as f:
-            (vectors, metadata,query_vectors) = pickle.load(f)
-            print(f"Prepared {len(vectors)} dataset vectors, {len(metadata)} metadata, and {len(query_vectors)} query vectors")
+            (vectors, metadata, query_vectors) = pickle.load(f)
+            print(
+                f"Prepared {len(vectors)} dataset vectors, {len(metadata)} metadata, and {len(query_vectors)} query vectors"
+            )
             return vectors, metadata, query_vectors
     dataset = load_dataset(
-        "Cohere/wikipedia-2023-11-embed-multilingual-v3-int8-binary",
+        dataset_name,
         LANG,
         split="train",
         streaming=True,
     )
     vectors, metadata = [], []
     query_vectors = []
-    for num,doc in tqdm(enumerate(dataset.take(DATASET_SIZE + QUERIES_NUM)), desc="Loading dataset"):
-        vector = doc["emb_int8"]
+    for num, doc in tqdm(
+        enumerate(dataset.take(DATASET_SIZE + QUERIES_NUM)), desc="Loading dataset"
+    ):
+        vector = doc[emb_fieldname]
         if num >= DATASET_SIZE:
             query_vectors.append(vector)
         else:
             vectors.append(vector)
-            metadata.append({"_id": doc["_id"], "title": doc.get("title", ""), "text": doc.get("text", "")})
-    vectors = np.array(vectors, dtype=np.int8)
+            metadata.append(
+                {
+                    "_id": doc["_id"],
+                    "title": doc.get("title", ""),
+                    "text": doc.get("text", ""),
+                }
+            )
+    vectors = np.array(vectors, dtype=vector_dtype)
     with open(embeddings_file, "wb") as f:
-        pickle.dump((vectors, metadata,query_vectors), f)
-    print(f"Prepared {len(vectors)} dataset vectors, {len(metadata)} metadata, and {len(query_vectors)} query vectors")
+        pickle.dump((vectors, metadata, query_vectors), f)
+    print(
+        f"Prepared {len(vectors)} dataset vectors, {len(metadata)} metadata, and {len(query_vectors)} query vectors"
+    )
     return vectors, metadata, query_vectors
 
-def ingest_vectors(vectors, metadata):
+
+def ingest_vectors(vectors, metadata, vector_type):
     client = Redis()
     client.flushdb()  # Clean DB before ingestion
-    create_redis_index()  # Ensure index is created before ingestion
+    create_redis_index(vector_type)  # Ensure index is created before ingestion
     pipeline = client.pipeline()
-    for i, (vector, meta) in enumerate(tqdm(zip(vectors, metadata), desc="Ingesting vectors", total=len(vectors))):
+    for i, (vector, meta) in enumerate(
+        tqdm(zip(vectors, metadata), desc="Ingesting vectors", total=len(vectors))
+    ):
         pipeline.hset(f"{i}", mapping={"vector": vector.tobytes(), **meta})
-        if i % 100 == 0:    
+        if i % 100 == 0:
             pipeline.execute()
     pipeline.execute()
     print("Vector ingestion complete.")
+
 
 def verify_metadata(vectors):
     client = Redis()
@@ -91,9 +119,16 @@ def verify_metadata(vectors):
         else:
             print(f"No metadata found for vector {idx}")
 
+
 def run():
-    vectors, metadata, queries = load_vectors()
-    ingest_vectors(vectors[:DATASET_SIZE], metadata[:DATASET_SIZE])
+    vector_type = VECTOR_TYPE
+    dataset_name = dataset_name_type_dict[VECTOR_TYPE]
+    vector_dtype = dataset_vector_dtype_dict[VECTOR_TYPE]
+    emb_fieldname = dataset_embed_type_dict[VECTOR_TYPE]
+    vectors, metadata, queries = load_vectors(
+        vector_type, vector_dtype, dataset_name, emb_fieldname
+    )
+    ingest_vectors(vectors[:DATASET_SIZE], metadata[:DATASET_SIZE], vector_type)
     verify_metadata(vectors[:DATASET_SIZE])
     assert len(queries) == QUERIES_NUM
     assert len(vectors) == DATASET_SIZE
@@ -111,7 +146,7 @@ def run():
     )
     for query_vector in tqdm(queries, desc="Processing queries"):
         params_dict = {
-            "vec_param": np.array(query_vector).astype(np.int8).tobytes(),
+            "vec_param": np.array(query_vector).astype(vector_dtype).tobytes(),
             "K": K,
         }
         results = client_ft.search(q, query_params=params_dict)
@@ -126,21 +161,30 @@ def run():
     vector_dimension = len(vectors[0])
     output_dir = os.path.join(
         DATASETS_DIR,
-        f"cohere-{vector_dimension}-angular-int8",
+        f"cohere-wikipedia-multilingual-{vector_dimension}-angular-{vector_type}",
     )
     os.makedirs(output_dir, exist_ok=True)  # Ensure directory exists
-    output_path = os.path.join(output_dir, f"cohere-{vector_dimension}-angular-int8.hdf5")
+    output_path = os.path.join(
+        output_dir,
+        f"cohere-wikipedia-multilingual-{vector_dimension}-angular-{vector_type}.hdf5",
+    )
 
-    metadata_json = np.array([json.dumps(meta) for meta in metadata[:DATASET_SIZE]], dtype="S")
+    metadata_json = np.array(
+        [json.dumps(meta) for meta in metadata[:DATASET_SIZE]], dtype="S"
+    )
     assert len(metadata_json) == len(vectors)
 
     with h5py.File(output_path, "w") as h5f:
         h5f.create_dataset("train", data=vectors, compression=None)
         h5f.create_dataset("test", data=queries, compression=None)
-        h5f.create_dataset("neighbors", data=np.array(neighbors, dtype=np.int32), compression=None)
-        h5f.create_dataset("distances", data=np.array(distances, dtype=np.float32), compression=None)
+        h5f.create_dataset(
+            "neighbors", data=np.array(neighbors, dtype=np.int32), compression=None
+        )
+        h5f.create_dataset(
+            "distances", data=np.array(distances, dtype=np.float32), compression=None
+        )
         h5f.create_dataset("metadata", data=metadata_json, compression=None)
+
 
 if __name__ == "__main__":
     run()
-
