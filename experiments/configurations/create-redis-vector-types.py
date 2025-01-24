@@ -36,7 +36,7 @@ for data_type in ["INT8", "FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
 
     for m in [32, 64, 128, 256]:
         # for efConstruction in [32, 64]:
-        for efConstruction in [32, 64, 128, 256]:
+        for efConstruction in [8, 16, 32, 64, 128, 256]:
             search_params = []
             config = {
                 "name": f"redis-{data_type.lower()}-m-{m}-ef-{efConstruction}",
