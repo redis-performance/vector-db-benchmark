@@ -34,9 +34,11 @@ for data_type in ["INT8", "FLOAT16", "BFLOAT16", "FLOAT32", "FLOAT64"]:
     config["search_params"] = search_params
     experiments.append(config)
 
-    for m in [32, 64, 128, 256]:
+    for m in [8, 16, 32, 64, 128, 256]:
         # for efConstruction in [32, 64]:
         for efConstruction in [8, 16, 32, 64, 128, 256]:
+            if efConstruction < m:
+                continue
             search_params = []
             config = {
                 "name": f"redis-{data_type.lower()}-m-{m}-ef-{efConstruction}",
