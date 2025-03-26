@@ -55,5 +55,5 @@ class WeaviateConfigurator(BaseConfigurator):
         self.client.close()
 
     def __del__(self):
-        if self.client.is_connected():
+        if hasattr(self, "client") and self.client.is_connected():
             self.client.close()
