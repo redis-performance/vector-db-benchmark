@@ -5,9 +5,11 @@ from engine.clients.weaviate.config import (
     WEAVIATE_CLASS_NAME,
     setup_client,
 )
+from weaviate import WeaviateClient
 
 
 class WeaviateConfigurator(BaseConfigurator):
+    client: WeaviateClient = None
     DISTANCE_MAPPING = {
         Distance.L2: "l2-squared",
         Distance.COSINE: "cosine",
