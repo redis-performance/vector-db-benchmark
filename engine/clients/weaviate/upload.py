@@ -1,13 +1,13 @@
 import uuid
 from typing import List, Optional
-from weaviate import Client
+from weaviate import WeaviateClient
 
 from engine.base_client.upload import BaseUploader
 from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
 from weaviate.classes.data import DataObject
 
 class WeaviateUploader(BaseUploader):
-    client: Client = None
+    client: WeaviateClient = None
     upload_params = {}
     collection = None
 
@@ -26,7 +26,7 @@ class WeaviateUploader(BaseUploader):
     ):
         objects = []
         for pos, vector in enumerate(vectors):
-            _id = ids[pos]
+            _id = uuid.UUID(ids[pos])
             _property = {}
             if metadata is not None and len(metadata) >= pos:
                 _property = metadata[pos]
