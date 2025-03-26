@@ -3,8 +3,6 @@ from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
 from engine.clients.weaviate.config import (
     WEAVIATE_CLASS_NAME,
-    WEAVIATE_PORT,
-    WEAVIATE_API_KEY,
     setup_client,
 )
 
