@@ -1,15 +1,13 @@
 import uuid
-from typing import List
+from typing import List, Optional
+from weaviate import Client
 
-from weaviate.classes.data import DataObject
-from weaviate import WeaviateClient
-from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
 from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, setup_client
-
+from weaviate.classes.data import DataObject
 
 class WeaviateUploader(BaseUploader):
-    client: WeaviateClient = None
+    client: Client = None
     upload_params = {}
     collection = None
 
@@ -23,13 +21,17 @@ class WeaviateUploader(BaseUploader):
         )
 
     @classmethod
-    def upload_batch(cls, batch: List[Record]):
+    def upload_batch(
+        cls, ids: List[int], vectors: List[list], metadata: List[Optional[dict]]
+    ):
         objects = []
-        for record in batch:
-            _id = uuid.UUID(int=record.id)
-            _property = record.metadata or {}
+        for pos, vector in enumerate(vectors):
+            _id = ids[pos]
+            _property = {}
+            if metadata is not None and len(metadata) >= pos:
+                _property = metadata[pos]
             objects.append(
-                DataObject(properties=_property, vector=record.vector, uuid=_id)
+                DataObject(properties=_property, vector=vector, uuid=_id)
             )
         if len(objects) > 0:
             cls.collection.data.insert_many(objects)
