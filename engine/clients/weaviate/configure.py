@@ -36,7 +36,7 @@ class WeaviateConfigurator(BaseConfigurator):
     def recreate(self, dataset: Dataset, collection_params):
         schema = dataset.config.schema
         if "id" in schema:
-            schema["_id"] = schema.pop("id")
+            schema["property_id"] = schema.pop("id")
         self.client.collections.create_from_dict(
             {
                 "class": WEAVIATE_CLASS_NAME,
