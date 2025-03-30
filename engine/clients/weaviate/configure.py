@@ -46,7 +46,7 @@ class WeaviateConfigurator(BaseConfigurator):
                         ],
                         "indexInverted": True,
                     }
-                    for field_name, field_type in dataset.config.schema.items()
+                    for field_name, field_type in dataset.config.schema.items() if field_name != "id"
                 ],
                 "vectorIndexConfig": {
                     **{
