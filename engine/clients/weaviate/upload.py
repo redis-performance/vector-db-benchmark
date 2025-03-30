@@ -34,6 +34,8 @@ class WeaviateUploader(BaseUploader):
         for record in batch:
             _id = uuid.UUID(int=record.id)
             _property = record.metadata or {}
+            if "id" in _property:
+                _property.pop("id")
             objects.append(
                 DataObject(properties=_property, vector=record.vector, uuid=_id)
             )

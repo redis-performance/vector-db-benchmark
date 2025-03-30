@@ -34,9 +34,6 @@ class WeaviateConfigurator(BaseConfigurator):
         self.client.collections.delete(WEAVIATE_CLASS_NAME)
 
     def recreate(self, dataset: Dataset, collection_params):
-        schema = dataset.config.schema
-        if "id" in schema:
-            schema["property_id"] = schema.pop("id")
         self.client.collections.create_from_dict(
             {
                 "class": WEAVIATE_CLASS_NAME,
@@ -49,7 +46,7 @@ class WeaviateConfigurator(BaseConfigurator):
                         ],
                         "indexInverted": True,
                     }
-                    for field_name, field_type in schema.items()
+                    for field_name, field_type in dataset.config.schema.items() if field_name != "id"
                 ],
                 "vectorIndexConfig": {
                     **{
