@@ -5,7 +5,7 @@ description = ""
 authors = ["Kacper Łukawski <kacper.lukawski@qdrant.com>"]
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.12"
+python = ">=3.9,<3.12"
 qdrant-client = "^1.8.0"
 typer = "^0.6.1"
 jsons = "^1.6.3"
@@ -18,8 +18,10 @@ ipdb = "^0.13.9"
 stopit = "^1.1.2"
 opensearch-py = "^2.3.2"
 tqdm = "^4.66.1"
+backoff = "^2.2.1"
 psycopg = {extras = ["binary"], version = "^3.1.17"}
 pgvector = "^0.2.4"
+ml-dtypes = "^0.4.0"
 
 
 [tool.poetry.dev-dependencies]

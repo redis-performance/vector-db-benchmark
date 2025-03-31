@@ -2,13 +2,17 @@ import functools
 import time
 from multiprocessing import get_context
 from typing import Iterable, List, Optional, Tuple
+import itertools
 
 import numpy as np
 import tqdm
+import os 
 
 from dataset_reader.base_reader import Query
 
 DEFAULT_TOP = 10
+MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
+
 
 
 class BaseSearcher:
@@ -52,7 +56,6 @@ class BaseSearcher:
         if query.expected_result:
             ids = set(x[0] for x in search_res)
             precision = len(ids.intersection(query.expected_result[:top])) / top
-
         return precision, end - start
 
     def search_all(
@@ -62,7 +65,6 @@ class BaseSearcher:
     ):
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
-
         # setup_search may require initialized client
         self.init_client(
             self.host, distance, self.connection_params, self.search_params
@@ -70,11 +72,17 @@ class BaseSearcher:
         self.setup_search()
 
         search_one = functools.partial(self.__class__._search_one, top=top)
+        used_queries = queries
+
+
+        if MAX_QUERIES > 0:
+            used_queries = itertools.islice(queries, MAX_QUERIES)
+            print(f"Limiting queries to [0:{MAX_QUERIES-1}]")
 
         if parallel == 1:
             start = time.perf_counter()
             precisions, latencies = list(
-                zip(*[search_one(query) for query in tqdm.tqdm(queries)])
+                zip(*[search_one(query) for query in tqdm.tqdm(used_queries)])
             )
         else:
             ctx = get_context(self.get_mp_start_method())
@@ -93,7 +101,7 @@ class BaseSearcher:
                     time.sleep(15)  # Wait for all processes to start
                 start = time.perf_counter()
                 precisions, latencies = list(
-                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(queries)))
+                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(used_queries)))
                 )
 
         total_time = time.perf_counter() - start
@@ -108,6 +116,7 @@ class BaseSearcher:
             "min_time": np.min(latencies),
             "max_time": np.max(latencies),
             "rps": len(latencies) / total_time,
+            "p50_time": np.percentile(latencies, 50),
             "p95_time": np.percentile(latencies, 95),
             "p99_time": np.percentile(latencies, 99),
             "precisions": precisions,
