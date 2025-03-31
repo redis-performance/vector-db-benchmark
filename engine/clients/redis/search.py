@@ -67,7 +67,7 @@ class RedisSearcher(BaseSearcher):
         conditions = cls.parser.parse(meta_conditions)
         hybrid_policy = ""
         if cls.hybrid_policy != "":
-            hybrid_policy = f"=>{{$HYBRID_POLICY: {{cls.hybrid_policy}} }}"
+            hybrid_policy = '=>{$HYBRID_POLICY: '+ cls.hybrid_policy + ' }'
         if conditions is None:
             prefilter_condition = "*"
             params = {}
