@@ -1,13 +1,13 @@
 import uuid
 from typing import List
-
+import time
 from weaviate import WeaviateClient
 from weaviate.classes.data import DataObject
 from weaviate.connect import ConnectionParams
 
 from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT, WEAVIATE_POST_UPLOAD_TIMEOUT
 
 
 class WeaviateUploader(BaseUploader):
@@ -40,9 +40,28 @@ class WeaviateUploader(BaseUploader):
                 DataObject(properties=_property, vector=record.vector, uuid=_id)
             )
         if len(objects) > 0:
-            cls.collection.data.insert_many(objects)
+            batch_return = cls.collection.data.insert_many(objects)
 
     @classmethod
     def delete_client(cls):
         if cls.client is not None:
             cls.client.close()
+
+    @classmethod
+    def post_upload(cls, distance):
+        shards = cls.collection.config.get_shards()
+        deadline = time.time() + WEAVIATE_POST_UPLOAD_TIMEOUT
+        for shard in shards:
+            attempt = 0
+            while True:
+                if time.time() > deadline:
+                    raise TimeoutError(f"Timeout waiting for shard {shard.name} to finish indexing, after {WEAVIATE_POST_UPLOAD_TIMEOUT} secs.")
+                status = shard.status()
+                if status.get("status") == "READY":
+                    break
+                sleep_time = min(2 ** attempt, 30)  # cap at 30 seconds
+                print(f"Shard {shard.name} is still indexing... waiting {sleep_time} seconds (attempt {attempt+1})")
+                time.sleep(sleep_time)
+                attempt += 1
+
+        return {}

@@ -4,7 +4,7 @@ from weaviate.connect import ConnectionParams
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT, WEAVIATE_FILTER_STRATEGY
 
 
 class WeaviateConfigurator(BaseConfigurator):
@@ -34,8 +34,7 @@ class WeaviateConfigurator(BaseConfigurator):
         self.client.collections.delete(WEAVIATE_CLASS_NAME)
 
     def recreate(self, dataset: Dataset, collection_params):
-        self.client.collections.create_from_dict(
-            {
+        config = {
                 "class": WEAVIATE_CLASS_NAME,
                 "vectorizer": "none",
                 "properties": [
@@ -52,10 +51,16 @@ class WeaviateConfigurator(BaseConfigurator):
                     **{
                         "vectorCacheMaxObjects": 1000000000,
                         "distance": self.DISTANCE_MAPPING.get(dataset.config.distance),
+                      
                     },
                     **collection_params["vectorIndexConfig"],
                 },
             }
+        if "filterStrategy" not in config["vectorIndexConfig"] and WEAVIATE_FILTER_STRATEGY != "":
+            config["vectorIndexConfig"]["filterStrategy"] = WEAVIATE_FILTER_STRATEGY
+            
+        self.client.collections.create_from_dict(config
+            
         )
         self.client.close()
 

@@ -2,3 +2,9 @@ import os
 
 WEAVIATE_CLASS_NAME = "Benchmark"
 WEAVIATE_DEFAULT_PORT = int(os.getenv("WEAVIATE_DEFAULT_PORT", 8090))
+WEAVIATE_POST_UPLOAD_TIMEOUT = int(
+    os.getenv("WEAVIATE_POST_UPLOAD_TIMEOUT", 300)
+)  # seconds
+WEAVIATE_FILTER_STRATEGY = int(
+    os.getenv("WEAVIATE_FILTER_STRATEGY", "")
+)  # ACORN or sweeping
