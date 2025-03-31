@@ -4,7 +4,11 @@ from weaviate.connect import ConnectionParams
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT, WEAVIATE_FILTER_STRATEGY
+from engine.clients.weaviate.config import (
+    WEAVIATE_CLASS_NAME,
+    WEAVIATE_DEFAULT_PORT,
+    WEAVIATE_FILTER_STRATEGY,
+)
 
 
 class WeaviateConfigurator(BaseConfigurator):
@@ -35,33 +39,34 @@ class WeaviateConfigurator(BaseConfigurator):
 
     def recreate(self, dataset: Dataset, collection_params):
         config = {
-                "class": WEAVIATE_CLASS_NAME,
-                "vectorizer": "none",
-                "properties": [
-                    {
-                        "name": field_name,
-                        "dataType": [
-                            self.FIELD_TYPE_MAPPING[field_type],
-                        ],
-                        "indexInverted": True,
-                    }
-                    for field_name, field_type in dataset.config.schema.items() if field_name != "id"
-                ],
-                "vectorIndexConfig": {
-                    **{
-                        "vectorCacheMaxObjects": 1000000000,
-                        "distance": self.DISTANCE_MAPPING.get(dataset.config.distance),
-                      
-                    },
-                    **collection_params["vectorIndexConfig"],
+            "class": WEAVIATE_CLASS_NAME,
+            "vectorizer": "none",
+            "properties": [
+                {
+                    "name": field_name,
+                    "dataType": [
+                        self.FIELD_TYPE_MAPPING[field_type],
+                    ],
+                    "indexInverted": True,
+                }
+                for field_name, field_type in dataset.config.schema.items()
+                if field_name != "id"
+            ],
+            "vectorIndexConfig": {
+                **{
+                    "vectorCacheMaxObjects": 1000000000,
+                    "distance": self.DISTANCE_MAPPING.get(dataset.config.distance),
                 },
-            }
-        if "filterStrategy" not in config["vectorIndexConfig"] and WEAVIATE_FILTER_STRATEGY != "":
+                **collection_params["vectorIndexConfig"],
+            },
+        }
+        if (
+            "filterStrategy" not in config["vectorIndexConfig"]
+            and WEAVIATE_FILTER_STRATEGY != ""
+        ):
             config["vectorIndexConfig"]["filterStrategy"] = WEAVIATE_FILTER_STRATEGY
-            
-        self.client.collections.create_from_dict(config
-            
-        )
+
+        self.client.collections.create_from_dict(config)
         self.client.close()
 
     def __del__(self):

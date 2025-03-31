@@ -7,7 +7,11 @@ from weaviate.connect import ConnectionParams
 
 from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT, WEAVIATE_POST_UPLOAD_TIMEOUT
+from engine.clients.weaviate.config import (
+    WEAVIATE_CLASS_NAME,
+    WEAVIATE_DEFAULT_PORT,
+    WEAVIATE_POST_UPLOAD_TIMEOUT,
+)
 
 
 class WeaviateUploader(BaseUploader):
@@ -55,12 +59,16 @@ class WeaviateUploader(BaseUploader):
             attempt = 0
             while True:
                 if time.time() > deadline:
-                    raise TimeoutError(f"Timeout waiting for shard {shard.name} to finish indexing, after {WEAVIATE_POST_UPLOAD_TIMEOUT} secs.")
+                    raise TimeoutError(
+                        f"Timeout waiting for shard {shard.name} to finish indexing, after {WEAVIATE_POST_UPLOAD_TIMEOUT} secs."
+                    )
                 status = shard.status()
                 if status.get("status") == "READY":
                     break
-                sleep_time = min(2 ** attempt, 30)  # cap at 30 seconds
-                print(f"Shard {shard.name} is still indexing... waiting {sleep_time} seconds (attempt {attempt+1})")
+                sleep_time = min(2**attempt, 30)  # cap at 30 seconds
+                print(
+                    f"Shard {shard.name} is still indexing... waiting {sleep_time} seconds (attempt {attempt+1})"
+                )
                 time.sleep(sleep_time)
                 attempt += 1
 
