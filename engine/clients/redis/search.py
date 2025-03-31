@@ -11,6 +11,7 @@ from engine.clients.redis.config import (
     REDIS_AUTH,
     REDIS_USER,
     REDIS_CLUSTER,
+    REDIS_HYBRID_POLICY,
 )
 
 from engine.clients.redis.parser import RedisConditionParser
@@ -30,8 +31,13 @@ class RedisSearcher(BaseSearcher):
         cls.search_params = search_params
         cls.knn_conditions = ""
         cls.algorithm = cls.search_params.get("algorithm", "hnsw").upper()
+        cls.hybrid_policy = REDIS_HYBRID_POLICY
+
         if cls.algorithm == "HNSW":
-            cls.knn_conditions = "EF_RUNTIME $EF"
+            # 'EF_RUNTIME' is irrelevant for 'ADHOC_BF' policy
+            if cls.hybrid_policy != "ADHOC_BF":
+                cls.knn_conditions = "EF_RUNTIME $EF"
+
         cls.data_type = "FLOAT32"
         if "search_params" in cls.search_params:
             cls.data_type = (
@@ -59,6 +65,9 @@ class RedisSearcher(BaseSearcher):
     @classmethod
     def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
         conditions = cls.parser.parse(meta_conditions)
+        hybrid_policy = ""
+        if cls.hybrid_policy != "":
+            hybrid_policy = '=>{$HYBRID_POLICY: {'+ cls.hybrid_policy + '}'
         if conditions is None:
             prefilter_condition = "*"
             params = {}
@@ -67,7 +76,7 @@ class RedisSearcher(BaseSearcher):
 
         q = (
             Query(
-                f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]"
+                f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]{hybrid_policy}"
             )
             .sort_by("vector_score", asc=True)
             .paging(0, top)
@@ -83,7 +92,9 @@ class RedisSearcher(BaseSearcher):
             **params,
         }
         if cls.algorithm == "HNSW":
-            params_dict["EF"] = cls.search_params["search_params"]["ef"]
+            # 'EF_RUNTIME' is irrelevant for 'ADHOC_BF' policy
+            if cls.hybrid_policy != "ADHOC_BF":
+                params_dict["EF"] = cls.search_params["search_params"]["ef"]
         results = cls._ft.search(q, query_params=params_dict)
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]
