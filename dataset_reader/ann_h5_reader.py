@@ -1,6 +1,7 @@
 from typing import Iterator
 
 import h5py
+import random
 import numpy as np
 
 from benchmark import DATASETS_DIR
@@ -15,9 +16,9 @@ class AnnH5Reader(BaseReader):
     def read_queries(self) -> Iterator[Query]:
         data = h5py.File(self.path)
 
-        for vector, expected_result, expected_scores in zip(
-            data["test"], data["neighbors"], data["distances"]
-        ):
+        query_data = list(zip(data["test"], data["neighbors"], data["distances"]))
+        random.shuffle(query_data)
+        for vector, expected_result, expected_scores in query_data :
             if self.normalize:
                 vector /= np.linalg.norm(vector)
             yield Query(
