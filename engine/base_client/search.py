@@ -2,6 +2,7 @@ import functools
 import time
 from multiprocessing import get_context
 from typing import Iterable, List, Optional, Tuple
+from itertools import islice
 
 import numpy as np
 import tqdm
@@ -79,22 +80,31 @@ class BaseSearcher:
         else:
             ctx = get_context(self.get_mp_start_method())
 
-            with ctx.Pool(
-                processes=parallel,
-                initializer=self.__class__.init_client,
-                initargs=(
+            def process_initializer():
+                """Initialize each process before starting the search."""
+                self.__class__.init_client(
                     self.host,
                     distance,
                     self.connection_params,
                     self.search_params,
-                ),
+                )
+                self.setup_search()
+
+            # Dynamically chunk the generator
+            query_chunks = list(chunked_iterable(queries, max(1, parallel)))
+
+            with ctx.Pool(
+                processes=parallel,
+                initializer=process_initializer,
             ) as pool:
                 if parallel > 10:
                     time.sleep(15)  # Wait for all processes to start
                 start = time.perf_counter()
-                precisions, latencies = list(
-                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(queries)))
+                results = pool.starmap(
+                    process_chunk,
+                    [(chunk, search_one) for chunk in query_chunks],
                 )
+                precisions, latencies = zip(*[result for chunk in results for result in chunk])
 
         total_time = time.perf_counter() - start
 
@@ -123,3 +133,15 @@ class BaseSearcher:
     @classmethod
     def delete_client(cls):
         pass
+
+
+def chunked_iterable(iterable, size):
+    """Yield successive chunks of a given size from an iterable."""
+    it = iter(iterable)
+    while chunk := list(islice(it, size)):
+        yield chunk
+
+
+def process_chunk(chunk, search_one):
+    """Process a chunk of queries using the search_one function."""
+    return [search_one(query) for query in chunk]
