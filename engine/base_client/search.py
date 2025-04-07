@@ -1,6 +1,6 @@
 import functools
 import time
-from multiprocessing import get_context
+from multiprocessing import get_context, Barrier
 from typing import Iterable, List, Optional, Tuple
 from itertools import islice
 
@@ -80,6 +80,9 @@ class BaseSearcher:
         else:
             ctx = get_context(self.get_mp_start_method())
 
+            # Create a Barrier to synchronize processes
+            barrier = Barrier(parallel)
+
             def process_initializer():
                 """Initialize each process before starting the search."""
                 self.__class__.init_client(
@@ -89,6 +92,7 @@ class BaseSearcher:
                     self.search_params,
                 )
                 self.setup_search()
+                barrier.wait()  # Wait for all processes to be ready
 
             # Dynamically chunk the generator
             query_chunks = list(chunked_iterable(queries, max(1, parallel)))
@@ -97,8 +101,6 @@ class BaseSearcher:
                 processes=parallel,
                 initializer=process_initializer,
             ) as pool:
-                if parallel > 10:
-                    time.sleep(15)  # Wait for all processes to start
                 start = time.perf_counter()
                 results = pool.starmap(
                     process_chunk,
