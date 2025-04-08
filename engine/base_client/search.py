@@ -64,6 +64,9 @@ class BaseSearcher:
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
 
+        # Convert queries to a list to calculate its length
+        queries = list(queries)  # This allows us to calculate len(queries)
+
         # setup_search may require initialized client
         self.init_client(
             self.host, distance, self.connection_params, self.search_params
@@ -94,8 +97,9 @@ class BaseSearcher:
                 self.setup_search()
                 barrier.wait()  # Wait for all processes to be ready
 
-            # Dynamically chunk the generator
-            query_chunks = list(chunked_iterable(queries, max(1, parallel)))
+            # Dynamically calculate chunk size
+            chunk_size = max(1, len(queries) // parallel)
+            query_chunks = list(chunked_iterable(queries, chunk_size))
 
             with ctx.Pool(
                 processes=parallel,
