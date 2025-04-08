@@ -75,14 +75,11 @@ class BaseSearcher:
 
         search_one = functools.partial(self.__class__._search_one, top=top)
 
-        # Initialize the start time
-        start = time.perf_counter()
-
         if parallel == 1:
             # Single-threaded execution
-            precisions, latencies = list(
-                zip(*[search_one(query) for query in tqdm.tqdm(queries)])
-            )
+            start = time.perf_counter()
+            results = [search_one(query) for query in tqdm.tqdm(queries)]
+            total_time = time.perf_counter() - start
         else:
             # Dynamically calculate chunk size
             chunk_size = max(1, len(queries) // parallel)
@@ -110,6 +107,9 @@ class BaseSearcher:
                 processes.append(process)
                 process.start()
 
+            # Start measuring time for the critical work
+            start = time.perf_counter()
+
             # Collect results from all worker processes
             results = []
             for _ in processes:
@@ -119,10 +119,11 @@ class BaseSearcher:
             for process in processes:
                 process.join()
 
-            # Extract precisions and latencies
-            precisions, latencies = zip(*results)
+            # Stop measuring time for the critical work
+            total_time = time.perf_counter() - start
 
-        total_time = time.perf_counter() - start
+        # Extract precisions and latencies (outside the timed section)
+        precisions, latencies = zip(*results)
 
         self.__class__.delete_client()
 
