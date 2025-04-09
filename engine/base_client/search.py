@@ -166,7 +166,7 @@ class BaseSearcher:
 def chunked_iterable(iterable, size):
     """Yield successive chunks of a given size from an iterable."""
     it = iter(iterable)
-    while chunk := list(islice(it, size)):
+    while chunk := list(itertools.islice(it, size)):
         yield chunk
 
 
