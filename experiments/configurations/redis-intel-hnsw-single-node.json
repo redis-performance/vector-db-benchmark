@@ -1,0 +1,6610 @@
+[
+  {
+    "name": "redis-intel-float16-hnsw-m-4-ef-4",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 4,
+        "EF_CONSTRUCTION": 4
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-4-ef-8",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 4,
+        "EF_CONSTRUCTION": 8
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-4-ef-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 4,
+        "EF_CONSTRUCTION": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-4-ef-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 4,
+        "EF_CONSTRUCTION": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-8-ef-4",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 8,
+        "EF_CONSTRUCTION": 4
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-8-ef-8",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 8,
+        "EF_CONSTRUCTION": 8
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-8-ef-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 8,
+        "EF_CONSTRUCTION": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-8-ef-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 8,
+        "EF_CONSTRUCTION": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-16-ef-4",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 16,
+        "EF_CONSTRUCTION": 4
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-16-ef-8",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 16,
+        "EF_CONSTRUCTION": 8
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-16-ef-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 16,
+        "EF_CONSTRUCTION": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-16-ef-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 16,
+        "EF_CONSTRUCTION": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-32-ef-4",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 32,
+        "EF_CONSTRUCTION": 4
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-32-ef-8",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 32,
+        "EF_CONSTRUCTION": 8
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-32-ef-16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 32,
+        "EF_CONSTRUCTION": 16
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  },
+  {
+    "name": "redis-intel-float16-hnsw-m-32-ef-32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16",
+      "hnsw_config": {
+        "M": 32,
+        "EF_CONSTRUCTION": 32
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 1,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 50,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 100,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 64,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 128,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 256,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 512,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 1024,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 2048,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 4096,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 8192,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 16384,
+          "data_type": "FLOAT16"
+        }
+      },
+      {
+        "parallel": 200,
+        "search_params": {
+          "ef": 32768,
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 10,
+      "batch_size": 1,
+      "algorithm": "hnsw",
+      "data_type": "FLOAT16"
+    }
+  }
+]

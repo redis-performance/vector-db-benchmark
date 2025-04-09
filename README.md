@@ -16,6 +16,21 @@ scenario against which it should be tested. A specific scenario may assume
 running the server in a single or distributed mode, a different client
 implementation and the number of client instances.
 
+## Data sets
+
+We have a number of precomputed data sets. All data sets have been pre-split into train/test and include ground truth data for the top-100 nearest neighbors.
+
+| Dataset                                                                                                     | Dimensions |  Train size | Test size | Neighbors | Distance  |
+| ----------------------------------------------------------------------------------------------------------- | ---------: |  ---------: | --------: | --------: | --------- |
+| [LAION-1M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)   |        512 |   1,000,000 |    10,000 |       100 | Angular   |
+| [LAION-10M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  10,000,000 |    10,000 |       100 | Angular   |
+| [LAION-20M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  20,000,000 |    10,000 |       100 | Angular   |
+| [LAION-40M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  40,000,000 |    10,000 |       100 | Angular   |
+| [LAION-100M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 100,000,000 |    10,000 |       100 | Angular   |
+| [LAION-200M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 200,000,000 |    10,000 |       100 | Angular   |
+| [LAION-400M: from LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)      |        512 | 400,000,000 |    10,000 |       100 | Angular   |
+
+
 ## How to run a benchmark?
 
 Benchmarks are implemented in server-client mode, meaning that the server is

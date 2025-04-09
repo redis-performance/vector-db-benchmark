@@ -2,14 +2,17 @@ import functools
 import time
 from multiprocessing import get_context, Barrier, Process, Queue
 from typing import Iterable, List, Optional, Tuple
-from itertools import islice
+import itertools
 
 import numpy as np
 import tqdm
+import os 
 
 from dataset_reader.base_reader import Query
 
 DEFAULT_TOP = 10
+MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
+
 
 
 class BaseSearcher:
@@ -53,7 +56,6 @@ class BaseSearcher:
         if query.expected_result:
             ids = set(x[0] for x in search_res)
             precision = len(ids.intersection(query.expected_result[:top])) / top
-
         return precision, end - start
 
     def search_all(
@@ -74,12 +76,20 @@ class BaseSearcher:
         self.setup_search()
 
         search_one = functools.partial(self.__class__._search_one, top=top)
+        used_queries = queries
+
+
+        if MAX_QUERIES > 0:
+            used_queries = itertools.islice(queries, MAX_QUERIES)
+            print(f"Limiting queries to [0:{MAX_QUERIES-1}]")
 
         if parallel == 1:
             # Single-threaded execution
             start = time.perf_counter()
+
             results = [search_one(query) for query in tqdm.tqdm(queries)]
             total_time = time.perf_counter() - start
+
         else:
             # Dynamically calculate chunk size
             chunk_size = max(1, len(queries) // parallel)
@@ -135,6 +145,7 @@ class BaseSearcher:
             "min_time": np.min(latencies),
             "max_time": np.max(latencies),
             "rps": len(latencies) / total_time,
+            "p50_time": np.percentile(latencies, 50),
             "p95_time": np.percentile(latencies, 95),
             "p99_time": np.percentile(latencies, 99),
             "precisions": precisions,

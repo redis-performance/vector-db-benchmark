@@ -1,5 +1,7 @@
+import logging
 import multiprocessing as mp
 from typing import List, Optional
+import backoff
 
 from pymilvus import (
     Collection,
@@ -14,7 +16,7 @@ from engine.clients.milvus.config import (
     DTYPE_DEFAULT,
     MILVUS_COLLECTION_NAME,
     MILVUS_DEFAULT_ALIAS,
-    MILVUS_DEFAULT_PORT,
+    get_milvus_client,
 )
 
 
@@ -30,12 +32,7 @@ class MilvusUploader(BaseUploader):
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
-        cls.client = connections.connect(
-            alias=MILVUS_DEFAULT_ALIAS,
-            host=host,
-            port=str(connection_params.get("port", MILVUS_DEFAULT_PORT)),
-            **connection_params
-        )
+        cls.client = get_milvus_client(connection_params, host, MILVUS_DEFAULT_ALIAS)
         cls.collection = Collection(MILVUS_COLLECTION_NAME, using=MILVUS_DEFAULT_ALIAS)
         cls.upload_params = upload_params
         cls.distance = DISTANCE_MAPPING[distance]
@@ -55,6 +52,13 @@ class MilvusUploader(BaseUploader):
             ]
         else:
             field_values = []
+        cls.upload_with_backoff(field_values, ids, vectors)
+
+    @classmethod
+    @backoff.on_exception(
+        backoff.expo, MilvusException, max_time=600, backoff_log_level=logging.WARN
+    )
+    def upload_with_backoff(cls, field_values, ids, vectors):
         cls.collection.insert([ids, vectors] + field_values)
 
     @classmethod

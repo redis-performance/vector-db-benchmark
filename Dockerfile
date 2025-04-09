@@ -8,6 +8,9 @@ ENV PYTHONFAULTHANDLER=1 \
   PIP_DEFAULT_TIMEOUT=100 \
   POETRY_VERSION=1.5.1
 
+RUN apt update
+RUN apt install -y wget
+
 RUN pip install "poetry==$POETRY_VERSION"
 
 # Copy only requirements to cache them in docker layer
@@ -20,6 +23,8 @@ RUN poetry config virtualenvs.create false \
 
 # Creating folders, and files for a project:
 COPY . /code
+
+RUN pip install "boto3"
 
 CMD ["python"]
 

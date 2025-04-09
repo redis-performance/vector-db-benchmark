@@ -1,13 +1,15 @@
-from weaviate import WeaviateClient
-from weaviate.connect import ConnectionParams
-
 from benchmark.dataset import Dataset
 from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
-from engine.clients.weaviate.config import WEAVIATE_CLASS_NAME, WEAVIATE_DEFAULT_PORT
+from engine.clients.weaviate.config import (
+    WEAVIATE_CLASS_NAME,
+    setup_client,
+)
+from weaviate import WeaviateClient
 
 
 class WeaviateConfigurator(BaseConfigurator):
+    client: WeaviateClient = None
     DISTANCE_MAPPING = {
         Distance.L2: "l2-squared",
         Distance.COSINE: "cosine",
@@ -23,12 +25,7 @@ class WeaviateConfigurator(BaseConfigurator):
 
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
-        url = f"http://{host}:{connection_params.get('port', WEAVIATE_DEFAULT_PORT)}"
-        client = WeaviateClient(
-            ConnectionParams.from_url(url, 50051), skip_init_checks=True
-        )
-        client.connect()
-        self.client = client
+        self.client = setup_client(connection_params, host)
 
     def clean(self):
         self.client.collections.delete(WEAVIATE_CLASS_NAME)
@@ -60,5 +57,5 @@ class WeaviateConfigurator(BaseConfigurator):
         self.client.close()
 
     def __del__(self):
-        if self.client.is_connected():
+        if hasattr(self, "client") and self.client.is_connected():
             self.client.close()
