@@ -55,7 +55,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 16,
+      "parallel": 32,
       "batch_size": 1024,
       "hnsw_config": {
         "quant": "Q8"
@@ -118,7 +118,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 16,
+      "parallel": 32,
       "hnsw_config": {
         "quant": "Q8",
         "M": 32,
@@ -182,7 +182,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 16,
+      "parallel": 32,
       "hnsw_config": {
         "quant": "Q8",
         "M": 32,
@@ -246,7 +246,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 16,
+      "parallel": 32,
       "hnsw_config": {
         "quant": "Q8",
         "M": 32,
@@ -310,7 +310,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 16,
+      "parallel": 32,
       "hnsw_config": {
         "quant": "Q8",
         "M": 64,
@@ -374,7 +374,7 @@
       }
     ],
     "upload_params": {
-      "parallel": 16,
+      "parallel": 32,
       "hnsw_config": {
         "quant": "Q8",
         "M": 64,
