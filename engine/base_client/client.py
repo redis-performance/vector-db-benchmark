@@ -40,8 +40,9 @@ class BaseClient:
     ):
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
+        pid = os.getpid()  # Get the current process ID
         experiments_file = (
-            f"{self.name}-{dataset_name}-search-{search_id}-{timestamp}.json"
+            f"{self.name}-{dataset_name}-search-{search_id}-{pid}-{timestamp}.json"
         )
         result_path = RESULTS_DIR / experiments_file
         with open(result_path, "w") as out:
@@ -97,7 +98,8 @@ class BaseClient:
         reader = dataset.get_reader(execution_params.get("normalize", False))
 
         if skip_if_exists:
-            glob_pattern = f"{self.name}-{dataset.config.name}-search-*-*.json"
+            pid = os.getpid()  # Get the current process ID
+            glob_pattern = f"{self.name}-{dataset.config.name}-search-{pid}-*-*.json"
             existing_results = list(RESULTS_DIR.glob(glob_pattern))
             if len(existing_results) == len(self.searchers):
                 print(
@@ -135,8 +137,9 @@ class BaseClient:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
                 if skip_if_exists:
+                    pid = os.getpid()  # Get the current process ID
                     glob_pattern = (
-                        f"{self.name}-{dataset.config.name}-search-{search_id}-*.json"
+                        f"{self.name}-{dataset.config.name}-search-{search_id}-{pid}-*.json"
                     )
                     existing_results = list(RESULTS_DIR.glob(glob_pattern))
                     print("Pattern", glob_pattern, "Results:", existing_results)
