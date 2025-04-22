@@ -1203,22 +1203,5 @@
     "type": "tar",
     "link": "https://storage.googleapis.com/ann-filtered-benchmark/datasets/random_keywords_1m_vocab_10_no_filters.tgz",
     "path": "random-100-match-kw-small-vocab/random_keywords_1m_vocab_10_no_filters"
-  },
-  {
-    "name": "laion-img-emb-512-1M-cosine",
-    "vector_size": 512,
-    "distance": "cosine",
-    "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-1M-cosine.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100M-cosine.hdf5"
-  },
-  {
-    "name": "laion-img-emb-512-1M-100ktrain-cosine",
-    "vector_size": 512,
-    "distance": "cosine",
-    "type": "h5",
-    "path": "laion-img-emb-512/laion-img-emb-512-1M-100ktrain-cosine.hdf5",
-    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-512-100M-cosine.hdf5"
   }
-
 ]
