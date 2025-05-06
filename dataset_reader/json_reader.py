@@ -65,7 +65,7 @@ class JSONReader(BaseReader):
                 expected_result=neighbours,
             )
 
-    def read_data(self) -> Iterator[Record]:
+    def read_data(self, *args, **kwargs) -> Iterator[Record]:
         for idx, (vector, payload) in enumerate(
             zip(self.read_vectors(), self.read_payloads())
         ):

@@ -1,7 +1,9 @@
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
+import warnings
 
 from benchmark import ROOT_DIR
 from benchmark.dataset import Dataset
@@ -13,6 +15,9 @@ RESULTS_DIR = ROOT_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
 DETAILED_RESULTS = bool(int(os.getenv("DETAILED_RESULTS", False)))
+REPETITIONS = int(os.getenv("REPETITIONS", 3))
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 class BaseClient:
@@ -61,17 +66,19 @@ class BaseClient:
         return result_path
 
     def save_upload_results(
-        self, dataset_name: str, results: dict, upload_params: dict
+        self, dataset_name: str, results: dict, upload_params: dict,upload_start_idx:int,upload_end_idx:int,
     ):
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
-        experiments_file = f"{self.name}-{dataset_name}-upload-{timestamp}.json"
+        experiments_file = f"{self.name}-{dataset_name}-upload-{upload_start_idx}-{upload_end_idx}-{timestamp}.json"
         with open(RESULTS_DIR / experiments_file, "w") as out:
             upload_stats = {
                 "params": {
                     "experiment": self.name,
                     "engine": self.engine,
                     "dataset": dataset_name,
+                    "start_idx": upload_start_idx,
+                    "end_idx": upload_end_idx,
                     **upload_params,
                 },
                 "results": results,
@@ -85,11 +92,15 @@ class BaseClient:
         skip_search: bool = False,
         skip_if_exists: bool = True,
         skip_configure: Optional[bool] = False,
+        parallels: List[int] = [],
+        upload_start_idx: int = 0,
+        upload_end_idx: int = -1,
+        num_queries: int = -1,
+        ef_runtime: List[int] = [],
     ):
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
         )
-
         reader = dataset.get_reader(execution_params.get("normalize", False))
 
         if skip_if_exists:
@@ -105,10 +116,13 @@ class BaseClient:
             if not skip_configure:
                 print("Experiment stage: Configure")
                 self.configurator.configure(dataset)
-
-            print("Experiment stage: Upload")
+            else:
+                range_max_str = ":"
+                if upload_end_idx > 0:
+                    range_max_str += f"{upload_end_idx}"
+                print(f"Experiment stage: Upload. Vector range [{upload_start_idx}{range_max_str}]")
             upload_stats = self.uploader.upload(
-                distance=dataset.config.distance, records=reader.read_data()
+                distance=dataset.config.distance, records=reader.read_data(upload_start_idx,upload_end_idx)
             )
 
             if not DETAILED_RESULTS:
@@ -122,12 +136,13 @@ class BaseClient:
                     **self.uploader.upload_params,
                     **self.configurator.collection_params,
                 },
+                upload_start_idx=upload_start_idx,
+                upload_end_idx=upload_end_idx,
             )
 
         if not skip_search:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
-
                 if skip_if_exists:
                     glob_pattern = (
                         f"{self.name}-{dataset.config.name}-search-{search_id}-*.json"
@@ -141,17 +156,41 @@ class BaseClient:
                         continue
 
                 search_params = {**searcher.search_params}
-                search_stats = searcher.search_all(
-                    dataset.config.distance, reader.read_queries()
-                )
-                if not DETAILED_RESULTS:
-                    # Remove verbose stats from search results
-                    search_stats.pop("latencies", None)
-                    search_stats.pop("precisions", None)
+                ef = "default"
+                if "search_params" in search_params:
+                    ef = search_params["search_params"].get("ef", "default")
+                client_count = search_params.get("parallel", 1)
 
-                self.save_search_results(
-                    dataset.config.name, search_stats, search_id, search_params
-                )
+                # Filter by client count if parallels is specified
+                filter_client_count = len(parallels) > 0
+                if filter_client_count and (client_count not in parallels):
+                    print(f"\tSkipping ef runtime: {ef}; #clients {client_count}")
+                    continue
+
+                # Filter by ef runtime if ef_runtime is specified
+                filter_ef_runtime = len(ef_runtime) > 0
+                if filter_ef_runtime and isinstance(ef, int) and (ef not in ef_runtime):
+                    print(f"\tSkipping ef runtime: {ef}; #clients {client_count} (not in ef_runtime filter)")
+                    continue
+                for repetition in range(1, REPETITIONS + 1):
+                    print(
+                        f"\tRunning repetition {repetition} ef runtime: {ef}; #clients {client_count}"
+                    )
+
+                    search_stats = searcher.search_all(
+                        dataset.config.distance, reader.read_queries(), num_queries
+                    )
+                    # ensure we specify the client count in the results
+                    search_params["parallel"] = client_count
+                    if not DETAILED_RESULTS:
+                        # Remove verbose stats from search results
+                        search_stats.pop("latencies", None)
+                        search_stats.pop("precisions", None)
+
+                    self.save_search_results(
+                        dataset.config.name, search_stats, search_id, search_params
+                    )
+
         print("Experiment stage: Done")
         print("Results saved to: ", RESULTS_DIR)
 

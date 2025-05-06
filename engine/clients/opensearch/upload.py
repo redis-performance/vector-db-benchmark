@@ -6,12 +6,7 @@ from opensearchpy import OpenSearch
 
 from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
-from engine.clients.opensearch.config import (
-    OPENSEARCH_INDEX,
-    OPENSEARCH_PASSWORD,
-    OPENSEARCH_PORT,
-    OPENSEARCH_USER,
-)
+from engine.clients.opensearch.config import OPENSEARCH_INDEX, get_opensearch_client
 
 
 class ClosableOpenSearch(OpenSearch):
@@ -29,19 +24,7 @@ class OpenSearchUploader(BaseUploader):
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
-        init_params = {
-            **{
-                "verify_certs": False,
-                "request_timeout": 90,
-                "retry_on_timeout": True,
-            },
-            **connection_params,
-        }
-        cls.client = OpenSearch(
-            f"http://{host}:{OPENSEARCH_PORT}",
-            basic_auth=(OPENSEARCH_USER, OPENSEARCH_PASSWORD),
-            **init_params,
-        )
+        cls.client = get_opensearch_client(host, connection_params)
         cls.upload_params = upload_params
 
     @classmethod

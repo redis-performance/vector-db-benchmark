@@ -1,3 +1,4 @@
+import copy
 import multiprocessing as mp
 import uuid
 from typing import List, Tuple
@@ -25,9 +26,19 @@ class ElasticSearcher(BaseSearcher):
         return "forkserver" if "forkserver" in mp.get_all_start_methods() else "spawn"
 
     @classmethod
-    def init_client(cls, host, _distance, connection_params: dict, search_params: dict):
+    def init_client(cls, host, distance, connection_params: dict, search_params: dict):
+        init_params = {
+            **{
+                "verify_certs": False,
+                "request_timeout": 90,
+                "retry_on_timeout": True,
+            },
+            **connection_params,
+        }
         cls.client = get_es_client(host, connection_params)
-        cls.search_params = search_params
+        cls.search_params = copy.deepcopy(search_params)
+        # pop parallel
+        cls.search_params.pop("parallel", "1")
 
     @classmethod
     def search_one(cls, query: Query, top: int) -> List[Tuple[int, float]]:

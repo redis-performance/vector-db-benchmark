@@ -1,5 +1,6 @@
 from abc import ABC
-from typing import List, Type
+import importlib
+from typing import Dict, List, Type
 
 from engine.base_client.client import (
     BaseClient,
@@ -7,59 +8,52 @@ from engine.base_client.client import (
     BaseSearcher,
     BaseUploader,
 )
-from engine.clients.elasticsearch import (
-    ElasticConfigurator,
-    ElasticSearcher,
-    ElasticUploader,
-)
-from engine.clients.milvus import MilvusConfigurator, MilvusSearcher, MilvusUploader
-from engine.clients.opensearch import (
-    OpenSearchConfigurator,
-    OpenSearchSearcher,
-    OpenSearchUploader,
-)
-from engine.clients.pgvector import (
-    PgVectorConfigurator,
-    PgVectorSearcher,
-    PgVectorUploader,
-)
-from engine.clients.qdrant import QdrantConfigurator, QdrantSearcher, QdrantUploader
-from engine.clients.redis import RedisConfigurator, RedisSearcher, RedisUploader
-from engine.clients.weaviate import (
-    WeaviateConfigurator,
-    WeaviateSearcher,
-    WeaviateUploader,
-)
 
-ENGINE_CONFIGURATORS = {
-    "qdrant": QdrantConfigurator,
-    "weaviate": WeaviateConfigurator,
-    "milvus": MilvusConfigurator,
-    "elasticsearch": ElasticConfigurator,
-    "opensearch": OpenSearchConfigurator,
-    "redis": RedisConfigurator,
-    "pgvector": PgVectorConfigurator,
-}
+# Dictionary to store dynamically imported client classes
+_engine_classes = {}
 
-ENGINE_UPLOADERS = {
-    "qdrant": QdrantUploader,
-    "weaviate": WeaviateUploader,
-    "milvus": MilvusUploader,
-    "elasticsearch": ElasticUploader,
-    "opensearch": OpenSearchUploader,
-    "redis": RedisUploader,
-    "pgvector": PgVectorUploader,
-}
+def _import_engine_classes(engine_name: str) -> Dict[str, Type]:
+    """
+    Dynamically import client classes for a specific engine.
 
-ENGINE_SEARCHERS = {
-    "qdrant": QdrantSearcher,
-    "weaviate": WeaviateSearcher,
-    "milvus": MilvusSearcher,
-    "elasticsearch": ElasticSearcher,
-    "opensearch": OpenSearchSearcher,
-    "redis": RedisSearcher,
-    "pgvector": PgVectorSearcher,
-}
+    Args:
+        engine_name: The name of the engine (e.g., 'redis', 'qdrant')
+
+    Returns:
+        Dictionary with configurator, uploader, and searcher classes
+    """
+    if engine_name in _engine_classes:
+        return _engine_classes[engine_name]
+
+    # Handle special case for vectorsets which uses redis prefix
+    if engine_name == "vectorsets":
+        module_name = f"engine.clients.vectorsets"
+        class_prefix = "RedisVset"
+    else:
+        module_name = f"engine.clients.{engine_name}"
+        # Convert first letter to uppercase for class name
+        class_prefix = engine_name[0].upper() + engine_name[1:]
+
+    try:
+        module = importlib.import_module(module_name)
+        configurator_class = getattr(module, f"{class_prefix}Configurator")
+        uploader_class = getattr(module, f"{class_prefix}Uploader")
+        searcher_class = getattr(module, f"{class_prefix}Searcher")
+
+        _engine_classes[engine_name] = {
+            "configurator": configurator_class,
+            "uploader": uploader_class,
+            "searcher": searcher_class
+        }
+
+        return _engine_classes[engine_name]
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Failed to import classes for engine '{engine_name}': {e}")
+
+# Empty dictionaries that will be populated on demand
+ENGINE_CONFIGURATORS = {}
+ENGINE_UPLOADERS = {}
+ENGINE_SEARCHERS = {}
 
 
 class ClientFactory(ABC):
@@ -69,7 +63,17 @@ class ClientFactory(ABC):
 
     def _create_configurator(self, experiment) -> BaseConfigurator:
         self.engine = experiment["engine"]
-        engine_configurator_class = ENGINE_CONFIGURATORS[experiment["engine"]]
+        engine_name = experiment["engine"]
+
+        # Dynamically import engine classes if not already imported
+        if engine_name not in _engine_classes:
+            _import_engine_classes(engine_name)
+            # Add to the global dictionaries for compatibility
+            ENGINE_CONFIGURATORS[engine_name] = _engine_classes[engine_name]["configurator"]
+            ENGINE_UPLOADERS[engine_name] = _engine_classes[engine_name]["uploader"]
+            ENGINE_SEARCHERS[engine_name] = _engine_classes[engine_name]["searcher"]
+
+        engine_configurator_class = _engine_classes[engine_name]["configurator"]
         engine_configurator = engine_configurator_class(
             self.host,
             collection_params={**experiment.get("collection_params", {})},
@@ -78,7 +82,8 @@ class ClientFactory(ABC):
         return engine_configurator
 
     def _create_uploader(self, experiment) -> BaseUploader:
-        engine_uploader_class = ENGINE_UPLOADERS[experiment["engine"]]
+        engine_name = experiment["engine"]
+        engine_uploader_class = _engine_classes[engine_name]["uploader"]
         engine_uploader = engine_uploader_class(
             self.host,
             connection_params={**experiment.get("connection_params", {})},
@@ -87,9 +92,8 @@ class ClientFactory(ABC):
         return engine_uploader
 
     def _create_searchers(self, experiment) -> List[BaseSearcher]:
-        engine_searcher_class: Type[BaseSearcher] = ENGINE_SEARCHERS[
-            experiment["engine"]
-        ]
+        engine_name = experiment["engine"]
+        engine_searcher_class: Type[BaseSearcher] = _engine_classes[engine_name]["searcher"]
 
         engine_searchers = [
             engine_searcher_class(

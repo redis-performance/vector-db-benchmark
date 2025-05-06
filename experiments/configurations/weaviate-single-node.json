@@ -3,7 +3,7 @@
     "name": "weaviate-default",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 256, "maxConnections": 16 } },
     "search_params": [
@@ -15,7 +15,7 @@
     "name": "weaviate-m-16-ef-128",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 128, "maxConnections": 16 } },
     "search_params": [
@@ -28,7 +28,7 @@
     "name": "weaviate-m-32-ef-128",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 128, "maxConnections": 32 } },
     "search_params": [
@@ -41,7 +41,7 @@
     "name": "weaviate-m-32-ef-256",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 256, "maxConnections": 32 } },
     "search_params": [
@@ -54,7 +54,7 @@
     "name": "weaviate-m-32-ef-512",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 512, "maxConnections": 32 } },
     "search_params": [
@@ -67,7 +67,7 @@
     "name": "weaviate-m-64-ef-256",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 256, "maxConnections": 64 } },
     "search_params": [
@@ -80,7 +80,7 @@
     "name": "weaviate-m-64-ef-512",
     "engine": "weaviate",
     "connection_params": {
-      "timeout_config": 1000
+      "timeout_config": 90000
     },
     "collection_params": { "vectorIndexConfig": { "efConstruction": 512, "maxConnections": 64 } },
     "search_params": [

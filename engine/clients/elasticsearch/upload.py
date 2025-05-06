@@ -2,11 +2,16 @@ import multiprocessing as mp
 import uuid
 from typing import List
 
-from elasticsearch import Elasticsearch
+import elastic_transport
+from elasticsearch import Elasticsearch, ApiError
 
 from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
-from engine.clients.elasticsearch.config import ELASTIC_INDEX, get_es_client
+from engine.clients.elasticsearch.config import (
+    ELASTIC_INDEX,
+    get_es_client,
+    _wait_for_es_status,
+)
 
 
 class ClosableElastic(Elasticsearch):
@@ -23,7 +28,7 @@ class ElasticUploader(BaseUploader):
         return "forkserver" if "forkserver" in mp.get_all_start_methods() else "spawn"
 
     @classmethod
-    def init_client(cls, host, _distance, connection_params, upload_params):
+    def init_client(cls, host, distance, connection_params, upload_params):
         cls.client = get_es_client(host, connection_params)
         cls.upload_params = upload_params
 
@@ -42,7 +47,23 @@ class ElasticUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        cls.client.indices.forcemerge(
-            index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
-        )
+        print("forcing the merge into 1 segment...")
+        tries = 30
+        for i in range(tries + 1):
+            try:
+                cls.client.indices.forcemerge(
+                    index=ELASTIC_INDEX, wait_for_completion=True, max_num_segments=1
+                )
+            except (elastic_transport.TlsError, ApiError) as e:
+                if i < tries:  # i is zero indexed
+                    print(
+                        "Received the following error during retry {}/{} while waiting for ES index to be ready... {}".format(
+                            i, tries, e.__str__()
+                        )
+                    )
+                    continue
+                else:
+                    raise
+            _wait_for_es_status(cls.client)
+            break
         return {}

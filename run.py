@@ -17,6 +17,7 @@ app = typer.Typer()
 def run(
     engines: List[str] = typer.Option(["*"]),
     datasets: List[str] = typer.Option(["*"]),
+    parallels: List[int] = typer.Option([]),
     host: str = "localhost",
     skip_upload: bool = False,
     skip_search: bool = False,
@@ -24,6 +25,10 @@ def run(
     exit_on_error: bool = True,
     timeout: float = 86400.0,
     skip_configure: Optional[bool] = False,
+    upload_start_idx: int = 0,
+    upload_end_idx: int = -1,
+    queries: int = typer.Option(-1, help="Number of queries to run. If the available queries are fewer, they will be reused."),
+    ef_runtime: List[int] = typer.Option([], help="Filter search experiments by ef runtime values. Only experiments with these ef values will be run."),
 ):
     """
     Examples:
@@ -40,6 +45,7 @@ def run(
         for name, config in all_engines.items()
         if any(fnmatch.fnmatch(name, engine) for engine in engines)
     }
+
     selected_datasets = {
         name: config
         for name, config in all_datasets.items()
@@ -66,6 +72,11 @@ def run(
                         skip_search,
                         skip_if_exists,
                         skip_configure,
+                        parallels,
+                        upload_start_idx,
+                        upload_end_idx,
+                        queries,
+                        ef_runtime,
                     )
                 client.delete_client()
 

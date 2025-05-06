@@ -5,10 +5,13 @@ from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import tqdm
+import os
 
 from dataset_reader.base_reader import Query
 
 DEFAULT_TOP = 10
+MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
+
 
 
 class BaseSearcher:
@@ -50,17 +53,16 @@ class BaseSearcher:
         if query.expected_result:
             ids = set(x[0] for x in search_res)
             precision = len(ids.intersection(query.expected_result[:top])) / top
-
         return precision, end - start
 
     def search_all(
         self,
         distance,
         queries: Iterable[Query],
+        num_queries: int = -1,
     ):
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
-
         # setup_search may require initialized client
         self.init_client(
             self.host, distance, self.connection_params, self.search_params
@@ -69,10 +71,41 @@ class BaseSearcher:
 
         search_one = functools.partial(self.__class__._search_one, top=top)
 
+        # Convert queries to a list for potential reuse
+        queries_list = list(queries)
+
+        # Handle MAX_QUERIES environment variable
+        if MAX_QUERIES > 0:
+            queries_list = queries_list[:MAX_QUERIES]
+            print(f"Limiting queries to [0:{MAX_QUERIES-1}]")
+
+        # Handle num_queries parameter
+        if num_queries > 0:
+            # If we need more queries than available, cycle through the list
+            if num_queries > len(queries_list) and len(queries_list) > 0:
+                print(f"Requested {num_queries} queries but only {len(queries_list)} are available.")
+                print(f"Extending queries by cycling through the available ones.")
+                # Calculate how many complete cycles and remaining items we need
+                complete_cycles = num_queries // len(queries_list)
+                remaining = num_queries % len(queries_list)
+
+                # Create the extended list
+                extended_queries = []
+                for _ in range(complete_cycles):
+                    extended_queries.extend(queries_list)
+                extended_queries.extend(queries_list[:remaining])
+
+                used_queries = extended_queries
+            else:
+                used_queries = queries_list[:num_queries]
+                print(f"Using {num_queries} queries")
+        else:
+            used_queries = queries_list
+
         if parallel == 1:
             start = time.perf_counter()
             precisions, latencies = list(
-                zip(*[search_one(query) for query in tqdm.tqdm(queries)])
+                zip(*[search_one(query) for query in tqdm.tqdm(used_queries)])
             )
         else:
             ctx = get_context(self.get_mp_start_method())
@@ -91,7 +124,7 @@ class BaseSearcher:
                     time.sleep(15)  # Wait for all processes to start
                 start = time.perf_counter()
                 precisions, latencies = list(
-                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(queries)))
+                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(used_queries)))
                 )
 
         total_time = time.perf_counter() - start
@@ -106,6 +139,7 @@ class BaseSearcher:
             "min_time": np.min(latencies),
             "max_time": np.max(latencies),
             "rps": len(latencies) / total_time,
+            "p50_time": np.percentile(latencies, 50),
             "p95_time": np.percentile(latencies, 95),
             "p99_time": np.percentile(latencies, 99),
             "precisions": precisions,
