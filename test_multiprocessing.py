@@ -20,15 +20,15 @@ class TestSearcher(BaseSearcher):
     def setup_search(self):
         pass
 
-# Create test queries
-queries = [Query(vector=[0.1]*10, meta_conditions=None, expected_result=None) for _ in range(1000)]
+# Create a small set of test queries
+queries = [Query(vector=[0.1]*10, meta_conditions=None, expected_result=None) for _ in range(10)]
 
 # Create a searcher with parallel=10
 searcher = TestSearcher('localhost', {}, {'parallel': 10})
 
-# Run the search_all method
+# Run the search_all method with a large num_queries parameter
 start = time.perf_counter()
-results = searcher.search_all('cosine', queries)
+results = searcher.search_all('cosine', queries, num_queries=1000)
 total_time = time.perf_counter() - start
 
 print(f'Number of queries: {len(results["latencies"])}')
