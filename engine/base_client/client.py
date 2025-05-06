@@ -90,6 +90,7 @@ class BaseClient:
         parallels: [int] = [],
         upload_start_idx: int = 0,
         upload_end_idx: int = -1,
+        num_queries: int = -1,
     ):
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
@@ -161,7 +162,7 @@ class BaseClient:
                     )
 
                     search_stats = searcher.search_all(
-                        dataset.config.distance, reader.read_queries()
+                        dataset.config.distance, reader.read_queries(), num_queries
                     )
                     # ensure we specify the client count in the results
                     search_params["parallel"] = client_count

@@ -2,11 +2,10 @@ import functools
 import time
 from multiprocessing import get_context
 from typing import Iterable, List, Optional, Tuple
-import itertools
 
 import numpy as np
 import tqdm
-import os 
+import os
 
 from dataset_reader.base_reader import Query
 
@@ -62,6 +61,7 @@ class BaseSearcher:
         self,
         distance,
         queries: Iterable[Query],
+        num_queries: int = -1,
     ):
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
@@ -72,12 +72,37 @@ class BaseSearcher:
         self.setup_search()
 
         search_one = functools.partial(self.__class__._search_one, top=top)
-        used_queries = queries
 
+        # Convert queries to a list for potential reuse
+        queries_list = list(queries)
 
+        # Handle MAX_QUERIES environment variable
         if MAX_QUERIES > 0:
-            used_queries = itertools.islice(queries, MAX_QUERIES)
+            queries_list = queries_list[:MAX_QUERIES]
             print(f"Limiting queries to [0:{MAX_QUERIES-1}]")
+
+        # Handle num_queries parameter
+        if num_queries > 0:
+            # If we need more queries than available, cycle through the list
+            if num_queries > len(queries_list) and len(queries_list) > 0:
+                print(f"Requested {num_queries} queries but only {len(queries_list)} are available.")
+                print(f"Extending queries by cycling through the available ones.")
+                # Calculate how many complete cycles and remaining items we need
+                complete_cycles = num_queries // len(queries_list)
+                remaining = num_queries % len(queries_list)
+
+                # Create the extended list
+                extended_queries = []
+                for _ in range(complete_cycles):
+                    extended_queries.extend(queries_list)
+                extended_queries.extend(queries_list[:remaining])
+
+                used_queries = extended_queries
+            else:
+                used_queries = queries_list[:num_queries]
+                print(f"Using {num_queries} queries")
+        else:
+            used_queries = queries_list
 
         if parallel == 1:
             start = time.perf_counter()

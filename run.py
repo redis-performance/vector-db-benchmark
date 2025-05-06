@@ -26,6 +26,7 @@ def run(
     timeout: float = 86400.0,
     upload_start_idx: int = 0,
     upload_end_idx: int = -1,
+    queries: int = typer.Option(-1, help="Number of queries to run. If the available queries are fewer, they will be reused."),
 ):
     """
     Example:
@@ -68,6 +69,7 @@ def run(
                         parallels,
                         upload_start_idx,
                         upload_end_idx,
+                        queries,
                     )
                 client.delete_client()
 
