@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import warnings
 
 from benchmark import ROOT_DIR
@@ -34,6 +34,10 @@ class BaseClient:
         self.uploader = uploader
         self.searchers = searchers
         self.engine = engine
+
+    @property
+    def sparse_vector_support(self):
+        return self.configurator.SPARSE_VECTOR_SUPPORT
 
     def save_search_results(
         self, dataset_name: str, results: dict, search_id: int, search_params: dict
@@ -88,7 +92,8 @@ class BaseClient:
         skip_upload: bool = False,
         skip_search: bool = False,
         skip_if_exists: bool = True,
-        parallels: [int] = [],
+        skip_configure: Optional[bool] = False,
+        parallels: List[int] = [],
         upload_start_idx: int = 0,
         upload_end_idx: int = -1,
         num_queries: int = -1,
@@ -110,12 +115,14 @@ class BaseClient:
                 return
 
         if not skip_upload:
-            print("Experiment stage: Configure")
-            self.configurator.configure(dataset)
-            range_max_str = ":"
-            if upload_end_idx > 0:
-                range_max_str += f"{upload_end_idx}"
-            print(f"Experiment stage: Upload. Vector range [{upload_start_idx}{range_max_str}]")
+            if not skip_configure:
+                print("Experiment stage: Configure")
+                self.configurator.configure(dataset)
+            else:
+                range_max_str = ":"
+                if upload_end_idx > 0:
+                    range_max_str += f"{upload_end_idx}"
+                print(f"Experiment stage: Upload. Vector range [{upload_start_idx}{range_max_str}]")
             upload_stats = self.uploader.upload(
                 distance=dataset.config.distance, records=reader.read_data(upload_start_idx,upload_end_idx)
             )

@@ -8,7 +8,7 @@
       "optimizers_config": { "memmap_threshold": 25000000 }
     },
     "search_params": [
-      { "parallel": 8, "search_params": { "hnsw_ef": 128 } }
+      { "parallel": 8, "config": { "hnsw_ef": 128 } }
     ],
     "upload_params": { "parallel": 16, "batch_size": 1024 }
   },
@@ -31,18 +31,169 @@
       "optimizers_config": {
         "max_segment_size": 1000000,
         "default_segment_number": 3,
+        "memmap_threshold": 25000000,
+        "max_optimization_threads": null
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 8,
+        "config": {
+          "hnsw_ef": 256,
+          "quantization": {
+            "oversampling": 2.0,
+            "rescore": true
+          }
+        }
+      }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  },
+  {
+    "name": "qdrant-rescore-only",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 30 },
+    "search_params": [
+      {
+        "parallel": 20,
+        "config": {
+	  "hnsw_ef": 300,
+          "quantization": {
+            "rescore": true
+          }
+        }
+      }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  },
+  {
+    "name": "qdrant-continuous-benchmark-with-payload",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 30 },
+    "collection_params": {
+      "hnsw_config": {
+        "m": 32,
+        "ef_construct": 256
+      },
+      "quantization_config": {
+        "scalar": {
+          "type": "int8",
+          "quantile": 0.99
+        }
+      },
+      "optimizers_config": {
+        "max_segment_size": 1000000,
+        "default_segment_number": 3,
+        "memmap_threshold": 10000000,
+        "max_optimization_threads": null
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 8,
+        "config": {
+          "hnsw_ef": 256,
+          "quantization": {
+            "oversampling": 2.0
+          }
+        },
+        "with_payload": true
+      }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  },
+  {
+    "name": "qdrant-bq-continuous-benchmark",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 30 },
+    "collection_params": {
+      "hnsw_config": {
+        "m": 32,
+        "ef_construct": 256
+      },
+      "quantization_config": { "binary": {"always_ram": true} },
+      "optimizers_config": {
+        "max_segment_size": 1000000,
+        "default_segment_number": 3,
+        "memmap_threshold": 10000000,
+        "max_optimization_threads": null
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 8,
+        "config": {
+          "hnsw_ef": 256,
+          "quantization": { "rescore": true, "oversampling": 2.0 }
+        }
+      }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  },
+  {
+    "name": "qdrant-bq-continuous-benchmark-with-payload",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 30 },
+    "collection_params": {
+      "hnsw_config": {
+        "m": 32,
+        "ef_construct": 256
+      },
+      "quantization_config": { "binary": {"always_ram": true} },
+      "optimizers_config": {
+        "max_segment_size": 1000000,
+        "default_segment_number": 3,
+        "memmap_threshold": 10000000,
+        "max_optimization_threads": null
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 8,
+        "config": {
+          "hnsw_ef": 256,
+          "quantization": { "rescore": true, "oversampling": 2.0 }
+        },
+        "with_payload": true
+      }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  },
+  {
+    "name": "qdrant-sparse-vector",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 30 },
+    "collection_params": {
+      "optimizers_config": {
+        "max_segment_size": 1000000,
+        "default_segment_number": 3,
         "memmap_threshold": 25000000
       }
     },
     "search_params": [
       {
         "parallel": 8,
-        "search_params": {
-          "hnsw_ef": 256,
-          "quantization": {
-            "oversampling": 2.0
-          }
-        }
+        "search_params": {}
+      }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  },
+  {
+    "name": "qdrant-sparse-vector-with-payload",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 30 },
+    "collection_params": {
+      "optimizers_config": {
+        "max_segment_size": 1000000,
+        "default_segment_number": 3,
+        "memmap_threshold": 10000000
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 8,
+        "search_params": {},
+        "with_payload": true
       }
     ],
     "upload_params": { "parallel": 16, "batch_size": 1024 }
@@ -56,9 +207,9 @@
       "optimizers_config": { "memmap_threshold": 10000000 }
     },
     "search_params": [
-      { "parallel": 8, "search_params": { "hnsw_ef": 128 } },
-      { "parallel": 16, "search_params": { "hnsw_ef": 128 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 128 } }
+      { "parallel": 8, "config": { "hnsw_ef": 128 } },
+      { "parallel": 16, "config": { "hnsw_ef": 128 } },
+      { "parallel": 100, "config": { "hnsw_ef": 128 } }
     ],
     "upload_params": { "parallel": 16, "batch_size": 1024 }
   },
@@ -72,8 +223,8 @@
       "hnsw_config": { "m": 16, "ef_construct": 128 }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "hnsw_ef": 64 } }, { "parallel": 1, "search_params": { "hnsw_ef": 128 } }, { "parallel": 1, "search_params": { "hnsw_ef": 256 } }, { "parallel": 1, "search_params": { "hnsw_ef": 512 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 64 } }, { "parallel": 100, "search_params": { "hnsw_ef": 128 } }, { "parallel": 100, "search_params": { "hnsw_ef": 256 } }, { "parallel": 100, "search_params": { "hnsw_ef": 512 } }
+      { "parallel": 1, "config": { "hnsw_ef": 64 } }, { "parallel": 1, "config": { "hnsw_ef": 128 } }, { "parallel": 1, "config": { "hnsw_ef": 256 } }, { "parallel": 1, "config": { "hnsw_ef": 512 } },
+      { "parallel": 100, "config": { "hnsw_ef": 64 } }, { "parallel": 100, "config": { "hnsw_ef": 128 } }, { "parallel": 100, "config": { "hnsw_ef": 256 } }, { "parallel": 100, "config": { "hnsw_ef": 512 } }
     ],
     "upload_params": { "parallel": 16 }
   },
@@ -117,8 +268,8 @@
       "hnsw_config": { "m": 32, "ef_construct": 128 }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "hnsw_ef": 64 } }, { "parallel": 1, "search_params": { "hnsw_ef": 128 } }, { "parallel": 1, "search_params": { "hnsw_ef": 256 } }, { "parallel": 1, "search_params": { "hnsw_ef": 512 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 64 } }, { "parallel": 100, "search_params": { "hnsw_ef": 128 } }, { "parallel": 100, "search_params": { "hnsw_ef": 256 } }, { "parallel": 100, "search_params": { "hnsw_ef": 512 } }
+      { "parallel": 1, "config": { "hnsw_ef": 64 } }, { "parallel": 1, "config": { "hnsw_ef": 128 } }, { "parallel": 1, "config": { "hnsw_ef": 256 } }, { "parallel": 1, "config": { "hnsw_ef": 512 } },
+      { "parallel": 100, "config": { "hnsw_ef": 64 } }, { "parallel": 100, "config": { "hnsw_ef": 128 } }, { "parallel": 100, "config": { "hnsw_ef": 256 } }, { "parallel": 100, "config": { "hnsw_ef": 512 } }
     ],
     "upload_params": { "parallel": 16 }
   },
@@ -132,8 +283,8 @@
       "hnsw_config": { "m": 32, "ef_construct": 256 }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "hnsw_ef": 64 } }, { "parallel": 1, "search_params": { "hnsw_ef": 128 } }, { "parallel": 1, "search_params": { "hnsw_ef": 256 } }, { "parallel": 1, "search_params": { "hnsw_ef": 512 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 64 } }, { "parallel": 100, "search_params": { "hnsw_ef": 128 } }, { "parallel": 100, "search_params": { "hnsw_ef": 256 } }, { "parallel": 100, "search_params": { "hnsw_ef": 512 } }
+      { "parallel": 1, "config": { "hnsw_ef": 64 } }, { "parallel": 1, "config": { "hnsw_ef": 128 } }, { "parallel": 1, "config": { "hnsw_ef": 256 } }, { "parallel": 1, "config": { "hnsw_ef": 512 } },
+      { "parallel": 100, "config": { "hnsw_ef": 64 } }, { "parallel": 100, "config": { "hnsw_ef": 128 } }, { "parallel": 100, "config": { "hnsw_ef": 256 } }, { "parallel": 100, "config": { "hnsw_ef": 512 } }
     ],
     "upload_params": { "parallel": 16 }
   },
@@ -147,8 +298,8 @@
       "hnsw_config": { "m": 32, "ef_construct": 512 }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "hnsw_ef": 64 } }, { "parallel": 1, "search_params": { "hnsw_ef": 128 } }, { "parallel": 1, "search_params": { "hnsw_ef": 256 } }, { "parallel": 1, "search_params": { "hnsw_ef": 512 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 64 } }, { "parallel": 100, "search_params": { "hnsw_ef": 128 } }, { "parallel": 100, "search_params": { "hnsw_ef": 256 } }, { "parallel": 100, "search_params": { "hnsw_ef": 512 } }
+      { "parallel": 1, "config": { "hnsw_ef": 64 } }, { "parallel": 1, "config": { "hnsw_ef": 128 } }, { "parallel": 1, "config": { "hnsw_ef": 256 } }, { "parallel": 1, "config": { "hnsw_ef": 512 } },
+      { "parallel": 100, "config": { "hnsw_ef": 64 } }, { "parallel": 100, "config": { "hnsw_ef": 128 } }, { "parallel": 100, "config": { "hnsw_ef": 256 } }, { "parallel": 100, "config": { "hnsw_ef": 512 } }
     ],
     "upload_params": { "parallel": 16 }
   },
@@ -177,8 +328,8 @@
       "hnsw_config": { "m": 64, "ef_construct": 256 }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "hnsw_ef": 64 } }, { "parallel": 1, "search_params": { "hnsw_ef": 128 } }, { "parallel": 1, "search_params": { "hnsw_ef": 256 } }, { "parallel": 1, "search_params": { "hnsw_ef": 512 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 64 } }, { "parallel": 100, "search_params": { "hnsw_ef": 128 } }, { "parallel": 100, "search_params": { "hnsw_ef": 256 } }, { "parallel": 100, "search_params": { "hnsw_ef": 512 } }
+      { "parallel": 1, "config": { "hnsw_ef": 64 } }, { "parallel": 1, "config": { "hnsw_ef": 128 } }, { "parallel": 1, "config": { "hnsw_ef": 256 } }, { "parallel": 1, "config": { "hnsw_ef": 512 } },
+      { "parallel": 100, "config": { "hnsw_ef": 64 } }, { "parallel": 100, "config": { "hnsw_ef": 128 } }, { "parallel": 100, "config": { "hnsw_ef": 256 } }, { "parallel": 100, "config": { "hnsw_ef": 512 } }
     ],
     "upload_params": { "parallel": 16 }
   },
@@ -192,8 +343,8 @@
       "hnsw_config": { "m": 64, "ef_construct": 512 }
     },
     "search_params": [
-      { "parallel": 1, "search_params": { "hnsw_ef": 64 } }, { "parallel": 1, "search_params": { "hnsw_ef": 128 } }, { "parallel": 1, "search_params": { "hnsw_ef": 256 } }, { "parallel": 1, "search_params": { "hnsw_ef": 512 } },
-      { "parallel": 100, "search_params": { "hnsw_ef": 64 } }, { "parallel": 100, "search_params": { "hnsw_ef": 128 } }, { "parallel": 100, "search_params": { "hnsw_ef": 256 } }, { "parallel": 100, "search_params": { "hnsw_ef": 512 } }
+      { "parallel": 1, "config": { "hnsw_ef": 64 } }, { "parallel": 1, "config": { "hnsw_ef": 128 } }, { "parallel": 1, "config": { "hnsw_ef": 256 } }, { "parallel": 1, "config": { "hnsw_ef": 512 } },
+      { "parallel": 100, "config": { "hnsw_ef": 64 } }, { "parallel": 100, "config": { "hnsw_ef": 128 } }, { "parallel": 100, "config": { "hnsw_ef": 256 } }, { "parallel": 100, "config": { "hnsw_ef": 512 } }
     ],
     "upload_params": { "parallel": 16 }
   }

@@ -4,6 +4,7 @@ import tarfile
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
+from urllib.request import build_opener, install_opener
 import boto3
 import botocore.exceptions
 from benchmark import DATASETS_DIR
@@ -15,18 +16,23 @@ from dataset_reader.json_reader import JSONReader
 from tqdm import tqdm
 from pathlib import Path
 
+# Needed for Cloudflare's firewall in ann-benchmarks
+# See https://github.com/erikbern/ann-benchmarks/pull/561
+opener = build_opener()
+opener.addheaders = [("User-agent", "Mozilla/5.0")]
+install_opener(opener)
+
 
 @dataclass
 class DatasetConfig:
-    vector_size: int
-    distance: str
     name: str
     type: str
-    path: Dict[
-        str, List[Dict[str, str]]
-    ]  # Now path is expected to handle multi-file structure for h5-multi
-    link: Optional[Dict[str, List[Dict[str, str]]]] = None
+    path: Union[str, Dict[str, List[Dict[str, str]]]]  # Can be a string or a dict for multi-file structure
+    link: Optional[Union[str, Dict[str, List[Dict[str, str]]]]] = None
     schema: Optional[Dict[str, str]] = field(default_factory=dict)
+    # None in case of sparse vectors:
+    vector_size: Optional[int] = None
+    distance: Optional[str] = None
 
 
 READER_TYPE = {

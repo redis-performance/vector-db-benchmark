@@ -38,22 +38,22 @@ class RedisConfigurator(BaseConfigurator):
     def __init__(self, host, collection_params: dict, connection_params: dict):
         super().__init__(host, collection_params, connection_params)
         redis_constructor = RedisCluster if REDIS_CLUSTER else Redis
-        self._is_cluster = True if REDIS_CLUSTER else False
+        self.is_cluster = REDIS_CLUSTER
         self.client = redis_constructor(
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
 
     def clean(self):
         conns = [self.client]
-        if self._is_cluster:
+        if self.is_cluster:
             conns = [
                 self.client.get_redis_connection(node)
                 for node in self.client.get_primaries()
             ]
         for conn in conns:
-            index = conn.ft()
+            search_namespace = conn.ft()
             try:
-                index.dropindex(delete_documents=(not REDIS_KEEP_DOCUMENTS))
+                search_namespace.dropindex(delete_documents=(not REDIS_KEEP_DOCUMENTS))
             except redis.ResponseError as e:
                 str_err = e.__str__()
                 if (
@@ -112,7 +112,7 @@ class RedisConfigurator(BaseConfigurator):
         ] + payload_fields
 
         conns = [self.client]
-        if self._is_cluster:
+        if self.is_cluster:
             conns = [
                 self.client.get_redis_connection(node)
                 for node in self.client.get_primaries()
@@ -122,7 +122,7 @@ class RedisConfigurator(BaseConfigurator):
             try:
                 search_namespace.create_index(fields=index_fields)
             except redis.ResponseError as e:
-                if "Index already exists" not in e.__str__():
+                if "Index already exists" not in str(e):
                     raise e
 
 

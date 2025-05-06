@@ -6,6 +6,8 @@ import json
 import random
 import numpy as np
 from redis import Redis, RedisCluster
+
+from dataset_reader.base_reader import Record
 from engine.base_client.upload import BaseUploader
 from engine.clients.redis.config import (
     REDIS_PORT,
@@ -52,16 +54,15 @@ class RedisUploader(BaseUploader):
         cls._is_cluster = True if REDIS_CLUSTER else False
 
     @classmethod
-    def upload_batch(
-        cls, ids: List[int], vectors: List[list], metadata: Optional[List[dict]]
-    ):
+    def upload_batch(cls, batch: List[Record]):
         if REDIS_JUST_INDEX:
             return
-        for i in range(len(ids)):
-            idx = ids[i]
+
+        for record in batch:
+            idx = record.id
             vector_key = str(idx)
-            vec = vectors[i]
-            meta = metadata[i] if metadata else {}
+            vec = record.vector
+            meta = record.metadata or {}
             geopoints = {}
             payload = {}
             if meta is not None:
@@ -91,7 +92,7 @@ class RedisUploader(BaseUploader):
                     **geopoints,
                 },
             )
-                
+
 
     @classmethod
     def post_upload(cls, _distance):

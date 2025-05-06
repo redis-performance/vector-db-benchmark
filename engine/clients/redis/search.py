@@ -1,8 +1,9 @@
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Union
 from ml_dtypes import bfloat16
 import numpy as np
 from redis import Redis, RedisCluster
+from redis.commands.search import Search as RedisSearchIndex
 from redis.commands.search.query import Query
 from engine.base_client.search import BaseSearcher
 from engine.clients.redis.config import (
@@ -19,8 +20,13 @@ from engine.clients.redis.parser import RedisConditionParser
 
 class RedisSearcher(BaseSearcher):
     search_params = {}
-    client = None
+    client: Union[RedisCluster, Redis] = None
     parser = RedisConditionParser()
+    knn_conditions = "EF_RUNTIME $EF"
+
+    is_cluster: bool
+    conns: List[Union[RedisCluster, Redis]]
+    search_namespace: RedisSearchIndex
 
     @classmethod
     def init_client(cls, host, distance, connection_params: dict, search_params: dict):
@@ -29,7 +35,7 @@ class RedisSearcher(BaseSearcher):
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
         cls.search_params = search_params
-        cls.knn_conditions = ""
+        cls.knn_conditions = "EF_RUNTIME $EF"
         cls.algorithm = cls.search_params.get("algorithm", "hnsw").upper()
         cls.hybrid_policy = REDIS_HYBRID_POLICY
 
@@ -54,16 +60,21 @@ class RedisSearcher(BaseSearcher):
 
         # In the case of CLUSTER API enabled we randomly select the starting primary shard
         # when doing the client initialization to evenly distribute the load among the cluster
-        cls.conns = [cls.client]
-        if cls._is_cluster:
+        if REDIS_CLUSTER:
             cls.conns = [
                 cls.client.get_redis_connection(node)
                 for node in cls.client.get_primaries()
             ]
-        cls._ft = cls.conns[random.randint(0, len(cls.conns)) - 1].ft()
+        else:
+            cls.conns = [cls.client]
+
+        cls.is_cluster = REDIS_CLUSTER
+        cls.search_namespace = random.choice(cls.conns).ft()
 
     @classmethod
-    def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
+    def search_one(cls, query, meta_conditions, top) -> List[Tuple[int, float]]:
+        vector = query.vector if hasattr(query, 'vector') else query
+        meta_conditions = query.meta_conditions if hasattr(query, 'meta_conditions') else meta_conditions
         conditions = cls.parser.parse(meta_conditions)
         hybrid_policy = ""
         if cls.hybrid_policy != "":
@@ -95,6 +106,11 @@ class RedisSearcher(BaseSearcher):
             # 'EF_RUNTIME' is irrelevant for 'ADHOC_BF' policy
             if cls.hybrid_policy != "ADHOC_BF":
                 params_dict["EF"] = cls.search_params["search_params"]["ef"]
-        results = cls._ft.search(q, query_params=params_dict)
+
+        # Use the correct search method based on the client
+        if hasattr(cls, '_ft'):
+            results = cls._ft.search(q, query_params=params_dict)
+        else:
+            results = cls.search_namespace.search(q, query_params=params_dict)
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]

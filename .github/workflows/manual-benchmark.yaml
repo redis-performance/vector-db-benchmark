@@ -10,6 +10,14 @@ on:
         dataset:
             description: "Dataset to benchmark"
             default: laion-small-clip
+        engine_config:
+            description: "Engine config to benchmark"
+            default: qdrant-continuous-benchmark
+        feature_flags_all:
+            type: boolean
+            description: "Enable all feature flags (false by default)"
+            default: false
+
 
 jobs:
   runManualBenchmark:
@@ -23,11 +31,12 @@ jobs:
       - name: Benches
         run: |
           export HCLOUD_TOKEN=${{ secrets.HCLOUD_TOKEN }}
-          export GCS_KEY=${{ secrets.GCS_KEY }}
-          export GCS_SECRET=${{ secrets.GCS_SECRET }}
           export POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
           export POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}
           export QDRANT_VERSION=${{ inputs.qdrant_version }}
           export DATASETS=${{ inputs.dataset }}
+          export ENGINE_NAME=${{ inputs.engine_config }}
           export POSTGRES_TABLE=benchmark_manual
+          export QDRANT__FEATURE_FLAGS__ALL=${{ inputs.feature_flags_all }}
+          bash -x tools/setup_ci.sh
           bash -x tools/run_ci.sh
