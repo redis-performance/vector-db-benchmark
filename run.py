@@ -27,6 +27,7 @@ def run(
     upload_start_idx: int = 0,
     upload_end_idx: int = -1,
     queries: int = typer.Option(-1, help="Number of queries to run. If the available queries are fewer, they will be reused."),
+    ef_runtime: List[int] = typer.Option([], help="Filter search experiments by ef runtime values. Only experiments with these ef values will be run."),
 ):
     """
     Example:
@@ -70,6 +71,7 @@ def run(
                         upload_start_idx,
                         upload_end_idx,
                         queries,
+                        ef_runtime,
                     )
                 client.delete_client()
 
