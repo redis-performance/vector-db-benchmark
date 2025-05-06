@@ -140,10 +140,20 @@ class BaseSearcher:
             # Start measuring time for the critical work
             start = time.perf_counter()
 
+            # Create a progress bar for the total number of queries
+            total_queries = len(used_queries)
+            pbar = tqdm.tqdm(total=total_queries, desc="Processing queries", unit="queries")
+
             # Collect results from all worker processes
             results = []
             for _ in processes:
-                results.extend(result_queue.get())
+                chunk_results = result_queue.get()
+                results.extend(chunk_results)
+                # Update the progress bar with the number of processed queries in this chunk
+                pbar.update(len(chunk_results))
+
+            # Close the progress bar
+            pbar.close()
 
             # Wait for all worker processes to finish
             for process in processes:
@@ -192,6 +202,7 @@ def chunked_iterable(iterable, size):
 
 def process_chunk(chunk, search_one):
     """Process a chunk of queries using the search_one function."""
+    # No progress bar in worker processes to avoid cluttering the output
     return [search_one(query) for query in chunk]
 
 
