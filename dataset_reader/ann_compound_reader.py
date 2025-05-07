@@ -1,4 +1,5 @@
 import json
+import random
 from typing import Iterator, List
 
 import numpy as np
@@ -26,7 +27,9 @@ class AnnCompoundReader(JSONReader):
 
     def read_queries(self) -> Iterator[Query]:
         with open(self.path / self.QUERIES_FILE) as payloads_fp:
-            for idx, row in enumerate(payloads_fp):
+            lines = payloads_fp.readlines()
+            random.shuffle(lines)
+            for idx, row in enumerate(lines):
                 row_json = json.loads(row)
                 vector = np.array(row_json["query"])
                 if self.normalize:
