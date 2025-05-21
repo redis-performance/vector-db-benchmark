@@ -163,36 +163,31 @@ class BaseSearcher:
             # Create a queue to collect results
             result_queue = Queue()
 
-            # Create and start worker processes
+            # Create worker processes
             processes = []
             for chunk in query_chunks:
                 process = Process(target=worker_function, args=(chunk, result_queue))
                 processes.append(process)
-                process.start()
 
             # Start measuring time for the critical work
             start = time.perf_counter()
 
-            # Create a progress bar for the total number of queries
-            pbar = tqdm.tqdm(total=total_query_count, desc="Processing queries", unit="queries")
+            # Start worker processes
+            for process in processes:
+                process.start()
 
             # Collect results from all worker processes
             results = []
             for _ in processes:
                 chunk_results = result_queue.get()
                 results.extend(chunk_results)
-                # Update the progress bar with the number of processed queries in this chunk
-                pbar.update(len(chunk_results))
 
-            # Close the progress bar
-            pbar.close()
+            # Stop measuring time for the critical work
+            total_time = time.perf_counter() - start
 
             # Wait for all worker processes to finish
             for process in processes:
                 process.join()
-
-            # Stop measuring time for the critical work
-            total_time = time.perf_counter() - start
 
         # Extract precisions and latencies (outside the timed section)
         precisions, latencies = zip(*results)
