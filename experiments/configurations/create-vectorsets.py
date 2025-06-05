@@ -2,10 +2,11 @@ import json
 
 ms = [16]
 ef_constructs = [100]
-ef_runtimes = [20, 40, 80]
+ef_runtimes = [40, 80]
 # qants = ["NOQUANT", "Q8", "BIN"]
 qants = ["NOQUANT"]
 configs = []
+topKs = [10]
 for m in ms:
     for ef_construct in ef_constructs:
         for quant in qants:
@@ -25,12 +26,14 @@ for m in ms:
                 },
             }
             for client in [1, 8]:
-                for ef_runtime in ef_runtimes:
-                    test_config = {
-                        "parallel": client,
-                        "search_params": {"ef": ef_runtime},
-                    }
-                    config["search_params"].append(test_config)
+                for top in topKs:
+                    for ef_runtime in ef_runtimes:
+                        test_config = {
+                            "top": top,
+                            "parallel": client,
+                            "search_params": {"ef": ef_runtime},
+                        }
+                        config["search_params"].append(test_config)
             configs.append(config)
     fname = f"redis-intel-vectorsets.json"
     with open(fname, "w") as json_fd:
