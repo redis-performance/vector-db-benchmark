@@ -33,7 +33,7 @@ class RedisVsetUploader(BaseUploader):
         hnsw_params = upload_params.get("hnsw_config")
         M = hnsw_params.get("M", 16)
         efc = hnsw_params.get("EF_CONSTRUCTION", 200)
-        quant = hnsw_params.get("quant")
+        quant = hnsw_params.get("quant", "NOQUANT")
         
         p = cls.client.pipeline(transaction=False)
         for i in range(len(ids)):
