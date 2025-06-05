@@ -1,6 +1,6 @@
 import functools
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import get_context
 from typing import Iterable, List, Optional, Tuple
 from itertools import islice
 
@@ -114,42 +114,15 @@ class BaseSearcher:
             total_query_count = len(used_queries)
 
         if parallel == 1:
-            # Single-threaded execution
             start = time.perf_counter()
-
-            # Create a progress bar with the correct total
-            pbar = tqdm.tqdm(total=total_query_count, desc="Processing queries", unit="queries")
-
-            # Process queries with progress updates
-            results = []
-            for query in used_queries:
-                results.append(search_one(query))
-                pbar.update(1)
-
-            # Close the progress bar
-            pbar.close()
-
-            total_time = time.perf_counter() - start
+            precisions, latencies = list(
+                zip(*[search_one(query) for query in tqdm.tqdm(used_queries)])
+            )
         else:
-            # Dynamically calculate chunk size based on total_query_count
-            chunk_size = max(1, total_query_count // parallel)
+            ctx = get_context(self.get_mp_start_method())
 
-            # If used_queries is a generator, we need to handle it differently
-            if hasattr(used_queries, '__next__'):
-                # For generators, we'll create chunks on-the-fly
-                query_chunks = []
-                remaining = total_query_count
-                while remaining > 0:
-                    current_chunk_size = min(chunk_size, remaining)
-                    chunk = [next(used_queries) for _ in range(current_chunk_size)]
-                    query_chunks.append(chunk)
-                    remaining -= current_chunk_size
-            else:
-                # For lists, we can use the chunked_iterable function
-                query_chunks = list(chunked_iterable(used_queries, chunk_size))
-
-            # Function to be executed by each worker process
-            def worker_function(chunk, result_queue):
+            def process_initializer():
+                """Initialize each process before starting the search."""
                 self.__class__.init_client(
                     self.host,
                     distance,
@@ -157,45 +130,24 @@ class BaseSearcher:
                     self.search_params,
                 )
                 self.setup_search()
-                results = process_chunk(chunk, search_one)
-                result_queue.put(results)
 
-            # Create a queue to collect results
-            result_queue = Queue()
+            # Dynamically chunk the generator
+            query_chunks = list(chunked_iterable(used_queries, max(1, len(used_queries) // parallel)))
 
-            # Create and start worker processes
-            processes = []
-            for chunk in query_chunks:
-                process = Process(target=worker_function, args=(chunk, result_queue))
-                processes.append(process)
-                process.start()
+            with ctx.Pool(
+                processes=parallel,
+                initializer=process_initializer,
+            ) as pool:
+                if parallel > 10:
+                    time.sleep(15)  # Wait for all processes to start
+                start = time.perf_counter()
+                results = pool.starmap(
+                    process_chunk,
+                    [(chunk, search_one) for chunk in query_chunks],
+                )
+                precisions, latencies = zip(*[result for chunk in results for result in chunk])
 
-            # Start measuring time for the critical work
-            start = time.perf_counter()
-
-            # Create a progress bar for the total number of queries
-            pbar = tqdm.tqdm(total=total_query_count, desc="Processing queries", unit="queries")
-
-            # Collect results from all worker processes
-            results = []
-            for _ in processes:
-                chunk_results = result_queue.get()
-                results.extend(chunk_results)
-                # Update the progress bar with the number of processed queries in this chunk
-                pbar.update(len(chunk_results))
-
-            # Close the progress bar
-            pbar.close()
-
-            # Wait for all worker processes to finish
-            for process in processes:
-                process.join()
-
-            # Stop measuring time for the critical work
-            total_time = time.perf_counter() - start
-
-        # Extract precisions and latencies (outside the timed section)
-        precisions, latencies = zip(*results)
+        total_time = time.perf_counter() - start
 
         self.__class__.delete_client()
 
@@ -236,8 +188,3 @@ def process_chunk(chunk, search_one):
     """Process a chunk of queries using the search_one function."""
     # No progress bar in worker processes to avoid cluttering the output
     return [search_one(query) for query in chunk]
-
-
-def process_chunk_wrapper(chunk, search_one):
-    """Wrapper to process a chunk of queries."""
-    return process_chunk(chunk, search_one)
