@@ -7,7 +7,7 @@
       "hnsw_config": { }
     },
     "search_params": [
-      { "parallel": 1, "search_params": {  } },  { "parallel": 2, "search_params": {  } },  { "parallel": 4, "search_params": {  } }, { "parallel": 8, "search_params": {  } }, { "parallel": 32, "search_params": {  } },  { "parallel": 100, "search_params": {  } }
+      { "parallel": 1, "search_params": {  } },  { "parallel": 2, "search_params": {  } },  { "parallel": 4, "search_params": {  } }, { "parallel": 8, "search_params": {  } }, { "parallel": 16, "search_params": {  } }, { "parallel": 32, "search_params": {  } },  { "parallel": 100, "search_params": {  } }
     ],
     "upload_params": { "parallel": 32 }
   }
