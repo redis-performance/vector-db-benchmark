@@ -1,6 +1,7 @@
 import time
+import random
+import requests
 from typing import List, Optional
-import numpy as np
 from engine.base_client.upload import BaseUploader
 from engine.clients.databricks.config import DATABRICKS_TOKEN
 from databricks.vector_search.client import VectorSearchClient
@@ -37,7 +38,30 @@ class DatabricksUploader(BaseUploader):
             vec = vectors[i]
             batch.append({"id": idx, "vector": vec})
 
-        cls.index.upsert(batch)
+        max_retries = 10
+        delay = 2  # seconds
+        for attempt in range(1, max_retries + 1):
+            try:
+                cls.index.upsert(batch)
+                return  # success
+            except Exception as e:
+                message = str(e)
+                if (
+                    "TEMPORARILY_UNAVAILABLE" in message
+                    or "status_code 503" in message
+                    or isinstance(e.__cause__, requests.HTTPError)
+                    and e.__cause__.response.status_code == 503
+                ):
+                    print(
+                        f"[Retry {attempt}] Upsert failed due to service unavailability. Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    delay *= random.uniform(1.5, 2.0)  # exponential backoff
+                else:
+                    raise  # non-retryable error
+        raise RuntimeError(
+            "Upsert failed after multiple retries due to temporary service issues."
+        )
 
     @classmethod
     def post_upload(cls, _distance):
