@@ -1,0 +1,14 @@
+[
+  {
+    "name": "databricks-mosaic-default",
+    "engine": "databricks",
+    "connection_params": {},
+    "collection_params": {
+      "hnsw_config": { }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": {  } }, { "parallel": 100, "search_params": {  } }
+    ],
+    "upload_params": { "parallel": 32 }
+  }
+]
