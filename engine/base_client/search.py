@@ -2,7 +2,6 @@ import functools
 import time
 from multiprocessing import get_context
 from typing import Iterable, List, Optional, Tuple
-from itertools import islice
 
 import numpy as np
 import tqdm
@@ -84,34 +83,26 @@ class BaseSearcher:
 
         # Handle num_queries parameter
         if num_queries > 0:
-            # If we need more queries than available, use a cycling generator
+            # If we need more queries than available, cycle through the list
             if num_queries > len(queries_list) and len(queries_list) > 0:
                 print(f"Requested {num_queries} queries but only {len(queries_list)} are available.")
-                print(f"Using a cycling generator to efficiently process queries.")
+                print(f"Extending queries by cycling through the available ones.")
+                # Calculate how many complete cycles and remaining items we need
+                complete_cycles = num_queries // len(queries_list)
+                remaining = num_queries % len(queries_list)
 
-                # Create a cycling generator function
-                def cycling_query_generator(queries, total_count):
-                    """Generate queries by cycling through the available ones."""
-                    count = 0
-                    while count < total_count:
-                        for query in queries:
-                            if count < total_count:
-                                yield query
-                                count += 1
-                            else:
-                                break
+                # Create the extended list
+                extended_queries = []
+                for _ in range(complete_cycles):
+                    extended_queries.extend(queries_list)
+                extended_queries.extend(queries_list[:remaining])
 
-                # Use the generator instead of creating a full list
-                used_queries = cycling_query_generator(queries_list, num_queries)
-                # We need to know the total count for the progress bar
-                total_query_count = num_queries
+                used_queries = extended_queries
             else:
                 used_queries = queries_list[:num_queries]
-                total_query_count = len(used_queries)
                 print(f"Using {num_queries} queries")
         else:
             used_queries = queries_list
-            total_query_count = len(used_queries)
 
         if parallel == 1:
             start = time.perf_counter()
@@ -121,32 +112,22 @@ class BaseSearcher:
         else:
             ctx = get_context(self.get_mp_start_method())
 
-            def process_initializer():
-                """Initialize each process before starting the search."""
-                self.__class__.init_client(
+            with ctx.Pool(
+                processes=parallel,
+                initializer=self.__class__.init_client,
+                initargs=(
                     self.host,
                     distance,
                     self.connection_params,
                     self.search_params,
-                )
-                self.setup_search()
-
-            # Dynamically chunk the generator
-            query_chunks = list(chunked_iterable(used_queries, max(1, len(used_queries) // parallel)))
-
-            with ctx.Pool(
-                processes=parallel,
-                initializer=process_initializer,
+                ),
             ) as pool:
                 if parallel > 10:
                     time.sleep(15)  # Wait for all processes to start
                 start = time.perf_counter()
-                results = pool.starmap(
-                    process_chunk,
-                    [(chunk, search_one) for chunk in query_chunks],
+                precisions, latencies = list(
+                    zip(*pool.imap_unordered(search_one, iterable=tqdm.tqdm(used_queries)))
                 )
-                precisions, latencies = zip(*[result for chunk in results for result in chunk])
-
         total_time = time.perf_counter() - start
 
         self.__class__.delete_client()
@@ -175,16 +156,3 @@ class BaseSearcher:
     @classmethod
     def delete_client(cls):
         pass
-
-
-def chunked_iterable(iterable, size):
-    """Yield successive chunks of a given size from an iterable."""
-    it = iter(iterable)
-    while chunk := list(islice(it, size)):
-        yield chunk
-
-
-def process_chunk(chunk, search_one):
-    """Process a chunk of queries using the search_one function."""
-    # No progress bar in worker processes to avoid cluttering the output
-    return [search_one(query) for query in chunk]
