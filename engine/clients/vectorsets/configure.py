@@ -20,7 +20,6 @@ class RedisVsetConfigurator(BaseConfigurator):
         self.client = redis_constructor(
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
-        self.client.flushall()
 
     def clean(self):
         conns = [self.client]
@@ -30,7 +29,6 @@ class RedisVsetConfigurator(BaseConfigurator):
                 for node in self.client.get_primaries()
             ]
         for conn in conns:
-            index = conn.ft()
             try:
                  conn.flushall()
             except redis.ResponseError as e:

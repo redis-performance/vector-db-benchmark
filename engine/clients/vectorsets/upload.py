@@ -23,7 +23,15 @@ class RedisVsetUploader(BaseUploader):
         cls.client = redis_constructor(
             host=host, port=REDIS_PORT, password=REDIS_AUTH, username=REDIS_USER
         )
+        cls.client_decode = redis_constructor(
+            host=host,
+            port=REDIS_PORT,
+            password=REDIS_AUTH,
+            username=REDIS_USER,
+            decode_responses=True,
+        )
         cls.upload_params = upload_params
+        cls._is_cluster = True if REDIS_CLUSTER else False
 
     @classmethod
     def upload_batch(
@@ -33,7 +41,7 @@ class RedisVsetUploader(BaseUploader):
         hnsw_params = upload_params.get("hnsw_config")
         M = hnsw_params.get("M", 16)
         efc = hnsw_params.get("EF_CONSTRUCTION", 200)
-        quant = hnsw_params.get("quant")
+        quant = hnsw_params.get("quant", "NOQUANT")
         
         p = cls.client.pipeline(transaction=False)
         for i in range(len(ids)):
@@ -46,3 +54,18 @@ class RedisVsetUploader(BaseUploader):
     @classmethod
     def post_upload(cls, _distance):
         return {}
+
+    def get_memory_usage(cls):
+        used_memory = []
+        conns = [cls.client_decode]
+        if cls._is_cluster:
+            conns = [
+                cls.client_decode.get_redis_connection(node)
+                for node in cls.client_decode.get_primaries()
+            ]
+        for conn in conns:
+            used_memory_shard = conn.info("memory")["used_memory"]
+            used_memory.append(used_memory_shard)
+
+        return {"used_memory": sum(used_memory),
+                "shards": len(used_memory)}
