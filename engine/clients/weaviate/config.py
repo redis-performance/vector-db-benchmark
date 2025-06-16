@@ -19,6 +19,7 @@ def setup_client(connection_params, host):
     c = WeaviateClient(
         ConnectionParams.from_url(url, WEAVIATE_GRPC_PORT), skip_init_checks=True
     )
+    c.connect()
     # Ping Weaviate's live state.
     assert c.is_live() is True
     return c

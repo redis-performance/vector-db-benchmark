@@ -52,7 +52,7 @@ class AnnH5MultiReader(BaseReader):
                 )
 
     def read_data(
-        self, start_idx: int = 0, end_idx: int = None, chunk_size: int = 10_000
+        self, start_idx: int = 0, end_idx: int = None, chunk_size: int = 10_000, *args, **kwargs
     ) -> Iterator[Record]:
         """
         Reads the 'train' data vectors from multiple HDF5 files based on the specified range.

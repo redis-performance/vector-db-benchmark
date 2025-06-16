@@ -100,13 +100,13 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT":
+        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT" and cls.algorithm != "SVS" and cls.algorithm != "SVS_TIERED":
             print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
             return {}
         index_info = cls.client.ft().info()
         # redisearch / memorystore for redis
-        if "percent_index" in index_info:
-            percent_index = float(index_info["percent_index"])
+        if "percent_indexed" in index_info:
+            percent_index = float(index_info["percent_indexed"])
             while percent_index < 1.0:
                 print(
                     "waiting for index to be fully processed. current percent index: {}".format(
@@ -114,7 +114,7 @@ class RedisUploader(BaseUploader):
                     )
                 )
                 time.sleep(1)
-                percent_index = float(cls.client.ft().info()["percent_index"])
+                percent_index = float(cls.client.ft().info()["percent_indexed"])
         # memorydb
         if "current_lag" in index_info:
             current_lag = float(index_info["current_lag"])
@@ -141,7 +141,7 @@ class RedisUploader(BaseUploader):
             used_memory.append(used_memory_shard)
         index_info = {}
         device_info = {}
-        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT":
+        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT" and cls.algorithm != "SVS" and cls.algorithm != "SVS_TIERED":
             print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
         else:
             index_info = cls.client_decode.ft().info()

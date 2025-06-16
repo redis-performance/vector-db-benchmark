@@ -3,13 +3,13 @@ from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
 from engine.clients.weaviate.config import (
     WEAVIATE_CLASS_NAME,
-    WEAVIATE_PORT,
-    WEAVIATE_API_KEY,
     setup_client,
 )
+from weaviate import WeaviateClient
 
 
 class WeaviateConfigurator(BaseConfigurator):
+    client: WeaviateClient = None
     DISTANCE_MAPPING = {
         Distance.L2: "l2-squared",
         Distance.COSINE: "cosine",
@@ -57,5 +57,5 @@ class WeaviateConfigurator(BaseConfigurator):
         self.client.close()
 
     def __del__(self):
-        if self.client.is_connected():
+        if hasattr(self, "client") and self.client.is_connected():
             self.client.close()

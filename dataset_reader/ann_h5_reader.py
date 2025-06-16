@@ -27,7 +27,7 @@ class AnnH5Reader(BaseReader):
                 expected_scores=expected_scores.tolist(),
             )
 
-    def read_data(self, start_idx: int = 0, end_idx: int = None) -> Iterator[Record]:
+    def read_data(self, *args, **kwargs) -> Iterator[Record]:
         data = h5py.File(self.path)
         has_metadata = "metadata" in data  # Check if metadata exists
         for idx, vector in enumerate(data["train"]):

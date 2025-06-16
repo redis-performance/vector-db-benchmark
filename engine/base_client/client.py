@@ -40,8 +40,9 @@ class BaseClient:
     ):
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
+        pid = os.getpid()  # Get the current process ID
         experiments_file = (
-            f"{self.name}-{dataset_name}-search-{search_id}-{timestamp}.json"
+            f"{self.name}-{dataset_name}-search-{search_id}-{pid}-{timestamp}.json"
         )
         result_path = RESULTS_DIR / experiments_file
         with open(result_path, "w") as out:
@@ -90,6 +91,8 @@ class BaseClient:
         parallels: [int] = [],
         upload_start_idx: int = 0,
         upload_end_idx: int = -1,
+        num_queries: int = -1,
+        ef_runtime: List[int] = [],
     ):
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
@@ -97,7 +100,8 @@ class BaseClient:
         reader = dataset.get_reader(execution_params.get("normalize", False))
 
         if skip_if_exists:
-            glob_pattern = f"{self.name}-{dataset.config.name}-search-*-*.json"
+            pid = os.getpid()  # Get the current process ID
+            glob_pattern = f"{self.name}-{dataset.config.name}-search-*-{pid}-*.json"
             existing_results = list(RESULTS_DIR.glob(glob_pattern))
             if len(existing_results) == len(self.searchers):
                 print(
@@ -135,8 +139,9 @@ class BaseClient:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
                 if skip_if_exists:
+                    pid = os.getpid()  # Get the current process ID
                     glob_pattern = (
-                        f"{self.name}-{dataset.config.name}-search-{search_id}-*.json"
+                        f"{self.name}-{dataset.config.name}-search-{search_id}-{pid}-*.json"
                     )
                     existing_results = list(RESULTS_DIR.glob(glob_pattern))
                     print("Pattern", glob_pattern, "Results:", existing_results)
@@ -151,9 +156,17 @@ class BaseClient:
                 if "search_params" in search_params:
                     ef = search_params["search_params"].get("ef", "default")
                 client_count = search_params.get("parallel", 1)
+
+                # Filter by client count if parallels is specified
                 filter_client_count = len(parallels) > 0
                 if filter_client_count and (client_count not in parallels):
                     print(f"\tSkipping ef runtime: {ef}; #clients {client_count}")
+                    continue
+
+                # Filter by ef runtime if ef_runtime is specified
+                filter_ef_runtime = len(ef_runtime) > 0
+                if filter_ef_runtime and isinstance(ef, int) and (ef not in ef_runtime):
+                    print(f"\tSkipping ef runtime: {ef}; #clients {client_count} (not in ef_runtime filter)")
                     continue
                 for repetition in range(1, REPETITIONS + 1):
                     print(
@@ -161,7 +174,7 @@ class BaseClient:
                     )
 
                     search_stats = searcher.search_all(
-                        dataset.config.distance, reader.read_queries()
+                        dataset.config.distance, reader.read_queries(), num_queries
                     )
                     # ensure we specify the client count in the results
                     search_params["parallel"] = client_count
