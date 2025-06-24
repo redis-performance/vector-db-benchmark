@@ -104,6 +104,14 @@
     "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-768-1G-cosine.hdf5"
   },
   {
+    "name": "laion-img-emb-768-1M-cosine",
+    "vector_size": 768,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "laion-img-emb-768/laion-img-emb-768-1M-cosine.hdf5",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/laion-img-emb-768-1M-cosine.hdf5"
+  },
+  {
     "name": "laion-img-emb-768d-1Billion-cosine",
     "vector_size": 768,
     "distance": "cosine",
@@ -946,6 +954,14 @@
     "type": "tar",
     "path": "dbpedia-openai-1M-1536-angular/dbpedia_openai_1M",
     "link": "https://storage.googleapis.com/ann-filtered-benchmark/datasets/dbpedia_openai_1M.tgz"
+  },
+  {
+    "name": "dbpedia-openai-1M-1536-angular-100neighbors",
+    "vector_size": 1536,
+    "distance": "cosine",
+    "type": "tar",
+    "path": "dbpedia-openai-1M-1536-angular-100neighbors/dbpedia_openai_1M",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/laion400m/dbpedia_openai_1M.tgz"
   },
   {
     "name": "h-and-m-2048-angular-filters",
