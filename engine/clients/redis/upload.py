@@ -95,7 +95,7 @@ class RedisUploader(BaseUploader):
 
     @classmethod
     def post_upload(cls, _distance):
-        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT" and cls.algorithm != "SVS" and cls.algorithm != "SVS_TIERED":
+        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT" and cls.algorithm != "SVS-VAMANA":
             print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
             return {}
         index_info = cls.client.ft().info()
@@ -136,7 +136,7 @@ class RedisUploader(BaseUploader):
             used_memory.append(used_memory_shard)
         index_info = {}
         device_info = {}
-        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT" and cls.algorithm != "SVS" and cls.algorithm != "SVS_TIERED":
+        if cls.algorithm != "HNSW" and cls.algorithm != "FLAT" and cls.algorithm != "SVS-VAMANA":
             print(f"TODO: FIXME!! Avoiding calling ft.info for {cls.algorithm}...")
         else:
             index_info = cls.client_decode.ft().info()
