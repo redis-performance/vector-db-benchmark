@@ -121,6 +121,12 @@ class BaseClient:
             upload_stats = self.uploader.upload(
                 distance=dataset.config.distance, records=reader.read_data(upload_start_idx,upload_end_idx)
             )
+            memory_usage = upload_stats["memory_usage"]
+            if (used_memory := memory_usage.get("used_memory")) is not None:
+                print(f"{used_memory=}")
+            if (index_info := memory_usage.get("index_info")) is not None:
+                if (vector_index_sz_mb := index_info.get("vector_index_sz_mb")) is not None:
+                    print(f"{vector_index_sz_mb=}")
 
             if not DETAILED_RESULTS:
                 # Remove verbose stats from upload results
@@ -157,6 +163,8 @@ class BaseClient:
                 ef = "default"
                 if "search_params" in search_params:
                     ef = search_params["search_params"].get("ef", "default")
+                    if ef == "default":
+                        ef = search_params["search_params"].get("WS_SEARCH", "default")
                 client_count = search_params.get("parallel", 1)
 
                 # Filter by client count if parallels is specified
@@ -186,6 +194,7 @@ class BaseClient:
                         f"Calibrated {top=} {precision=} {calibration_value=} {calibration_precision=!s}"
                     )
                     searcher.search_params["search_params"][calibration_param] = calibration_value
+                    ef = calibration_value
 
                 for repetition in range(1, REPETITIONS + 1):
                     print(
@@ -195,6 +204,7 @@ class BaseClient:
                     search_stats = searcher.search_all(
                         dataset.config.distance, reader.read_queries(), num_queries
                     )
+                    print(f"{search_stats['mean_precisions']=!s}, {search_stats['rps']=}")
                     # ensure we specify the client count in the results
                     search_params["parallel"] = client_count
                     if not DETAILED_RESULTS:
