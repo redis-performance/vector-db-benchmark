@@ -96,7 +96,7 @@ class RedisSearcher(BaseSearcher):
             # 'EF_RUNTIME' is irrelevant for 'ADHOC_BF' policy
             if cls.hybrid_policy != "ADHOC_BF":
                 params_dict["EF"] = cls.search_params["search_params"]["ef"]
-        if cls.algorithm == "SVS":
+        if cls.algorithm == "SVS-VAMANA":
             params_dict["SEARCH_WINDOW_SIZE"] = cls.search_params["search_params"]["SEARCH_WINDOW_SIZE"]
         results = cls._ft.search(q, query_params=params_dict)
 
