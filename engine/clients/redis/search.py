@@ -38,7 +38,7 @@ class RedisSearcher(BaseSearcher):
             if cls.hybrid_policy != "ADHOC_BF":
                 cls.knn_conditions = "EF_RUNTIME $EF"
         elif cls.algorithm == "SVS-VAMANA":
-            cls.knn_conditions = "WS_SEARCH $SEARCH_WINDOW_SIZE"
+            cls.knn_conditions = "WS_SEARCH $WS_SEARCH"
         cls.data_type = "FLOAT32"
         if "search_params" in cls.search_params:
             cls.data_type = (
@@ -97,7 +97,7 @@ class RedisSearcher(BaseSearcher):
             if cls.hybrid_policy != "ADHOC_BF":
                 params_dict["EF"] = cls.search_params["search_params"]["ef"]
         if cls.algorithm == "SVS-VAMANA":
-            params_dict["SEARCH_WINDOW_SIZE"] = cls.search_params["search_params"]["SEARCH_WINDOW_SIZE"]
+            params_dict["WS_SEARCH"] = cls.search_params["search_params"]["WS_SEARCH"]
         results = cls._ft.search(q, query_params=params_dict)
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]
