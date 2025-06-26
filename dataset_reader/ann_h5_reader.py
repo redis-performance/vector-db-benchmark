@@ -1,3 +1,4 @@
+import itertools
 from typing import Iterator
 
 import h5py
@@ -14,9 +15,10 @@ class AnnH5Reader(BaseReader):
 
     def read_queries(self) -> Iterator[Query]:
         data = h5py.File(self.path)
+        distances = data["distances"] if "distances" in data else itertools.repeat(None)
 
         for vector, expected_result, expected_scores in zip(
-            data["test"], data["neighbors"], data["distances"]
+            data["test"], data["neighbors"], distances
         ):
             if self.normalize:
                 vector /= np.linalg.norm(vector)
@@ -24,7 +26,7 @@ class AnnH5Reader(BaseReader):
                 vector=vector.tolist(),
                 meta_conditions=None,
                 expected_result=expected_result.tolist(),
-                expected_scores=expected_scores.tolist(),
+                expected_scores=expected_scores.tolist() if expected_scores is not None else None,
             )
 
     def read_data(self, *args, **kwargs) -> Iterator[Record]:

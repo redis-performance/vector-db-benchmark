@@ -1219,5 +1219,21 @@
     "type": "tar",
     "link": "https://storage.googleapis.com/ann-filtered-benchmark/datasets/random_keywords_1m_vocab_10_no_filters.tgz",
     "path": "random-100-match-kw-small-vocab/random_keywords_1m_vocab_10_no_filters"
+  },
+  {
+    "name": "cohere-768-1M",
+    "vector_size": 768,
+    "distance": "dot",
+    "type": "h5",
+    "path": "cohere-768-1M/cohere-768-1M.hdf5",
+    "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-1m.hdf5.bz2"
+  },
+  {
+    "name": "cohere-768-10M",
+    "vector_size": 768,
+    "distance": "dot",
+    "type": "h5",
+    "path": "cohere-768-10M/cohere-768-10M.hdf5",
+    "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-10m.hdf5.bz2"
   }
 ]
