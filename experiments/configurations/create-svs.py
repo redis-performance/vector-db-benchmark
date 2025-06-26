@@ -5,8 +5,8 @@ ws_constructs = [200]
 ws_search = [177]
 #ws_search = [48]
 graph_degree = [32]
-#quantization = ["0", "4x4", "4x8", "8", "4"]
-quantization = ["NO"]
+#quantization = ["LVQ4X4", "LVQ4x8", "LVQ8", "LVQ4"]
+quantization = ["LVQ4X4"]
 topKs = [100]
 data_types = ["FLOAT16", "FLOAT32"]
 
@@ -18,7 +18,7 @@ for algo in ["svs-vamana"]:
                     configs = []
                     for thread in threads:
                         config = {
-                            "name": f"cohere-{algo}-quant-{quant}-dt-{data_type}",
+                            "name": f"svs-{algo}-quant-{quant}-dt-{data_type}",
                             "engine": "redis",
                             "connection_params": {},
                             "collection_params": {
@@ -45,7 +45,7 @@ for algo in ["svs-vamana"]:
                                     config["search_params"].append(test_config)
                         configs.append(config)
 
-                    fname = f"cohere-{algo}-quant-{quant}-dt-{data_type}.json"
+                    fname = f"svs-{algo}-quant-{quant}-dt-{data_type}.json"
                     with open(fname, "w") as json_fd:
                         json.dump(configs, json_fd, indent=2)
                         print(f"Created {len(configs)} configs for {fname}.")
