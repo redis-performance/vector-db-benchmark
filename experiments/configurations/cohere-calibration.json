@@ -124,6 +124,72 @@
     }
   },
   {
+    "name": "cohere-cal-svs-SQ8-float16",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "svs-vamana",
+      "data_type": "FLOAT16",
+      "svs-vamana_config": {
+        "NUM_THREADS": 16,
+        "DISTANCE_METRIC": "L2",
+        "GRAPH_MAX_DEGREE": 64,
+        "CONSTRUCTION_WINDOW_SIZE": 200,
+        "compression": "GlobalSQ8"
+      }
+    },
+    "search_params": [
+      {
+        "algorithm": "svs-vamana",
+        "parallel": 100,
+        "top": 100,
+        "calibration_param": "WS_SEARCH",
+        "calibration_precision": 0.95,
+        "search_params": {
+          "data_type": "FLOAT16"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 100,
+      "data_type": "FLOAT16",
+      "algorithm": "svs-vamana"
+    }
+  },
+  {
+    "name": "cohere-cal-svs-SQ8-float32",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "svs-vamana",
+      "data_type": "FLOAT32",
+      "svs-vamana_config": {
+        "NUM_THREADS": 16,
+        "DISTANCE_METRIC": "L2",
+        "GRAPH_MAX_DEGREE": 64,
+        "CONSTRUCTION_WINDOW_SIZE": 200,
+        "compression": "GlobalSQ8"
+      }
+    },
+    "search_params": [
+      {
+        "algorithm": "svs-vamana",
+        "parallel": 100,
+        "top": 100,
+        "calibration_param": "WS_SEARCH",
+        "calibration_precision": 0.95,
+        "search_params": {
+          "data_type": "FLOAT32"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 100,
+      "data_type": "FLOAT32",
+      "algorithm": "svs-vamana"
+    }
+  },
+  {
     "name": "cohere-cal-svs-LVQ8-float16",
     "engine": "redis",
     "connection_params": {},
