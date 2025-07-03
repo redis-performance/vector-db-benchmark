@@ -97,7 +97,7 @@ class RedisSearcher(BaseSearcher):
             if cls.hybrid_policy != "ADHOC_BF":
                 params_dict["EF"] = cls.search_params["search_params"]["ef"]
         if cls.algorithm == "SVS-VAMANA":
-            params_dict["SEARCH_WINDOW_SIZE"] = cls.search_params["search_params"]["SEARCH_WINDOW_SIZE"]
+            params_dict["WS_SEARCH"] = cls.search_params["search_params"]["WS_SEARCH"]
         results = cls._ft.search(q, query_params=params_dict)
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]
