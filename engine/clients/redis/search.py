@@ -38,7 +38,7 @@ class RedisSearcher(BaseSearcher):
             if cls.hybrid_policy != "ADHOC_BF":
                 cls.knn_conditions = "EF_RUNTIME $EF"
         elif cls.algorithm == "SVS-VAMANA":
-            cls.knn_conditions = "WS_SEARCH $SEARCH_WINDOW_SIZE"
+            cls.knn_conditions = "SEARCH_WINDOW_SIZE $WS_SEARCH"
         cls.data_type = "FLOAT32"
         if "search_params" in cls.search_params:
             cls.data_type = (
