@@ -31,6 +31,52 @@ We have a number of precomputed data sets. All data sets have been pre-split int
 | [LAION-400M: from LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)      |        512 | 400,000,000 |    10,000 |       100 | Angular   |
 
 
+## 🐳 Docker Usage
+
+The easiest way to run vector-db-benchmark is using Docker. We provide pre-built images on Docker Hub.
+
+### Quick Start with Docker
+
+```bash
+# Pull the latest image
+docker pull redis-performance/vector-db-benchmark:latest
+
+# Run with help
+docker run --rm redis-performance/vector-db-benchmark:latest run.py --help
+
+# Basic Redis benchmark with local Redis
+docker run --rm --network=host redis-performance/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+
+# With results output (mount current directory)
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  redis-performance/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+```
+
+### Using Docker Compose
+
+For a complete setup with Redis included:
+
+```bash
+# Start Redis
+docker-compose up redis
+
+# Run benchmark against Redis
+docker-compose run --rm vector-db-benchmark run.py --host redis --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+
+# Or use the convenience script
+./docker-run.sh -H redis -e redis -d random-100 -x redis-m-16-ef-64
+```
+
+### Available Docker Images
+
+- **Latest**: `redis-performance/vector-db-benchmark:latest`
+- **Specific versions**: `redis-performance/vector-db-benchmark:v1.0.0`
+- **Master builds**: `redis-performance/vector-db-benchmark:master-{sha}`
+
+For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
+
 ## How to run a benchmark?
 
 Benchmarks are implemented in server-client mode, meaning that the server is

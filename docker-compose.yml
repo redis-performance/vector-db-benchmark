@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  # Redis standalone
+  redis:
+    image: redis:7-alpine
+    container_name: vector-benchmark-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - benchmark-net
+
+  # Redis with custom configuration
+  redis-custom:
+    image: redis:7-alpine
+    container_name: vector-benchmark-redis-custom
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_custom_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - benchmark-net
+
+  # Vector DB Benchmark
+  vector-db-benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_DIRTY: ${GIT_DIRTY:-0}
+    container_name: vector-benchmark-app
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./results:/app/results
+      - ./datasets:/app/datasets
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    networks:
+      - benchmark-net
+    profiles:
+      - benchmark
+
+  # Redis Cluster (3 nodes)
+  redis-cluster-1:
+    image: redis:7-alpine
+    container_name: redis-cluster-1
+    ports:
+      - "7001:6379"
+      - "17001:16379"
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    volumes:
+      - redis_cluster_1:/data
+    networks:
+      - benchmark-net
+    profiles:
+      - cluster
+
+  redis-cluster-2:
+    image: redis:7-alpine
+    container_name: redis-cluster-2
+    ports:
+      - "7002:6379"
+      - "17002:16379"
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    volumes:
+      - redis_cluster_2:/data
+    networks:
+      - benchmark-net
+    profiles:
+      - cluster
+
+  redis-cluster-3:
+    image: redis:7-alpine
+    container_name: redis-cluster-3
+    ports:
+      - "7003:6379"
+      - "17003:16379"
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    volumes:
+      - redis_cluster_3:/data
+    networks:
+      - benchmark-net
+    profiles:
+      - cluster
+
+  # Redis Cluster initialization
+  redis-cluster-init:
+    image: redis:7-alpine
+    container_name: redis-cluster-init
+    depends_on:
+      - redis-cluster-1
+      - redis-cluster-2
+      - redis-cluster-3
+    command: >
+      sh -c "
+        sleep 10 &&
+        redis-cli --cluster create 
+        redis-cluster-1:6379 
+        redis-cluster-2:6379 
+        redis-cluster-3:6379 
+        --cluster-replicas 0 --cluster-yes
+      "
+    networks:
+      - benchmark-net
+    profiles:
+      - cluster
+
+volumes:
+  redis_data:
+  redis_custom_data:
+  redis_cluster_1:
+  redis_cluster_2:
+  redis_cluster_3:
+
+networks:
+  benchmark-net:
+    driver: bridge
