@@ -1,8 +1,8 @@
-name: Docker Publish - Master
+name: Docker Publish - update-redisearch branch
 
 on:
   push:
-    branches: [master]
+    branches: [master, update-redisearch]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -61,8 +61,8 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=raw,value=master-{{sha}}
-            type=raw,value=master-{{date 'YYYYMMDD-HHmmss'}}
+            type=raw,value=update-redisearch-{{sha}}
+            type=raw,value=update-redisearch-{{date 'YYYYMMDD-HHmmss'}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

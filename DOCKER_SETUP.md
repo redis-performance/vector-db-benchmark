@@ -32,7 +32,7 @@ To enable automated Docker publishing, you need to configure the following secre
 All Docker publishing workflows include automatic credential validation:
 
 - **PR Validation**: Checks if credentials are available but continues without them (expected for forks)
-- **Master/Release Publishing**: **Requires** credentials and fails if not configured
+- **Default Branch/Release Publishing**: **Requires** credentials and fails if not configured
 - **Local Testing**: Warns if credentials are missing but continues validation
 
 This ensures that:
@@ -44,9 +44,9 @@ This ensures that:
 
 Once secrets are configured, Docker images will be automatically published:
 
-### Master Branch Commits
-- **Trigger**: Every push to `master` branch
-- **Tags**: `latest`, `master-{sha}`, `master-{timestamp}`
+### Default Branch Commits (update-redisearch)
+- **Trigger**: Every push to `update-redisearch` branch
+- **Tags**: `latest`, `update-redisearch-{sha}`, `update-redisearch-{timestamp}`
 - **Platforms**: `linux/amd64`, `linux/arm64`
 
 ### Releases

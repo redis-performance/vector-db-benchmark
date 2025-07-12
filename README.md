@@ -73,7 +73,7 @@ docker-compose run --rm vector-db-benchmark run.py --host redis --engines redis 
 
 - **Latest**: `redis-performance/vector-db-benchmark:latest`
 - **Specific versions**: `redis-performance/vector-db-benchmark:v1.0.0`
-- **Master builds**: `redis-performance/vector-db-benchmark:master-{sha}`
+- **Development builds**: `redis-performance/vector-db-benchmark:update-redisearch-{sha}`
 
 For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
 
