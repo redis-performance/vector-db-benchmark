@@ -1,8 +1,8 @@
-name: Docker Publish - update-redisearch branch
+name: Docker Publish - update.redisearch branch
 
 on:
   push:
-    branches: [master, update-redisearch]
+    branches: [master, update.redisearch]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -11,7 +11,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: redis-performance/vector-db-benchmark
+  IMAGE_NAME: filipe958/vector-db-benchmark
 
 jobs:
   docker-publish:
@@ -95,4 +95,4 @@ jobs:
           echo "docker run --rm ${{ env.IMAGE_NAME }}:latest run.py --help" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/redis-performance/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/filipe958/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
