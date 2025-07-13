@@ -122,8 +122,8 @@ jobs:
         poetry run python run.py \
           --host localhost \
           --engines redis-default-simple \
-          --datasets glove-25-angular \
-          --queries 5 \
+          --datasets random-100 \
+          --queries 50 \
           --skip-upload \
           --timeout 180
           
@@ -132,6 +132,6 @@ jobs:
     - name: Cleanup
       run: |
         echo "Cleaning up test files..."
-        rm -rf datasets/glove-25-angular/
+        rm -rf datasets/random-100/
         rm -rf results/
         echo "✅ Cleanup completed"
