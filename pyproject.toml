@@ -22,6 +22,7 @@ backoff = "^2.2.1"
 psycopg = {extras = ["binary"], version = "^3.1.17"}
 pgvector = "^0.2.4"
 ml-dtypes = "^0.4.0"
+boto3 = "^1.39.4"
 
 
 [tool.poetry.dev-dependencies]
