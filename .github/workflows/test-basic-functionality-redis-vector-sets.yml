@@ -1,24 +1,8 @@
-name: Test Basic Functionality - Redis RediSearch
+name: Test Basic Functionality - Redis Vector Sets
 
 on:
   push:
-    paths:
-      - 'run.py'
-      - 'engine/**'
-      - 'benchmark/**'
-      - 'datasets/datasets.json'
-      - 'experiments/configurations/**'
-      - 'pyproject.toml'
-      - '.github/workflows/test-basic-functionality.yml'
   pull_request:
-    paths:
-      - 'run.py'
-      - 'engine/**'
-      - 'benchmark/**'
-      - 'datasets/datasets.json'
-      - 'experiments/configurations/**'
-      - 'pyproject.toml'
-      - '.github/workflows/test-basic-functionality.yml'
 
 jobs:
   test-basic-functionality:
@@ -84,7 +68,7 @@ jobs:
         # Run with limited queries for faster testing
         poetry run python run.py \
           --host localhost \
-          --engines redis-default-simple \
+          --engines vectorsets-fp32-default \
           --datasets random-100 \
           --queries 10 \
           --timeout 300
@@ -121,7 +105,7 @@ jobs:
         echo "Testing with --skip-upload (search only)..."
         poetry run python run.py \
           --host localhost \
-          --engines redis-default-simple \
+          --engines vectorsets-fp32-default \
           --datasets random-100 \
           --queries 50 \
           --skip-upload \
