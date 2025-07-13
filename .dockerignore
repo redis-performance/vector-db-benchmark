@@ -47,7 +47,10 @@ ipython_config.py
 
 # Results and data
 results/
-datasets/
+# Include datasets.json and random-100 dataset for basic functionality
+datasets/*
+!datasets/datasets.json
+!datasets/random-100/
 *.h5
 *.hdf5
 *.json.gz
@@ -115,5 +118,4 @@ logs/
 # Docker files themselves
 Dockerfile*
 .dockerignore
-docker-compose*.yml
 docker-*.sh

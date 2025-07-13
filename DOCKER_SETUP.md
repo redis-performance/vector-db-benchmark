@@ -1,6 +1,6 @@
 # Docker Setup and Publishing Guide
 
-This guide explains how to set up Docker publishing for the `vector-db-benchmark` project to Docker Hub repository `redis-performance/vector-db-benchmark`.
+This guide explains how to set up Docker publishing for the `vector-db-benchmark` project to Docker Hub repository `filipe958/vector-db-benchmark`.
 
 ## 🔐 Required GitHub Secrets
 
@@ -44,9 +44,9 @@ This ensures that:
 
 Once secrets are configured, Docker images will be automatically published:
 
-### Default Branch Commits (update-redisearch)
-- **Trigger**: Every push to `update-redisearch` branch
-- **Tags**: `latest`, `update-redisearch-{sha}`, `update-redisearch-{timestamp}`
+### Default Branch Commits (update.redisearch)
+- **Trigger**: Every push to `update.redisearch` branch
+- **Tags**: `latest`, `update.redisearch-{sha}`, `update.redisearch-{timestamp}`
 - **Platforms**: `linux/amd64`, `linux/arm64`
 
 ### Releases
@@ -57,11 +57,11 @@ Once secrets are configured, Docker images will be automatically published:
 
 ### Example Tags for Release v1.2.3
 ```
-redis-performance/vector-db-benchmark:v1.2.3
-redis-performance/vector-db-benchmark:1.2.3
-redis-performance/vector-db-benchmark:1.2
-redis-performance/vector-db-benchmark:1
-redis-performance/vector-db-benchmark:latest
+filipe958/vector-db-benchmark:v1.2.3
+filipe958/vector-db-benchmark:1.2.3
+filipe958/vector-db-benchmark:1.2
+filipe958/vector-db-benchmark:1
+filipe958/vector-db-benchmark:latest
 ```
 
 ## 🛠️ Manual Building and Publishing
@@ -100,32 +100,34 @@ export DOCKER_PASSWORD=your_access_token
 ### Pull and Run
 ```bash
 # Latest version
-docker pull redis-performance/vector-db-benchmark:latest
-docker run --rm redis-performance/vector-db-benchmark:latest run.py --help
+docker pull filipe958/vector-db-benchmark:latest
+docker run --rm filipe958/vector-db-benchmark:latest run.py --help
 
 # Specific version
-docker pull redis-performance/vector-db-benchmark:v1.2.3
-docker run --rm redis-performance/vector-db-benchmark:v1.2.3 run.py --help
+docker pull filipe958/vector-db-benchmark:v1.2.3
+docker run --rm filipe958/vector-db-benchmark:v1.2.3 run.py --help
 ```
 
 ### Example Usage
 ```bash
 # Basic Redis benchmark
-docker run --rm --network=host redis-performance/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+docker run --rm --network=host filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
 
 # With custom Redis host
-docker run --rm redis-performance/vector-db-benchmark:latest \
-  run.py --host redis-server --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+docker run --rm filipe958/vector-db-benchmark:latest \
+  run.py --host redis-server --engines redis --dataset random-100 --experiment redis-default-simple
 
 # With results output (mount current directory)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  redis-performance/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+  filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
 
-# Using docker-compose for full setup
-docker-compose up redis
-docker-compose run --rm vector-db-benchmark run.py --host redis --engines redis --experiment redis-m-16-ef-64
+# Using with Redis container
+docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
+docker run --rm --network=host filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --experiment redis-default-simple
+docker stop redis-test && docker rm redis-test
 ```
 
 ## 🔍 Monitoring and Troubleshooting
@@ -143,7 +145,7 @@ docker-compose run --rm vector-db-benchmark run.py --host redis --engines redis 
 - Prevents merging PRs with broken Docker builds
 
 ### Docker Hub
-- View images at: https://hub.docker.com/r/redis-performance/vector-db-benchmark
+- View images at: https://hub.docker.com/r/filipe958/vector-db-benchmark
 - Check image sizes and platforms
 - Review vulnerability scan results
 

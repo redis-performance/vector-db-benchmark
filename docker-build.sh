@@ -6,7 +6,7 @@
 set -e
 
 # Default values
-IMAGE_NAME="redis-performance/vector-db-benchmark"
+IMAGE_NAME="filipe958/vector-db-benchmark"
 TAG="latest"
 PLATFORM=""
 PUSH=false

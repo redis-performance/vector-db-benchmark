@@ -22,13 +22,53 @@ We have a number of precomputed data sets. All data sets have been pre-split int
 
 | Dataset                                                                                                     | Dimensions |  Train size | Test size | Neighbors | Distance  |
 | ----------------------------------------------------------------------------------------------------------- | ---------: |  ---------: | --------: | --------: | --------- |
-| [LAION-1M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)   |        512 |   1,000,000 |    10,000 |       100 | Angular   |
-| [LAION-10M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  10,000,000 |    10,000 |       100 | Angular   |
-| [LAION-20M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  20,000,000 |    10,000 |       100 | Angular   |
-| [LAION-40M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  40,000,000 |    10,000 |       100 | Angular   |
-| [LAION-100M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 100,000,000 |    10,000 |       100 | Angular   |
-| [LAION-200M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 200,000,000 |    10,000 |       100 | Angular   |
-| [LAION-400M: from LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)      |        512 | 400,000,000 |    10,000 |       100 | Angular   |
+| **LAION Image Embeddings (512D)**                                                                          |            |             |           |           |           |
+| [LAION-1M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)   |        512 |   1,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-10M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  10,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-20M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  20,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-40M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  40,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-100M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 100,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-200M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 200,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-400M: from LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)      |        512 | 400,000,000 |    10,000 |       100 | Cosine    |
+| **LAION Image Embeddings (768D)**                                                                          |            |             |           |           |           |
+| [LAION-1M: 768D image embeddings](https://laion.ai/blog/laion-400-open-dataset/)                           |        768 |   1,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-1B: 768D image embeddings](https://laion.ai/blog/laion-400-open-dataset/)                           |        768 | 1,000,000,000|   10,000 |       100 | Cosine    |
+| **Standard Benchmarks**                                                                                    |            |             |           |           |           |
+| [GloVe-25: Word vectors](http://ann-benchmarks.com)                                                        |         25 |   1,183,514 |    10,000 |       100 | Cosine    |
+| [GloVe-100: Word vectors](http://ann-benchmarks.com)                                                       |        100 |   1,183,514 |    10,000 |       100 | Cosine    |
+| [Deep Image-96: CNN image features](http://ann-benchmarks.com)                                             |         96 |   9,990,000 |    10,000 |       100 | Cosine    |
+| [GIST-960: Image descriptors](http://ann-benchmarks.com)                                                   |        960 |   1,000,000 |     1,000 |       100 | L2        |
+| **Text and Knowledge Embeddings**                                                                          |            |             |           |           |           |
+| [DBpedia OpenAI-1M: Knowledge embeddings](https://www.dbpedia.org/)                                       |      1,536 |   1,000,000 |    10,000 |       100 | Cosine    |
+| [LAION Small CLIP: Small CLIP embeddings](https://laion.ai/blog/laion-400-open-dataset/)                   |        512 |     100,000 |     1,000 |       100 | Cosine    |
+| **Yandex Datasets**                                                                                        |            |             |           |           |           |
+| [Yandex T2I: Text-to-image embeddings](https://research.yandex.com/)                                      |        200 |   1,000,000 |   100,000 |       100 | Dot       |
+| **Random and Synthetic**                                                                                   |            |             |           |           |           |
+| Random-100: Small synthetic dataset                                                                        |        100 |         100 |         9 |         9 | Cosine    |
+| Random-100-Euclidean: Small synthetic dataset                                                              |        100 |         100 |         9 |         9 | L2        |
+| **Filtered Search Datasets**                                                                               |            |             |           |           |           |
+| H&M-2048: Fashion product embeddings (with filters)                                                        |      2,048 |     105,542 |     2,000 |       100 | Cosine    |
+| H&M-2048: Fashion product embeddings (no filters)                                                          |      2,048 |     105,542 |     2,000 |       100 | Cosine    |
+| ArXiv-384: Academic paper embeddings (with filters)                                                        |        384 |   2,205,995 |    10,000 |       100 | Cosine    |
+| ArXiv-384: Academic paper embeddings (no filters)                                                          |        384 |   2,205,995 |    10,000 |       100 | Cosine    |
+| Random Match Keyword-100: Synthetic keyword matching (with filters)                                        |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Keyword-100: Synthetic keyword matching (no filters)                                          |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Int-100: Synthetic integer matching (with filters)                                            |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Int-100: Synthetic integer matching (no filters)                                              |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Range-100: Synthetic range queries (with filters)                                                   |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Range-100: Synthetic range queries (no filters)                                                     |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Geo Radius-100: Synthetic geo queries (with filters)                                                |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Geo Radius-100: Synthetic geo queries (no filters)                                                  |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Keyword-2048: Large synthetic keyword matching (with filters)                                 |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Keyword-2048: Large synthetic keyword matching (no filters)                                   |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Int-2048: Large synthetic integer matching (with filters)                                     |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Int-2048: Large synthetic integer matching (no filters)                                       |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Range-2048: Large synthetic range queries (with filters)                                            |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Range-2048: Large synthetic range queries (no filters)                                              |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Geo Radius-2048: Large synthetic geo queries (with filters)                                         |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Geo Radius-2048: Large synthetic geo queries (no filters)                                           |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (with filters)                     |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (no filters)                       |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 
 
 ## 🐳 Docker Usage
@@ -39,41 +79,43 @@ The easiest way to run vector-db-benchmark is using Docker. We provide pre-built
 
 ```bash
 # Pull the latest image
-docker pull redis-performance/vector-db-benchmark:latest
+docker pull filipe958/vector-db-benchmark:latest
 
 # Run with help
-docker run --rm redis-performance/vector-db-benchmark:latest run.py --help
+docker run --rm filipe958/vector-db-benchmark:latest run.py --help
 
 # Basic Redis benchmark with local Redis
-docker run --rm --network=host redis-performance/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+docker run --rm --network=host filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
 
 # With results output (mount current directory)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  redis-performance/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+  filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
 ```
 
-### Using Docker Compose
+### Using with Redis
 
-For a complete setup with Redis included:
+For testing with Redis, start a Redis container first:
 
 ```bash
-# Start Redis
-docker-compose up redis
+# Start Redis container
+docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
 
 # Run benchmark against Redis
-docker-compose run --rm vector-db-benchmark run.py --host redis --engines redis --dataset random-100 --experiment redis-m-16-ef-64
+docker run --rm --network=host filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
 
 # Or use the convenience script
-./docker-run.sh -H redis -e redis -d random-100 -x redis-m-16-ef-64
+./docker-run.sh -H localhost -e redis -d random-100 -x redis-default-simple
+
+# Clean up Redis container when done
+docker stop redis-test && docker rm redis-test
 ```
 
 ### Available Docker Images
 
-- **Latest**: `redis-performance/vector-db-benchmark:latest`
-- **Specific versions**: `redis-performance/vector-db-benchmark:v1.0.0`
-- **Development builds**: `redis-performance/vector-db-benchmark:update-redisearch-{sha}`
+- **Latest**: `filipe958/vector-db-benchmark:latest`
 
 For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
 

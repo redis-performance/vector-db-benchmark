@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any, Optional
 import warnings
 
 from benchmark import ROOT_DIR
@@ -18,6 +18,64 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 DETAILED_RESULTS = bool(int(os.getenv("DETAILED_RESULTS", False)))
 REPETITIONS = int(os.getenv("REPETITIONS", 3))
+
+
+
+def format_precision_key(precision_value: float) -> str:
+    """Format precision value according to the rule: 0.01 increments up to 0.97, then 0.0025 increments from 0.97 to 1.0"""
+    if precision_value <= 0.97:
+        # Round to nearest 0.01 for values up to 0.97
+        rounded = round(precision_value, 2)
+        return f"{rounded:.2f}"
+    else:
+        # Round to nearest 0.0025 for values from 0.97 to 1.0
+        # 0.0025 = 1/400, so multiply by 400, round, then divide by 400
+        rounded = round(precision_value * 400) / 400
+        return f"{rounded:.4f}"
+
+
+def analyze_precision_performance(search_results: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Analyze search results to find best RPS at each actual precision level achieved."""
+    precision_dict = {}
+
+    # First, collect all actual precision levels achieved by experiments and format them
+    precision_mapping = {}  # Maps formatted precision to actual precision
+    for experiment_data in search_results.values():
+        mean_precision = experiment_data["results"]["mean_precisions"]
+        formatted_precision = format_precision_key(mean_precision)
+
+        # Keep track of the best (highest) actual precision for each formatted precision
+        if formatted_precision not in precision_mapping or mean_precision > precision_mapping[formatted_precision]:
+            precision_mapping[formatted_precision] = mean_precision
+
+    # For each formatted precision level, find the best RPS among experiments that round to this level
+    for formatted_precision in precision_mapping.keys():
+        best_rps = 0
+        best_config = None
+        best_experiment_id = None
+
+        for experiment_id, experiment_data in search_results.items():
+            mean_precision = experiment_data["results"]["mean_precisions"]
+            rps = experiment_data["results"]["rps"]
+
+            # Check if this experiment's precision rounds to the current formatted precision
+            if format_precision_key(mean_precision) == formatted_precision and rps > best_rps:
+                best_rps = rps
+                best_config = {
+                    "parallel": experiment_data["params"]["parallel"],
+                    "search_params": experiment_data["params"]["search_params"]
+                }
+                best_experiment_id = experiment_id
+
+        # Add to precision dict with the formatted precision as key
+        if best_config is not None:
+            precision_dict[formatted_precision] = {
+                "rps": best_rps,
+                "config": best_config,
+                "experiment_id": best_experiment_id
+            }
+
+    return precision_dict
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -43,14 +101,11 @@ class BaseClient:
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
         pid = os.getpid()  # Get the current process ID
+        experiment_id = f"{self.name}-{dataset_name}-search-{search_id}-{pid}-{timestamp}"
         experiments_file = (
-            f"{self.name}-{dataset_name}-search-{search_id}-{pid}-{timestamp}.json"
+            f"{experiment_id}.json"
         )
-        result_path = RESULTS_DIR / experiments_file
-        with open(result_path, "w") as out:
-            out.write(
-                json.dumps(
-                    {
+        experiment_result = {
                         "params": {
                             "dataset": dataset_name,
                             "experiment": self.name,
@@ -58,11 +113,16 @@ class BaseClient:
                             **search_params,
                         },
                         "results": results,
-                    },
+                    }
+        result_path = RESULTS_DIR / experiments_file
+        with open(result_path, "w") as out:
+            out.write(
+                json.dumps(
+                    experiment_result,
                     indent=2,
                 )
             )
-        return result_path
+        return result_path,experiment_id,experiment_result
 
     def save_upload_results(
         self, dataset_name: str, results: dict, upload_params: dict,upload_start_idx:int,upload_end_idx:int,
@@ -96,6 +156,7 @@ class BaseClient:
         num_queries: int = -1,
         ef_runtime: List[int] = [],
     ):
+        results = {"upload": {}, "search": {}}
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
         )
@@ -202,12 +263,44 @@ class BaseClient:
                         search_stats.pop("latencies", None)
                         search_stats.pop("precisions", None)
 
-                    self.save_search_results(
+                    result_path,experiment_id,experiment_result = self.save_search_results(
                         dataset.config.name, search_stats, search_id, search_params
+                    )
+                    results["search"][experiment_id] = experiment_result
+
+                    # Print single line summary with QPS, P50, and P95 latency
+                    qps = round(search_stats.get("rps", 0),1)
+                    p50_latency = round(search_stats.get("p50_time", 0) * 1000,3)  # Convert to ms
+                    p95_latency = round(search_stats.get("p95_time", 0) * 1000,3)  # Convert to ms
+                    precision = search_stats.get("mean_precisions", 0)
+                    print(
+                        f"\t→ QPS: {qps:.1f}, P50: {p50_latency:.2f}ms, P95: {p95_latency:.2f}ms, Precision: {precision:.4f}"
+                    )
+
+                    print(
+                        f"\tSaved {experiment_id} in {result_path}"
                     )
 
         print("Experiment stage: Done")
+
+        # Add precision analysis if search results exist
+        if results["search"]:
+            precision_analysis = analyze_precision_performance(results["search"])
+            if precision_analysis:  # Only add if we have precision data
+                results["precision"] = precision_analysis
+                print(f"Added precision analysis with {len(precision_analysis)} precision thresholds")
+
+        summary_file = f"{self.name}-{dataset.config.name}-summary.json"
+        summary_path = RESULTS_DIR / summary_file
+        with open(summary_path, "w") as out:
+            out.write(
+                json.dumps(
+                    results,
+                    indent=2,
+                )
+            )
         print("Results saved to: ", RESULTS_DIR)
+        print("Summary saved to: ", summary_path)
 
     def delete_client(self):
         self.uploader.delete_client()

@@ -6,12 +6,12 @@
 set -e
 
 # Default values
-IMAGE_NAME="redis-performance/vector-db-benchmark:latest"
+IMAGE_NAME="filipe958/vector-db-benchmark:latest"
 REDIS_HOST="localhost"
 REDIS_PORT="6379"
 ENGINES="redis"
 DATASET="random-100"
-EXPERIMENT="redis-m-16-ef-64"
+EXPERIMENT="redis-default-simple"
 NETWORK=""
 EXTRA_ARGS=""
 
@@ -49,25 +49,25 @@ usage() {
     echo "  -p, --port PORT       Redis port (default: 6379)"
     echo "  -e, --engines ENGINES Engines to test (default: redis)"
     echo "  -d, --dataset DATASET Dataset to use (default: random-100)"
-    echo "  -x, --experiment EXP  Experiment configuration (default: redis-m-16-ef-64)"
+    echo "  -x, --experiment EXP  Experiment configuration (default: redis-default-simple)"
     echo "  -n, --network NET     Docker network to use"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
     print_example "$0 # Run with defaults (help)"
-    print_example "$0 -H redis -e redis -d random-100 -x redis-m-16-ef-64 # Basic Redis benchmark"
+    print_example "$0 -H redis -e redis -d random-100 -x redis-default-simple # Basic Redis benchmark"
     print_example "$0 -n redis-net -H redis-server # Use custom network"
     print_example "$0 -- --skip-upload --skip-search # Pass extra arguments"
     echo ""
     echo "Common Redis setups:"
-    print_example "# Local Redis:"
-    print_example "$0 -H host.docker.internal"
+    print_example "# Start Redis container first:"
+    print_example "docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm"
     echo ""
-    print_example "# Redis in Docker network:"
-    print_example "$0 -n redis-network -H redis-container"
+    print_example "# Then run benchmark:"
+    print_example "$0 -H localhost -e redis -d random-100"
     echo ""
     print_example "# With results output (mount current directory):"
-    print_example "docker run --rm -v \$(pwd)/results:/app/results --network host redis-performance/vector-db-benchmark:latest run.py --host localhost --engines redis"
+    print_example "docker run --rm -v \$(pwd)/results:/app/results --network host filipe958/vector-db-benchmark:latest run.py --host localhost --engines redis"
 }
 
 # Parse command line arguments
@@ -134,7 +134,7 @@ DOCKER_CMD="$DOCKER_CMD -v \$(pwd)/results:/app/results"
 DOCKER_CMD="$DOCKER_CMD $IMAGE_NAME"
 
 # If no extra args provided, show help
-if [[ -z "$EXTRA_ARGS" && "$ENGINES" == "redis" && "$DATASET" == "random-100" && "$EXPERIMENT" == "redis-m-16-ef-64" && "$REDIS_HOST" == "localhost" ]]; then
+if [[ -z "$EXTRA_ARGS" && "$ENGINES" == "redis" && "$DATASET" == "random-100" && "$EXPERIMENT" == "redis-default-simple" && "$REDIS_HOST" == "localhost" ]]; then
     print_info "No specific configuration provided, showing help:"
     DOCKER_CMD="$DOCKER_CMD run.py --help"
 else
