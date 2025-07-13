@@ -84,14 +84,14 @@ docker pull filipe958/vector-db-benchmark:latest
 # Run with help
 docker run --rm filipe958/vector-db-benchmark:latest run.py --help
 
-# Basic Redis benchmark with local Redis
-docker run --rm --network=host filipe958/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
-
-# With results output (mount current directory)
+# Basic Redis benchmark with local Redis (recommended)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   filipe958/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
+  run.py --host localhost --engines redis-default-simple --dataset random-100
+
+# Without results output
+docker run --rm --network=host filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --dataset random-100
 ```
 
 ### Using with Redis
@@ -103,11 +103,12 @@ For testing with Redis, start a Redis container first:
 docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
 
 # Run benchmark against Redis
-docker run --rm --network=host filipe958/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --dataset random-100
 
 # Or use the convenience script
-./docker-run.sh -H localhost -e redis -d random-100 -x redis-default-simple
+./docker-run.sh -H localhost -e redis-default-simple -d random-100
 
 # Clean up Redis container when done
 docker stop redis-test && docker rm redis-test
@@ -149,20 +150,18 @@ poetry install
 Run the benchmark:
 
 ```bash
-Usage: run.py [OPTIONS]
+# Basic usage examples
+python run.py --engines redis-default-simple --dataset random-100
+python run.py --engines redis-default-simple --dataset glove-25-angular
+python run.py --engines "*-m-16-*" --dataset "glove-*"
 
-  Example: python3 -m run --engines *-m-16-* --datasets glove-*
+# Docker usage (recommended)
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --dataset random-100
 
-Options:
-  --engines TEXT                  [default: *]
-  --datasets TEXT                 [default: *]
-  --host TEXT                     [default: localhost]
-  --skip-upload / --no-skip-upload
-                                  [default: no-skip-upload]
-  --install-completion            Install completion for the current shell.
-  --show-completion               Show completion for the current shell, to
-                                  copy it or customize the installation.
-  --help                          Show this message and exit.
+# Get help
+python run.py --help
 ```
 
 Command allows you to specify wildcards for engines and datasets.
