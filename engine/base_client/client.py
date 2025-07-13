@@ -34,9 +34,16 @@ def format_precision_key(precision_value: float) -> str:
         return f"{rounded:.4f}"
 
 
-def analyze_precision_performance(search_results: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Analyze search results to find best RPS at each actual precision level achieved."""
+def analyze_precision_performance(search_results: Dict[str, Any]) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, float]]]:
+    """Analyze search results to find best RPS at each actual precision level achieved.
+
+    Returns:
+        tuple: (precision_dict, precision_summary_dict)
+        - precision_dict: Full precision analysis with config details
+        - precision_summary_dict: Simplified summary with just QPS, P50, P95
+    """
     precision_dict = {}
+    precision_summary_dict = {}
 
     # First, collect all actual precision levels achieved by experiments and format them
     precision_mapping = {}  # Maps formatted precision to actual precision
@@ -53,6 +60,8 @@ def analyze_precision_performance(search_results: Dict[str, Any]) -> Dict[str, D
         best_rps = 0
         best_config = None
         best_experiment_id = None
+        best_p50_time = 0
+        best_p95_time = 0
 
         for experiment_id, experiment_data in search_results.items():
             mean_precision = experiment_data["results"]["mean_precisions"]
@@ -66,16 +75,26 @@ def analyze_precision_performance(search_results: Dict[str, Any]) -> Dict[str, D
                     "search_params": experiment_data["params"]["search_params"]
                 }
                 best_experiment_id = experiment_id
+                best_p50_time = experiment_data["results"]["p50_time"]
+                best_p95_time = experiment_data["results"]["p95_time"]
 
         # Add to precision dict with the formatted precision as key
         if best_config is not None:
+            # Full precision analysis (existing format)
             precision_dict[formatted_precision] = {
                 "rps": best_rps,
                 "config": best_config,
                 "experiment_id": best_experiment_id
             }
 
-    return precision_dict
+            # Simplified precision summary
+            precision_summary_dict[formatted_precision] = {
+                "qps": round(best_rps, 1),
+                "p50": round(best_p50_time * 1000, 3),  # Convert to ms
+                "p95": round(best_p95_time * 1000, 3)   # Convert to ms
+            }
+
+    return precision_dict, precision_summary_dict
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -285,10 +304,12 @@ class BaseClient:
 
         # Add precision analysis if search results exist
         if results["search"]:
-            precision_analysis = analyze_precision_performance(results["search"])
+            precision_analysis, precision_summary = analyze_precision_performance(results["search"])
             if precision_analysis:  # Only add if we have precision data
                 results["precision"] = precision_analysis
+                results["precision_summary"] = precision_summary
                 print(f"Added precision analysis with {len(precision_analysis)} precision thresholds")
+                print(f"Added precision summary with {len(precision_summary)} precision levels")
 
         summary_file = f"{self.name}-{dataset.config.name}-summary.json"
         summary_path = RESULTS_DIR / summary_file
