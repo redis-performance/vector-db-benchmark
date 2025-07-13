@@ -16,6 +16,84 @@ scenario against which it should be tested. A specific scenario may assume
 running the server in a single or distributed mode, a different client
 implementation and the number of client instances.
 
+
+## Quick Start
+
+### Quick Start with Docker
+
+The easiest way to run vector-db-benchmark is using Docker. We provide pre-built images on Docker Hub.
+
+```bash
+# Pull the latest image
+docker pull filipe958/vector-db-benchmark:latest
+
+# Run with help
+docker run --rm filipe958/vector-db-benchmark:latest run.py --help
+
+# Check which datasets are available
+docker run --rm filipe958/vector-db-benchmark:latest run.py --describe datasets
+
+# Basic Redis benchmark with local Redis
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --datasets glove-25-angular
+
+# At the end of the run, you will find the results in the `results` directory. Lets open the summary one, in the precision summary
+
+$ jq ".precision_summary" results/*-summary.json
+{
+  "0.91": {
+    "qps": 1924.5,
+    "p50": 49.828,
+    "p95": 58.427
+  },
+  "0.94": {
+    "qps": 1819.9,
+    "p50": 51.68,
+    "p95": 66.83
+  },
+  "0.9775": {
+    "qps": 1477.8,
+    "p50": 65.368,
+    "p95": 73.849
+  },
+  "0.9950": {
+    "qps": 1019.8,
+    "p50": 95.115,
+    "p95": 106.73
+  }
+}
+```
+
+### Using with Redis
+
+For testing with Redis, start a Redis container first:
+
+```bash
+# Start Redis container
+docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
+
+# Run benchmark against Redis
+
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  filipe958/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --dataset random-100
+
+# Or use the convenience script
+./docker-run.sh -H localhost -e redis-default-simple -d random-100
+
+
+# Clean up Redis container when done
+docker stop redis-test && docker rm redis-test
+```
+
+### Available Docker Images
+
+- **Latest**: `filipe958/vector-db-benchmark:latest`
+
+For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
+
+
 ## Data sets
 
 We have a number of precomputed data sets. All data sets have been pre-split into train/test and include ground truth data for the top-100 nearest neighbors.
@@ -70,59 +148,6 @@ We have a number of precomputed data sets. All data sets have been pre-split int
 | Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (with filters)                     |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 | Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (no filters)                       |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 
-
-## 🐳 Docker Usage
-
-The easiest way to run vector-db-benchmark is using Docker. We provide pre-built images on Docker Hub.
-
-### Quick Start with Docker
-
-```bash
-# Pull the latest image
-docker pull filipe958/vector-db-benchmark:latest
-
-# Run with help
-docker run --rm filipe958/vector-db-benchmark:latest run.py --help
-
-
-# Basic Redis benchmark with local Redis (recommended)
-docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
-
-# Without results output
-docker run --rm --network=host filipe958/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
-
-```
-
-### Using with Redis
-
-For testing with Redis, start a Redis container first:
-
-```bash
-# Start Redis container
-docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
-
-# Run benchmark against Redis
-
-docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
-
-# Or use the convenience script
-./docker-run.sh -H localhost -e redis-default-simple -d random-100
-
-
-# Clean up Redis container when done
-docker stop redis-test && docker rm redis-test
-```
-
-### Available Docker Images
-
-- **Latest**: `filipe958/vector-db-benchmark:latest`
-
-For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
 
 ## How to run a benchmark?
 
