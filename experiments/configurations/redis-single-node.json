@@ -1,5 +1,17 @@
 [
   {
+    "name": "redis-default-simple",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "hnsw_config": {  }
+    },
+    "search_params": [
+      { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
+    ],
+    "upload_params": { "parallel": 32 }
+  },
+  {
     "name": "redis-m-16-ef-64",
     "engine": "redis",
     "connection_params": {},

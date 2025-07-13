@@ -2,6 +2,7 @@ import os
 import shutil
 import tarfile
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 import boto3
@@ -27,6 +28,8 @@ class DatasetConfig:
     ]  # Now path is expected to handle multi-file structure for h5-multi
     link: Optional[Dict[str, List[Dict[str, str]]]] = None
     schema: Optional[Dict[str, str]] = field(default_factory=dict)
+    vector_count: Optional[int] = None
+    description: Optional[str] = None
 
 
 READER_TYPE = {
@@ -41,6 +44,62 @@ READER_TYPE = {
 def show_progress(block_num, block_size, total_size):
     percent = round(block_num * block_size / total_size * 100, 2)
     print(f"{percent} %", end="\r")
+
+
+def download_with_headers(url, filename=None, progress_callback=None):
+    """Download a file with proper HTTP headers to avoid 403 errors."""
+    # Create a request with proper headers
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+
+    # Open the URL
+    with urllib.request.urlopen(req) as response:
+        # Get the filename from Content-Disposition header or URL
+        if filename is None:
+            content_disposition = response.headers.get('Content-Disposition')
+            if content_disposition and 'filename=' in content_disposition:
+                filename = content_disposition.split('filename=')[1].strip('"')
+            else:
+                filename = os.path.basename(url.split('?')[0])
+
+        # Create a temporary file
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, filename)
+
+        # Get total size for progress tracking
+        total_size = int(response.headers.get('Content-Length', 0))
+
+        # Download the file
+        with open(temp_path, 'wb') as f:
+            downloaded = 0
+            block_size = 8192
+            block_num = 0
+
+            while True:
+                chunk = response.read(block_size)
+                if not chunk:
+                    break
+
+                f.write(chunk)
+                downloaded += len(chunk)
+                block_num += 1
+
+                if progress_callback:
+                    progress_callback(block_num, block_size, total_size)
+
+        if progress_callback:
+            print()  # New line after progress
+
+        return temp_path, None
 
 
 # Progress handler for S3 downloads
@@ -120,7 +179,7 @@ class Dataset:
                         print("Credentials not found, downloading without boto3")
                 if not downloaded_withboto:
                     print(f"Downloading from URL {self.config.link}...")
-                    tmp_path, _ = urllib.request.urlretrieve(
+                    tmp_path, _ = download_with_headers(
                         self.config.link, None, show_progress
                     )
                     self._extract_or_move_file(tmp_path, target_path)
@@ -132,7 +191,7 @@ class Dataset:
             return
 
         print(f"Downloading from {url} to {target_path}")
-        tmp_path, _ = urllib.request.urlretrieve(url, None, show_progress)
+        tmp_path, _ = download_with_headers(url, None, show_progress)
         self._extract_or_move_file(tmp_path, target_path)
 
     def _extract_or_move_file(self, tmp_path, target_path):
