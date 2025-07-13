@@ -63,9 +63,6 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN groupadd -g 1001 -r appgroup && \
-    useradd -u 1001 -r -g appgroup appuser
 
 # Set working directory
 WORKDIR /app
@@ -79,11 +76,21 @@ COPY --from=builder /code /app
 
 # Create directories with proper permissions
 RUN mkdir -p /app/results /app/datasets && \
-    chown -R appuser:appgroup /app && \
+
+    chmod -R 777 /app/results /app/datasets && \
     chmod -R 755 /app
 
-# Switch to non-root user
-USER appuser
+# Create entrypoint script to handle user permissions
+RUN echo '#!/bin/bash\n\
+# Handle user permissions for volume mounts\n\
+if [ "$1" = "run.py" ]; then\n\
+    # Ensure results directory is writable\n\
+    mkdir -p /app/results\n\
+    chmod 777 /app/results\n\
+fi\n\
+exec python "$@"' > /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -93,7 +100,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 6379 6380
 
 # Set entrypoint
-ENTRYPOINT ["python"]
+
+ENTRYPOINT ["/app/entrypoint.sh"]
+
 
 # Default command (show help)
 CMD ["run.py", "--help"]
