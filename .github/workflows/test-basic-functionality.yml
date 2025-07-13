@@ -57,7 +57,12 @@ jobs:
     - name: Install dependencies
       run: |
         poetry install --no-root
-        
+
+    - name: Install Redis CLI
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y redis-tools
+
     - name: Wait for Redis to be ready
       run: |
         echo "Waiting for Redis to be ready..."
