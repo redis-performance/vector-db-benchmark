@@ -5,7 +5,7 @@ description = ""
 authors = ["Kacper Łukawski <kacper.lukawski@qdrant.com>"]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.12"
+python = ">=3.9,<3.13"
 qdrant-client = "^1.8.0"
 typer = "^0.6.1"
 jsons = "^1.6.3"
@@ -25,7 +25,7 @@ ml-dtypes = "^0.4.0"
 boto3 = "^1.39.4"
 
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 pre-commit = "^2.20.0"
 pytest = "^7.1"
 
