@@ -1907,6 +1907,7 @@ numpy = [
     {version = ">=1.21,<2.1.0", markers = "python_version < \"3.10\""},
     {version = ">=1.21", markers = "python_version >= \"3.10\" and python_version < \"3.12\""},
     {version = ">=1.26", markers = "python_version == \"3.12\""},
+    {version = ">=2.1.0", markers = "python_version >= \"3.13\""},
 ]
 portalocker = ">=2.7.0,<3.0.0"
 protobuf = ">=3.20.0"
@@ -2382,5 +2383,5 @@ agents = ["weaviate-agents (>=0.3.0,<1.0.0)"]
 
 [metadata]
 lock-version = "2.0"
-python-versions = ">=3.9,<3.13"
-content-hash = "1d76624626804e23e83c1f4d64c25925b01dbf66f4c6c914933c3871facdb9ee"
+python-versions = ">=3.9,<3.14"
+content-hash = "c27fc7ef817ac943a34447d7780b83f84446e2c3e3d0d1ba259dd22f9c255785"
