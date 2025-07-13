@@ -63,6 +63,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+
 # Set working directory
 WORKDIR /app
 
@@ -75,6 +76,7 @@ COPY --from=builder /code /app
 
 # Create directories with proper permissions
 RUN mkdir -p /app/results /app/datasets && \
+
     chmod -R 777 /app/results /app/datasets && \
     chmod -R 755 /app
 
@@ -89,6 +91,7 @@ fi\n\
 exec python "$@"' > /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
@@ -97,7 +100,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 6379 6380
 
 # Set entrypoint
+
 ENTRYPOINT ["/app/entrypoint.sh"]
+
 
 # Default command (show help)
 CMD ["run.py", "--help"]

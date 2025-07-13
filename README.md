@@ -84,6 +84,7 @@ docker pull filipe958/vector-db-benchmark:latest
 # Run with help
 docker run --rm filipe958/vector-db-benchmark:latest run.py --help
 
+
 # Basic Redis benchmark with local Redis (recommended)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   filipe958/vector-db-benchmark:latest \
@@ -92,6 +93,7 @@ docker run --rm -v $(pwd)/results:/app/results --network=host \
 # Without results output
 docker run --rm --network=host filipe958/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --dataset random-100
+
 ```
 
 ### Using with Redis
@@ -103,12 +105,14 @@ For testing with Redis, start a Redis container first:
 docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
 
 # Run benchmark against Redis
+
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   filipe958/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --dataset random-100
 
 # Or use the convenience script
 ./docker-run.sh -H localhost -e redis-default-simple -d random-100
+
 
 # Clean up Redis container when done
 docker stop redis-test && docker rm redis-test
