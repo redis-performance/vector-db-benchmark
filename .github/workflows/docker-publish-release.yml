@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: filipe958/vector-db-benchmark
+  IMAGE_NAME: redis/vector-db-benchmark
 
 jobs:
   docker-publish:
@@ -57,9 +57,6 @@ jobs:
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -110,5 +107,5 @@ jobs:
           echo "docker run --rm ${{ env.IMAGE_NAME }}:latest run.py --help" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/filipe958/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/redis/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
           echo "🔒 [Security Scan Results](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY

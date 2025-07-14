@@ -311,6 +311,9 @@ class BaseClient:
                 print(f"Added precision analysis with {len(precision_analysis)} precision thresholds")
                 print(f"Added precision summary with {len(precision_summary)} precision levels")
 
+                # Display results table and chart
+                self._display_results_summary(precision_summary, dataset.config.name)
+
         summary_file = f"{self.name}-{dataset.config.name}-summary.json"
         summary_path = RESULTS_DIR / summary_file
         with open(summary_path, "w") as out:
@@ -322,6 +325,116 @@ class BaseClient:
             )
         print("Results saved to: ", RESULTS_DIR)
         print("Summary saved to: ", summary_path)
+
+    def _display_results_summary(self, precision_summary: Dict[str, Dict[str, float]], dataset_name: str = ""):
+        """Display results table and ASCII chart after benchmark completion."""
+        if not precision_summary:
+            return
+
+        print("\n" + "="*80)
+        print("BENCHMARK RESULTS SUMMARY")
+        if dataset_name:
+            print(f"Experiment: {self.name} - {dataset_name}")
+        print("="*80)
+
+        # Results table
+        print("\nPrecision vs Performance Trade-off:")
+        print("-" * 50)
+        print(f"{'Precision':<10} {'QPS':<8} {'P50 (ms)':<10} {'P95 (ms)':<10}")
+        print("-" * 50)
+
+        # Sort by precision (descending for better readability)
+        sorted_data = sorted(precision_summary.items(), key=lambda x: float(x[0]), reverse=True)
+
+        for precision, metrics in sorted_data:
+            qps = metrics.get('qps', 0)
+            p50 = metrics.get('p50', 0)
+            p95 = metrics.get('p95', 0)
+            print(f"{precision:<10} {qps:<8.1f} {p50:<10.3f} {p95:<10.3f}")
+
+        # ASCII scatter plot
+        print(f"\n{self._create_ascii_scatter_plot(precision_summary, dataset_name)}")
+        print("="*80 + "\n")
+
+    def _create_ascii_scatter_plot(self, precision_summary: Dict[str, Dict[str, float]], dataset_name: str = "") -> str:
+        """Create simple ASCII scatter plot with precision on X-axis and QPS on Y-axis."""
+        if not precision_summary:
+            return "No data available for chart."
+
+        # Sort by precision
+        sorted_data = sorted(precision_summary.items(), key=lambda x: float(x[0]))
+
+        # Extract data
+        precisions = [float(data[0]) for data in sorted_data]
+        qps_values = [data[1].get('qps', 0) for data in sorted_data]
+
+        if not precisions or not qps_values:
+            return "No valid data for chart."
+
+        # Chart dimensions
+        width = 60
+        height = 12
+
+        # Calculate scales
+        min_precision = min(precisions)
+        max_precision = max(precisions)
+        min_qps = 0  # Always start from 0 for proper perspective
+        max_qps = max(qps_values)
+
+        precision_range = max_precision - min_precision
+        qps_range = max_qps - min_qps
+
+        if precision_range == 0:
+            precision_range = 0.1
+        if qps_range == 0:
+            qps_range = 100
+
+        # Create grid
+        grid = [[' ' for _ in range(width)] for _ in range(height)]
+
+        # Plot points
+        for precision, qps in zip(precisions, qps_values):
+            # Convert to grid coordinates
+            x = int((precision - min_precision) / precision_range * (width - 1))
+            y = int((max_qps - qps) / qps_range * (height - 1))  # Flip Y axis
+
+            # Ensure within bounds
+            x = max(0, min(width - 1, x))
+            y = max(0, min(height - 1, y))
+
+            grid[y][x] = '●'
+
+        # Build chart
+        experiment_info = f" - {self.name}"
+        if dataset_name:
+            experiment_info += f" - {dataset_name}"
+        chart = f"QPS vs Precision Trade-off{experiment_info} (up and to the right is better):\n\n"
+
+        # Y-axis labels and grid
+        for i, row in enumerate(grid):
+            if i % 3 == 0:  # Show Y labels every 3 rows
+                qps_val = max_qps - (i / (height - 1)) * qps_range
+                chart += f"{qps_val:>6.0f} │"
+            else:
+                chart += "       │"
+
+            chart += "".join(row) + "\n"
+
+        # Add 0 line at the bottom
+        chart += f"     0 │" + " " * width + "\n"
+
+        # X-axis
+        chart += "       └" + "─" * width + "\n"
+        chart += "        "
+
+        # X-axis labels
+        for i in range(0, width, 15):  # Show X labels every 15 chars
+            precision_val = min_precision + (i / (width - 1)) * precision_range
+            chart += f"{precision_val:.3f}".ljust(15)
+
+        chart += "\n        Precision (0.0 = 0%, 1.0 = 100%)"
+
+        return chart
 
     def delete_client(self):
         self.uploader.delete_client()

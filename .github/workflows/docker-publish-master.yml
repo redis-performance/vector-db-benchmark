@@ -1,4 +1,4 @@
-name: Docker Publish - update.redisearch branch
+name: Docker Publish - Latest
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: filipe958/vector-db-benchmark
+  IMAGE_NAME: redis/vector-db-benchmark
 
 jobs:
   docker-publish:
@@ -61,8 +61,6 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=raw,value=update-redisearch-{{sha}}
-            type=raw,value=update-redisearch-{{date 'YYYYMMDD-HHmmss'}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -95,4 +93,4 @@ jobs:
           echo "docker run --rm ${{ env.IMAGE_NAME }}:latest run.py --help" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/filipe958/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/redis/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY

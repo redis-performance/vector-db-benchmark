@@ -6,7 +6,7 @@
 set -e
 
 # Default values
-IMAGE_NAME="filipe958/vector-db-benchmark:latest"
+IMAGE_NAME="redis/vector-db-benchmark:latest"
 REDIS_HOST="localhost"
 REDIS_PORT="6379"
 ENGINES="redis"
@@ -44,7 +44,7 @@ usage() {
     echo "Usage: $0 [OPTIONS] [-- EXTRA_ARGS]"
     echo ""
     echo "Options:"
-    echo "  -i, --image IMAGE     Docker image name (default: redis-performance/vector-db-benchmark:latest)"
+    echo "  -i, --image IMAGE     Docker image name (default: redis/vector-db-benchmark:latest)"
     echo "  -H, --host HOST       Redis host (default: localhost)"
     echo "  -p, --port PORT       Redis port (default: 6379)"
     echo "  -e, --engines ENGINES Engines to test (default: redis)"
@@ -67,7 +67,7 @@ usage() {
     print_example "$0 -H localhost -e redis -d random-100"
     echo ""
     print_example "# With results output (mount current directory):"
-    print_example "docker run --rm -v \$(pwd)/results:/app/results --network host filipe958/vector-db-benchmark:latest run.py --host localhost --engines redis"
+    print_example "docker run --rm -v \$(pwd)/results:/app/results --network host redis/vector-db-benchmark:latest run.py --host localhost --engines redis"
 }
 
 # Parse command line arguments

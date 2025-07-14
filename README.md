@@ -1,8 +1,49 @@
 # vector-db-benchmark
 
-![Screenshot from 2022-08-23 14-10-01](https://user-images.githubusercontent.com/1935623/186516524-a61098d4-bca6-4aeb-acbe-d969cf30674e.png)
+A comprehensive benchmarking tool for vector databases, including Redis (both RediSearch and Vector Sets), Weaviate, Milvus, Qdrant, OpenSearch, Postgres, and others...
 
-> [View results](https://qdrant.tech/benchmarks/)
+In a one-liner cli tool you can get this and much more:
+
+```
+docker run --rm --network=host redis/vector-db-benchmark:latest run.py --host localhost --engines vectorsets-fp32-default --datasets glove-100-angular --parallels 100
+(...)
+================================================================================
+BENCHMARK RESULTS SUMMARY
+Experiment: vectorsets-fp32-default - glove-100-angular
+================================================================================
+
+Precision vs Performance Trade-off:
+--------------------------------------------------
+Precision  QPS      P50 (ms)   P95 (ms)  
+--------------------------------------------------
+0.86       1408.3   61.877     107.548   
+0.80       2136.3   38.722     69.102    
+0.72       2954.3   25.820     48.072    
+0.68       3566.5   20.229     38.581    
+
+QPS vs Precision Trade-off - vectorsets-fp32-default - glove-100-angular (up and to the right is better):
+
+  3566 │●                                                           
+       │             ●                                              
+       │                                                            
+  2594 │                                                            
+       │                                       ●                    
+       │                                                            
+  1621 │                                                           ●
+       │                                                            
+       │                                                            
+   648 │                                                            
+       │                                                            
+       │                                                            
+     0 │                                                            
+       └────────────────────────────────────────────────────────────
+        0.680          0.726          0.772          0.817          
+        Precision (0.0 = 0%, 1.0 = 100%)
+================================================================================
+
+```
+
+> [View results](https://redis.io/blog/benchmarking-results-for-vector-databases/)
 
 There are various vector search engines available, and each of them may offer
 a different set of features and efficiency. But how do we measure the
@@ -25,17 +66,17 @@ The easiest way to run vector-db-benchmark is using Docker. We provide pre-built
 
 ```bash
 # Pull the latest image
-docker pull filipe958/vector-db-benchmark:latest
+docker pull redis/vector-db-benchmark:latest
 
 # Run with help
-docker run --rm filipe958/vector-db-benchmark:latest run.py --help
+docker run --rm redis/vector-db-benchmark:latest run.py --help
 
 # Check which datasets are available
-docker run --rm filipe958/vector-db-benchmark:latest run.py --describe datasets
+docker run --rm redis/vector-db-benchmark:latest run.py --describe datasets
 
 # Basic Redis benchmark with local Redis
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
+  redis/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --datasets glove-25-angular
 
 # At the end of the run, you will find the results in the `results` directory. Lets open the summary one, in the precision summary
@@ -76,7 +117,7 @@ docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
 # Run benchmark against Redis
 
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
+  redis/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --dataset random-100
 
 # Or use the convenience script
@@ -89,7 +130,7 @@ docker stop redis-test && docker rm redis-test
 
 ### Available Docker Images
 
-- **Latest**: `filipe958/vector-db-benchmark:latest`
+- **Latest**: `redis/vector-db-benchmark:latest`
 
 For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
 
@@ -186,7 +227,7 @@ python run.py --engines "*-m-16-*" --dataset "glove-*"
 
 # Docker usage (recommended)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
+  redis/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --dataset random-100
 
 # Get help
