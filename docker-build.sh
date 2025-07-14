@@ -6,7 +6,7 @@
 set -e
 
 # Default values
-IMAGE_NAME="filipe958/vector-db-benchmark"
+IMAGE_NAME="redis/vector-db-benchmark"
 TAG="latest"
 PLATFORM=""
 PUSH=false
@@ -35,18 +35,18 @@ usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  -n, --name NAME       Docker image name (default: redis-performance/vector-db-benchmark)"
+    echo "  -n, --name NAME       Docker image name (default: redis/vector-db-benchmark)"
     echo "  -t, --tag TAG         Docker image tag (default: latest)"
     echo "  -p, --platform PLATFORM Target platform (e.g., linux/amd64,linux/arm64)"
     echo "  --push                Push image to Docker Hub after building"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                                    # Build with defaults"
-    echo "  $0 -t v1.0.0 --push                 # Build and push with custom tag"
+    echo "  $0                                    # Build with defaults (latest tag)"
+    echo "  $0 -t v1.0.0 --push                 # Build and push version tag"
     echo "  $0 -p linux/amd64,linux/arm64 --push # Multi-platform build and push"
     echo ""
-    echo "Docker Hub Repository: redis-performance/vector-db-benchmark"
+    echo "Docker Hub Repository: redis/vector-db-benchmark"
 }
 
 # Parse command line arguments
@@ -80,13 +80,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Get Git information
-print_info "Gathering Git information..."
-GIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-GIT_DIRTY=$(git diff --no-ext-diff 2>/dev/null | wc -l || echo "0")
-
-print_info "Git SHA: $GIT_SHA"
-print_info "Git Dirty: $GIT_DIRTY"
+# Prepare for build
+print_info "Preparing Docker build..."
 
 # Build Docker image
 FULL_IMAGE_NAME="${IMAGE_NAME}:${TAG}"
@@ -119,8 +114,8 @@ else
     BUILD_CMD="docker build"
 fi
 
-# Add build arguments and tags
-BUILD_CMD="$BUILD_CMD --build-arg GIT_SHA=$GIT_SHA --build-arg GIT_DIRTY=$GIT_DIRTY -t $FULL_IMAGE_NAME ."
+# Add tags
+BUILD_CMD="$BUILD_CMD -t $FULL_IMAGE_NAME ."
 
 print_info "Executing: $BUILD_CMD"
 
@@ -173,7 +168,7 @@ if eval $BUILD_CMD; then
     echo "  docker run --rm --network=host $FULL_IMAGE_NAME run.py --host localhost --engines redis"
     echo ""
     if [[ "$PUSH" == "true" ]]; then
-        print_info "Image available on Docker Hub: https://hub.docker.com/r/redis-performance/vector-db-benchmark"
+        print_info "Image available on Docker Hub: https://hub.docker.com/r/redis/vector-db-benchmark"
     fi
 else
     print_error "❌ Docker build failed"

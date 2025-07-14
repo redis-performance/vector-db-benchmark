@@ -25,17 +25,17 @@ The easiest way to run vector-db-benchmark is using Docker. We provide pre-built
 
 ```bash
 # Pull the latest image
-docker pull filipe958/vector-db-benchmark:latest
+docker pull redis/vector-db-benchmark:latest
 
 # Run with help
-docker run --rm filipe958/vector-db-benchmark:latest run.py --help
+docker run --rm redis/vector-db-benchmark:latest run.py --help
 
 # Check which datasets are available
-docker run --rm filipe958/vector-db-benchmark:latest run.py --describe datasets
+docker run --rm redis/vector-db-benchmark:latest run.py --describe datasets
 
 # Basic Redis benchmark with local Redis
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
+  redis/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --datasets glove-25-angular
 
 # At the end of the run, you will find the results in the `results` directory. Lets open the summary one, in the precision summary
@@ -76,7 +76,7 @@ docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
 # Run benchmark against Redis
 
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
+  redis/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --dataset random-100
 
 # Or use the convenience script
@@ -89,7 +89,7 @@ docker stop redis-test && docker rm redis-test
 
 ### Available Docker Images
 
-- **Latest**: `filipe958/vector-db-benchmark:latest`
+- **Latest**: `redis/vector-db-benchmark:latest`
 
 For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
 
@@ -186,7 +186,7 @@ python run.py --engines "*-m-16-*" --dataset "glove-*"
 
 # Docker usage (recommended)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
-  filipe958/vector-db-benchmark:latest \
+  redis/vector-db-benchmark:latest \
   run.py --host localhost --engines redis-default-simple --dataset random-100
 
 # Get help
