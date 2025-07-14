@@ -2,6 +2,47 @@
 
 A comprehensive benchmarking tool for vector databases, including Redis (both RediSearch and Vector Sets), Weaviate, Milvus, Qdrant, OpenSearch, Postgres, and others...
 
+In a one-liner cli tool you can get this and much more:
+
+```
+docker run --rm --network=host redis/vector-db-benchmark:latest run.py --host localhost --engines vectorsets-fp32-default --datasets glove-100-angular --parallels 100
+(...)
+================================================================================
+BENCHMARK RESULTS SUMMARY
+Experiment: vectorsets-fp32-default - glove-100-angular
+================================================================================
+
+Precision vs Performance Trade-off:
+--------------------------------------------------
+Precision  QPS      P50 (ms)   P95 (ms)  
+--------------------------------------------------
+0.86       1408.3   61.877     107.548   
+0.80       2136.3   38.722     69.102    
+0.72       2954.3   25.820     48.072    
+0.68       3566.5   20.229     38.581    
+
+QPS vs Precision Trade-off - vectorsets-fp32-default - glove-100-angular (up and to the right is better):
+
+  3566 │●                                                           
+       │             ●                                              
+       │                                                            
+  2594 │                                                            
+       │                                       ●                    
+       │                                                            
+  1621 │                                                           ●
+       │                                                            
+       │                                                            
+   648 │                                                            
+       │                                                            
+       │                                                            
+     0 │                                                            
+       └────────────────────────────────────────────────────────────
+        0.680          0.726          0.772          0.817          
+        Precision (0.0 = 0%, 1.0 = 100%)
+================================================================================
+
+```
+
 ## Quick Start
 
 ```bash
