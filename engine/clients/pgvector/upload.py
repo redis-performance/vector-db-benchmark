@@ -8,7 +8,7 @@ from engine.base_client.upload import BaseUploader
 from engine.clients.pgvector.config import get_db_config
 
 
-class PgVectorUploader(BaseUploader):
+class PgvectorUploader(BaseUploader):
     conn = None
     cur = None
     upload_params = {}

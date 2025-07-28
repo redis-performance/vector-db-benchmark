@@ -11,7 +11,7 @@ from engine.clients.pgvector.config import get_db_config
 from engine.clients.pgvector.parser import PgVectorConditionParser
 
 
-class PgVectorSearcher(BaseSearcher):
+class PgvectorSearcher(BaseSearcher):
     conn = None
     cur = None
     distance = None
