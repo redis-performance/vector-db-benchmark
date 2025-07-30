@@ -4,6 +4,12 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_AUTH = os.getenv("REDIS_AUTH", None)
 REDIS_USER = os.getenv("REDIS_USER", None)
 REDIS_CLUSTER = bool(int(os.getenv("REDIS_CLUSTER", 0)))
+SHARD_COUNT = int(os.getenv("SHARD_COUNT", 1))
+WORKERS = int(os.getenv("WORKERS", 8))
+K_RATIO = float(os.getenv("K_RATIO", 1.0))
+
+
+
 # One of BATCHES and ADHOC_BF
 # check https://redis.io/docs/latest/develop/interact/search-and-query/advanced-concepts/vectors/#pre-filter-query-attributes-hybrid-approach
 REDIS_HYBRID_POLICY = os.getenv("REDIS_HYBRID_POLICY", "")

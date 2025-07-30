@@ -12,6 +12,11 @@ from engine.base_client.configure import BaseConfigurator
 from engine.base_client.distances import Distance
 from engine.base_client.search import BaseSearcher
 from engine.base_client.upload import BaseUploader
+from engine.clients.redis.config import (
+    K_RATIO,
+    SHARD_COUNT,
+    WORKERS,
+)
 
 RESULTS_DIR = ROOT_DIR / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -72,7 +77,10 @@ def analyze_precision_performance(search_results: Dict[str, Any]) -> tuple[Dict[
                 best_rps = rps
                 best_config = {
                     "parallel": experiment_data["params"]["parallel"],
-                    "search_params": experiment_data["params"]["search_params"]
+                    "search_params": experiment_data["params"]["search_params"],
+                    "k_ratio": K_RATIO,
+                    "shard_count": SHARD_COUNT,
+                    "workers": WORKERS,
                 }
                 best_experiment_id = experiment_id
                 best_p50_time = experiment_data["results"]["p50_time"]
@@ -303,7 +311,9 @@ class BaseClient:
         print("Experiment stage: Done")
 
         # Add precision analysis if search results exist
+        top = 0
         if results["search"]:
+            top = results["search"][list(results["search"].keys())[0]]["params"]["top"]
             precision_analysis, precision_summary = analyze_precision_performance(results["search"])
             if precision_analysis:  # Only add if we have precision data
                 results["precision"] = precision_analysis
@@ -314,8 +324,8 @@ class BaseClient:
                 # Display results table and chart
                 self._display_results_summary(precision_summary, dataset.config.name)
 
-        summary_file = f"{self.name}-{dataset.config.name}-summary.json"
-        summary_path = RESULTS_DIR / summary_file
+        summary_file = f"{self.name}-{dataset.config.name}-k_{top}-shards_{SHARD_COUNT}_k_ratio_{K_RATIO}-workers_{WORKERS}-summary.json"
+        summary_path = RESULTS_DIR / "final" / summary_file
         with open(summary_path, "w") as out:
             out.write(
                 json.dumps(

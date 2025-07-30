@@ -18,6 +18,8 @@ from engine.clients.redis.config import (
     REDIS_USER,
     REDIS_CLUSTER,
     REDIS_KEEP_DOCUMENTS,
+    SHARD_COUNT,
+    K_RATIO
 )
 
 
@@ -98,6 +100,7 @@ class RedisConfigurator(BaseConfigurator):
         data_type = collection_params.get("data_type", "float32")
         algorithm_config = collection_params.get(f"{algo}_config", {})
         print(f"Using algorithm {algo} with config {algorithm_config}")
+        print(f"shard count {SHARD_COUNT} with k_ratio {K_RATIO}")
         index_fields = [
             VectorField(
                 name="vector",

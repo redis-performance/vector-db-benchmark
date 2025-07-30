@@ -1048,7 +1048,8 @@
     "schema": {
       "update_date_ts": "int",
       "labels": "keyword",
-      "submitter": "keyword"
+      "submitter": "keyword",
+      "abstract": "text"
     },
     "vector_count": 2205995,
     "description": "Academic paper embeddings"

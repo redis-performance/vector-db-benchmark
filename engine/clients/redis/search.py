@@ -12,6 +12,8 @@ from engine.clients.redis.config import (
     REDIS_USER,
     REDIS_CLUSTER,
     REDIS_HYBRID_POLICY,
+    K_RATIO
+
 )
 
 from engine.clients.redis.parser import RedisConditionParser
@@ -75,20 +77,24 @@ class RedisSearcher(BaseSearcher):
         else:
             prefilter_condition, params = conditions
 
+        shard_k_ratio = K_RATIO
+        shard_k_ratio_policy = f"{{$shard_k_ratio: {shard_k_ratio}}}"
+        prefilter_condition = "*"
         q = (
             Query(
-                f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]{hybrid_policy}"
+                f"{prefilter_condition}=>[KNN $K @vector $vec_param {cls.knn_conditions} AS vector_score]{hybrid_policy}=>{shard_k_ratio_policy}"
             )
             .sort_by("vector_score", asc=True)
             .paging(0, top)
-            .return_fields("vector_score")
+            # .return_fields("vector_score", "abstract")
             # performance is optimized for sorting operations on DIALECT 4 in different scenarios.
             # check SORTBY details in https://redis.io/commands/ft.search/
             .dialect(4)
-            .timeout(REDIS_QUERY_TIMEOUT)
+            .timeout(0)
         )
         params_dict = {
-            "vec_param": np.array(vector).astype(cls.np_data_type).tobytes(),
+            # "vec_param": np.array(vector).astype(cls.np_data_type).tobytes(),
+            "vec_param": vector,
             "K": top,
             **params,
         }
