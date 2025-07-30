@@ -15,7 +15,7 @@ class AnnCompoundReader(JSONReader):
     """
 
     VECTORS_FILE = "vectors.npy"
-    QUERIES_FILE = "tests.jsonl"
+    QUERIES_FILE = "tests_baseline_k5000_1_shards.jsonl"
 
     def read_vectors(self) -> Iterator[List[float]]:
         vectors = np.load(self.path / self.VECTORS_FILE)
