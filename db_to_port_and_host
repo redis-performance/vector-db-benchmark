@@ -8,6 +8,7 @@ WORKERS=8 SHARD_COUNT=5 REDIS_PORT=18861 host=18.200.246.13218861 # WITH FILTERS
 
 WORKERS=8 SHARD_COUNT=10 REDIS_PORT=19283 host=18.200.246.132 # WITH FILTERS WITH QPF ALL filters
 WORKERS=8 SHARD_COUNT=5 REDIS_PORT=13730 host=54.195.17.70 # WITH FILTERS WITH QPF ALL filters
+WORKERS=8 SHARD_COUNT=2 REDIS_PORT=15463 host=54.195.17.70 # WITH FILTERS WITH QPF ALL filters
 
 
 SHARD_COUNT=1 K_RATIO=1.0 REDIS_PORT=16556 python3 run.py --host 18.203.186.188 --engines redis-hnsw-m-16-ef-128  --datasets arxiv-titles-384-angular-no-filters --parallels 100  --skip-upload --queries 5000
@@ -19,7 +20,7 @@ WORKERS=8 SHARD_COUNT=10 REDIS_PORT=13730 python3 run.py --host 54.195.17.70 --e
 # search NOFILTERS
 WORKERS=8 SHARD_COUNT=10 REDIS_PORT=19387 K_RATIO=1.0 python3 run.py --host 18.203.186.188 --engines redis-hnsw-m-16-ef-128  --datasets arxiv-titles-384-angular-no-filters --parallels 100  --skip-upload --queries 5000
 # search FILTERS
-WORKERS=8 SHARD_COUNT=10 REDIS_PORT=19283 K_RATIO=1.0 python3 run.py --host 18.200.246.132 --engines redis-hnsw-m-16-ef-128  --datasets arxiv-titles-384-angular-filters --parallels 300  --skip-upload --queries 5000
+WORKERS=8 SHARD_COUNT=5 REDIS_PORT=13730 K_RATIO=1.0 python3 run.py --host 54.195.17.70 --engines redis-hnsw-m-16-ef-128  --datasets arxiv-titles-384-angular-filters --parallels 300  --skip-upload --queries 5000
 # downloaddataset FILTERS
 WORKERS=8 SHARD_COUNT=10 REDIS_PORT=16318 K_RATIO=1.0 python3 run.py --host 18.203.186.188 --engines redis-hnsw-m-16-ef-128  --datasets arxiv-titles-384-angular-filters --parallels 100  --skip-upload --skip-search --queries 5000
 
