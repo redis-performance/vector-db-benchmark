@@ -1050,12 +1050,10 @@
       "labels": "keyword",
       "submitter": "keyword",
       "abstract": "text",
-      "update_date": "int",
       "categories": "keyword",
       "authors": "keyword",
       "comments": "text",
-      "title": "text",
-      "id": "keyword"
+      "title": "text"
     },
     "vector_count": 2205995,
     "description": "Academic paper embeddings"
