@@ -86,7 +86,7 @@ class RedisSearcher(BaseSearcher):
             )
             .sort_by("vector_score", asc=True)
             .paging(0, top)
-            # .return_fields("vector_score", "abstract")
+            .return_fields("vector_score", "abstract", "vector")
             # performance is optimized for sorting operations on DIALECT 4 in different scenarios.
             # check SORTBY details in https://redis.io/commands/ft.search/
             .dialect(4)
