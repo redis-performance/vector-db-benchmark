@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 import math
 
 # Configuration
-RESULTS_DIR = "/home/ubuntu/vector-db-benchmark-1/results/final"
+RESULTS_DIR = "/home/ubuntu/vector-db-benchmark/results/final"
 OUTPUT_DIR = "./graphs_k_impact"
 
 def find_summary_files() -> List[str]:

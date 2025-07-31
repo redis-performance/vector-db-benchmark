@@ -1,10 +1,12 @@
 import redis
 import json
 import numpy as np
+from redis.commands.search.query import Query
+
 
 MAX_INT = 10000000000000000000
 # Connect to Redis
-r = redis.Redis(host='54.78.191.248', port=13833, decode_responses=False, protocol=3)
+r = redis.Redis(host='18.200.246.132', port=19283, decode_responses=False, protocol=3)
 
 queries_folder = '/home/ubuntu/vector-db-benchmark/datasets/arxiv-titles-384-angular/arxiv'
 queries_file = f'{queries_folder}/tests.jsonl'
@@ -20,15 +22,36 @@ num_shards = 1
 
 # Perform search with k=1000 and shard_k_ratio=1.0
 query_vector = first_query['query']
-search_results = r.execute_command(
-    'FT.SEARCH', 'idx',
-    f'*=>[KNN {k} @vector $query_vec AS score]',
-    'PARAMS', '2', 'query_vec', np.array(query_vector, dtype=np.float32).tobytes(),
-    'SORTBY', 'score',
-    'RETURN', '1', 'score',
-    'LIMIT', '0', f'{k}',
-    'DIALECT', '4'
+shard_k_ratio = 1.0
+shard_k_ratio_policy = f"{{$shard_k_ratio: {shard_k_ratio}}}"
+prefilter_condition = "*"
+q = (
+    Query(
+        f"*=>[KNN $K @vector $vec_param  AS vector_score]=>{shard_k_ratio_policy}"
+    )
+    .sort_by("vector_score", asc=True)
+    .paging(0, k)
+    # .return_fields("vector_score", "abstract", "vector")
+    # performance is optimized for sorting operations on DIALECT 4 in different scenarios.
+    # check SORTBY details in https://redis.io/commands/ft.search/
+    .dialect(4)
+    .timeout(0)
 )
+search_results = r.ft().search(
+    q, query_params={
+        "vec_param": np.array(query_vector, dtype=np.float32).tobytes(),
+        "K": k,
+    }
+)
+# search_results = r.execute_command(
+#     'FT.SEARCH', 'idx',
+#     f'*=>[KNN {k} @vector $query_vec AS score]',
+#     'PARAMS', '2', 'query_vec', np.array(query_vector, dtype=np.float32).tobytes(),
+#     'SORTBY', 'score',
+#     'RETURN', '1', 'score',
+#     'LIMIT', '0', f'{k}',
+#     'DIALECT', '4'
+# )
 
 results = search_results[b'results']
 results_count = len(results)
@@ -95,4 +118,4 @@ def generate_baseline_for_queries(num_queries=MAX_INT):
 
     print(f"Saved {len(baseline_queries)} baseline queries to {output_file}")
 #
-generate_baseline_for_queries(num_queries=5000)
+# generate_baseline_for_queries(num_queries=5000)
