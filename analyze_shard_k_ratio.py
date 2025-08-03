@@ -192,7 +192,7 @@ def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output
     min_ratio = min(ratios)
     # Create x-axis values from min_ratio to 1.0 in 0.1 increments
     x_axis_ratios = []
-    current_ratio = min_ratio
+    current_ratio = 0.0
     while current_ratio <= 1.0:
         x_axis_ratios.append(round(current_ratio, 1))
         current_ratio += 0.1
