@@ -43,9 +43,6 @@ def get_wrokers_from_filename(filename: str) -> int:
         # Old format: ...k_ratio_1.0-summary.json
         workers = "8"  # or "unknown" - your choice for default
 
-    # Remove -summary.json suffix
-    name_parts = basename.replace("-summary.json", "").split("-")
-
     return int(workers)
 
 def load_benchmark_data(file_path: str) -> Dict:
@@ -142,6 +139,21 @@ def organize_data_by_k_and_shards(summaries: List[Dict]) -> Dict[tuple, List[Dic
 
     return by_k_and_shards
 
+def organize_data_by_shards_and_workers(summaries: List[Dict]) -> Dict[tuple, List[Dict]]:
+    """Organize summary data by (shard_count, workers) combination for multi-k graphs."""
+    by_shards_and_workers = {}
+
+    for summary in summaries:
+        shard_count = summary['shard_count']
+        workers = summary['workers']
+        key = (shard_count, workers)
+
+        if key not in by_shards_and_workers:
+            by_shards_and_workers[key] = []
+        by_shards_and_workers[key].append(summary)
+
+    return by_shards_and_workers
+
 def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output_dir: str):
     """Create a graph for a specific shard count showing ratio vs performance/recall."""
     if not summaries:
@@ -197,11 +209,21 @@ def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output
     ax1.set_xlim(min(x_axis_effective_k) * 0.95, max(x_axis_effective_k) * 1.05)
 
     # Create second y-axis for precision (recall)
+    # we are lmited to k=5000 baseline results
     ax2 = ax1.twinx()
-    color2 = 'tab:red'
-    ax2.set_ylabel('Precision (Recall)', color=color2)
-    line2 = ax2.plot(effective_k_values, precision_values, 's-', color=color2, label='Precision', linewidth=2, markersize=6)
-    ax2.tick_params(axis='y', labelcolor=color2)
+    if k_value <= 5000:
+        color2 = 'tab:red'
+        ax2.set_ylabel('Precision (Recall)', color=color2)
+        line2 = ax2.plot(effective_k_values, precision_values, 's-', color=color2, label='Precision', linewidth=2, markersize=6)
+        ax2.tick_params(axis='y', labelcolor=color2)
+
+        # Add labels for Precision values (red line) - positioned closer below points
+        for i, (x, y) in enumerate(zip(effective_k_values, precision_values)):
+            # Alternate positioning: odd indices go slightly lower to avoid overlap
+            offset_y = -12 if i % 2 == 0 else -16
+            ax2.annotate(f'{y:.2f}', (x, y), textcoords="offset points", xytext=(0, offset_y), ha='center',
+                        fontsize=8, color=color2, weight='bold',
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.7, edgecolor=color2))
 
     # Format precision y-axis to show max 3 decimal places
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.3f}'))
@@ -213,14 +235,6 @@ def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output
         ax1.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0, offset_y), ha='center',
                     fontsize=8, color=color1, weight='bold',
                     bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.7, edgecolor=color1))
-
-    # Add labels for Precision values (red line) - positioned closer below points
-    for i, (x, y) in enumerate(zip(effective_k_values, precision_values)):
-        # Alternate positioning: odd indices go slightly lower to avoid overlap
-        offset_y = -12 if i % 2 == 0 else -16
-        ax2.annotate(f'{y:.2f}', (x, y), textcoords="offset points", xytext=(0, offset_y), ha='center',
-                    fontsize=8, color=color2, weight='bold',
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.7, edgecolor=color2))
 
     # Add selective improvement annotations (Option C)
     if len(summaries) >= 2:
@@ -246,7 +260,10 @@ def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output
 
             # Option A: Place annotation outside graph area, bottom-left corner
             lowest_ratio = ratios[lowest_ratio_idx]
-            annotation_text = f"Ratio: {lowest_ratio:.1f} vs 1.0\n{qps_improvement:+.0f}% QPS\n{precision_change:+.1f}% Precision"
+            if k_value <= 5000:
+                annotation_text = f"Ratio: {lowest_ratio:.1f} vs 1.0\n{qps_improvement:+.0f}% QPS\n{precision_change:+.1f}% Precision"
+            else:
+                annotation_text = f"Ratio: {lowest_ratio:.1f} vs 1.0\n{qps_improvement:+.0f}% QPS"
 
             # Position outside the plot area in bottom-left, below x-axis labels and legend
             ax1.text(0.02, -0.13, annotation_text, transform=ax1.transAxes,
@@ -257,7 +274,10 @@ def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output
     plt.title(f'Performance vs EffectiveK - {shard_count} Shards (K={k_value})', fontsize=14, fontweight='bold')
 
     # Create proper legend below x-axis, centered in one line
-    lines = line1 + line2
+    if k_value <= 5000:
+        lines = line1 + line2
+    else:
+        lines = line1
     labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, bbox_to_anchor=(0.5, -0.15), loc='upper center',
                ncol=2, frameon=False, fontsize=10)
@@ -281,6 +301,147 @@ def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output
     print(f"  Effective K values: {effective_k_values}")
     print(f"  QPS range: {min(qps_values):.1f} - {max(qps_values):.1f}")
     print(f"  Precision range: {min(precision_values):.3f} - {max(precision_values):.3f}")
+
+def create_summary_graph_for_shards_workers(shard_count: int, workers: int, summaries: List[Dict], output_dir: str):
+    """Create a summary graph showing QPS vs effective k for multiple k values."""
+    if not summaries:
+        print(f"No data for shard count {shard_count}, workers {workers}")
+        return
+
+    # Group summaries by k_value
+    by_k_value = {}
+    for summary in summaries:
+        k_value = summary['k_value']
+        if k_value not in by_k_value:
+            by_k_value[k_value] = []
+        by_k_value[k_value].append(summary)
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray']
+
+    for i, (k_value, k_summaries) in enumerate(sorted(by_k_value.items())):
+        # Sort by k_ratio for proper line plotting
+        k_summaries = sorted(k_summaries, key=lambda x: x['k_ratio'])
+
+        # Extract data for plotting
+        effective_k_values = [calculate_effective_k(s['k_ratio'], shard_count, s['k_value']) for s in k_summaries]
+        ratios = [s['k_ratio'] for s in k_summaries]
+        qps_values = [s['qps'] for s in k_summaries]
+
+        # Plot line for this k value
+        color = colors[i % len(colors)]
+        ax.plot(effective_k_values, qps_values, 'o-', color=color, label=f'K={k_value}',
+                linewidth=2, markersize=6)
+
+    # Set labels and title
+    ax.set_xlabel('Effective K', fontsize=12)
+    ax.set_ylabel('QPS (Queries Per Second)', fontsize=12)
+    ax.grid(True, alpha=0.3)
+
+    # Set x-axis ticks at intervals of 1000
+    all_effective_k = []
+    for k_summaries in by_k_value.values():
+        for s in k_summaries:
+            all_effective_k.append(calculate_effective_k(s['k_ratio'], shard_count, s['k_value']))
+
+    if all_effective_k:
+        min_k = min(all_effective_k)
+        max_k = max(all_effective_k)
+        # Create ticks at 1000 intervals
+        tick_start = (min_k // 1000) * 1000
+        tick_end = ((max_k // 1000) + 1) * 1000
+        x_ticks = list(range(int(tick_start), int(tick_end) + 1, 1000))
+        ax.set_xticks(x_ticks)
+
+    plt.title(f'QPS vs EffectiveK Summary - {shard_count} Shards, {workers} Workers',
+              fontsize=14, fontweight='bold')
+
+    # Add legend
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, fontsize=10)
+
+    # Improve layout
+    plt.tight_layout()
+
+    # Save the graph
+    filename = f"summary_shard_count_{shard_count}_workers_{workers}_qps_vs_effective_k.png"
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"  Summary graph saved: {filename}")
+    print(f"  K values included: {sorted(by_k_value.keys())}")
+
+def create_p95_summary_graph_for_shards_workers(shard_count: int, workers: int, summaries: List[Dict], output_dir: str):
+    """Create a summary graph showing P95 latency vs effective k for multiple k values."""
+    if not summaries:
+        print(f"No data for shard count {shard_count}, workers {workers}")
+        return
+
+    # Group summaries by k_value
+    by_k_value = {}
+    for summary in summaries:
+        k_value = summary['k_value']
+        if k_value not in by_k_value:
+            by_k_value[k_value] = []
+        by_k_value[k_value].append(summary)
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray']
+
+    for i, (k_value, k_summaries) in enumerate(sorted(by_k_value.items())):
+        # Sort by k_ratio for proper line plotting
+        k_summaries = sorted(k_summaries, key=lambda x: x['k_ratio'])
+
+        # Extract data for plotting
+        effective_k_values = [calculate_effective_k(s['k_ratio'], shard_count, s['k_value']) for s in k_summaries]
+        p95_values = [s['p95'] for s in k_summaries]
+
+        # Plot line for this k value
+        color = colors[i % len(colors)]
+        ax.plot(effective_k_values, p95_values, 'o-', color=color, label=f'K={k_value}',
+                linewidth=2, markersize=6)
+
+    # Set labels and title
+    ax.set_xlabel('Effective K', fontsize=12)
+    ax.set_ylabel('P95 Latency (ms)', fontsize=12)
+    ax.grid(True, alpha=0.3)
+
+    # Set x-axis ticks at intervals of 1000
+    all_effective_k = []
+    for k_summaries in by_k_value.values():
+        for s in k_summaries:
+            all_effective_k.append(calculate_effective_k(s['k_ratio'], shard_count, s['k_value']))
+
+    if all_effective_k:
+        min_k = min(all_effective_k)
+        max_k = max(all_effective_k)
+        # Create ticks at 1000 intervals
+        tick_start = (min_k // 1000) * 1000
+        tick_end = ((max_k // 1000) + 1) * 1000
+        x_ticks = list(range(int(tick_start), int(tick_end) + 1, 1000))
+        ax.set_xticks(x_ticks)
+
+    plt.title(f'P95 Latency vs EffectiveK Summary - {shard_count} Shards, {workers} Workers',
+              fontsize=14, fontweight='bold')
+
+    # Add legend
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, fontsize=10)
+
+    # Improve layout
+    plt.tight_layout()
+
+    # Save the graph
+    filename = f"summary_shard_count_{shard_count}_workers_{workers}_p95_vs_effective_k.png"
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"  P95 summary graph saved: {filename}")
+    print(f"  K values included: {sorted(by_k_value.keys())}")
 
 def main():
     """Main function to orchestrate the analysis."""
@@ -334,6 +495,16 @@ def main():
         summaries = by_k_and_shards[(k_value, shard_count, workers)]
         print(f"\nCreating graph for K={k_value}, {shard_count} shards, {workers} workers:")
         create_graph_for_shard_count(shard_count, summaries, OUTPUT_DIR)
+
+    # Create summary graphs for each (shard_count, workers) combination
+    by_shards_and_workers = organize_data_by_shards_and_workers(all_summaries)
+    print(f"\nCreating summary graphs for shard/worker combinations: {sorted(by_shards_and_workers.keys())}")
+
+    for (shard_count, workers) in sorted(by_shards_and_workers.keys()):
+        summaries = by_shards_and_workers[(shard_count, workers)]
+        print(f"\nCreating summary graph for {shard_count} shards, {workers} workers:")
+        create_summary_graph_for_shards_workers(shard_count, workers, summaries, OUTPUT_DIR)
+        create_p95_summary_graph_for_shards_workers(shard_count, workers, summaries, OUTPUT_DIR)
 
     print(f"\nAll graphs saved to: {OUTPUT_DIR}")
     print("Analysis complete!")
