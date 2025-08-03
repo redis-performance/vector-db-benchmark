@@ -490,6 +490,14 @@ def create_qps_vs_ratio_graph_for_k_workers(k_value: int, workers: int, summarie
         ax.plot(ratios, qps_values, 'o-', color=color, label=f'{shard_count} Shards',
                 linewidth=2, markersize=6)
 
+        # Add labels for QPS values - positioned closer to points
+        for j, (x, y) in enumerate(zip(ratios, qps_values)):
+            # Alternate positioning: odd indices go slightly higher to avoid overlap
+            offset_y = 8 if j % 2 == 0 else 12
+            ax.annotate(f'{y:.1f}', (x, y), textcoords="offset points", xytext=(0, offset_y), ha='center',
+                        fontsize=8, color=color, weight='bold',
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.7, edgecolor=color))
+
     # Set labels and title
     ax.set_xlabel('Shard K Ratio', fontsize=12)
     ax.set_ylabel('QPS (Queries Per Second)', fontsize=12)
@@ -498,8 +506,12 @@ def create_qps_vs_ratio_graph_for_k_workers(k_value: int, workers: int, summarie
     plt.title(f'QPS vs Shard K Ratio - K={k_value}, {workers} Workers',
               fontsize=14, fontweight='bold')
 
-    # Add legend
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, fontsize=10)
+    # Create proper legend below x-axis, centered in one line
+    ax.legend(bbox_to_anchor=(0.5, -0.15), loc='upper center',
+              ncol=len(by_shard_count), frameon=False, fontsize=10)
+
+    # Adjust plot margins to prevent label truncation
+    plt.subplots_adjust(top=0.85, bottom=0.15)
 
     # Improve layout
     plt.tight_layout()

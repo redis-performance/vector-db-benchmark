@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 import math
 
 # Configuration
-RESULTS_DIR = "/home/ubuntu/vector-db-benchmark/results/final"
+RESULTS_DIR = "results/final"
 OUTPUT_DIR = "./graphs_k_impact"
 
 def find_summary_files() -> List[str]:
@@ -200,7 +200,7 @@ def create_combined_k_impact_graph(shard_count: int, workers: int, configs_data:
     """Create a combined graph with multiple lines, each representing an effective K value."""
 
     # Filter configs that have multiple K values
-    valid_configs = {eff_k: summaries for eff_k, summaries in configs_data.items() if len(summaries) >= 2}
+    valid_configs = {eff_k: summaries for eff_k, summaries in configs_data.items() if len(summaries) >= 1}
 
     if not valid_configs:
         print(f"Skipping combined graph for {shard_count} shards, {workers} workers - no configs with multiple K values")

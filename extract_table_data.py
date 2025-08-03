@@ -8,7 +8,7 @@ import os
 import glob
 import math
 
-RESULTS_DIR = "/home/ubuntu/vector-db-benchmark/results/final"
+RESULTS_DIR = "results/final"
 
 def extract_data_from_file(file_path):
     """Extract data from a single summary file."""
