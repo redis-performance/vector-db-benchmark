@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 import math
 # Configuration
-RESULTS_DIR = "/home/ubuntu/vector-db-benchmark/results/final"
+RESULTS_DIR = "results/final"
 OUTPUT_DIR = "./graphs"
 
 def find_summary_files() -> List[str]:
@@ -153,6 +153,21 @@ def organize_data_by_shards_and_workers(summaries: List[Dict]) -> Dict[tuple, Li
         by_shards_and_workers[key].append(summary)
 
     return by_shards_and_workers
+
+def organize_data_by_k_and_workers(summaries: List[Dict]) -> Dict[tuple, List[Dict]]:
+    """Organize summary data by (k_value, workers) combination for multi-shard graphs."""
+    by_k_and_workers = {}
+
+    for summary in summaries:
+        k_value = summary['k_value']
+        workers = summary['workers']
+        key = (k_value, workers)
+
+        if key not in by_k_and_workers:
+            by_k_and_workers[key] = []
+        by_k_and_workers[key].append(summary)
+
+    return by_k_and_workers
 
 def create_graph_for_shard_count(shard_count: int, summaries: List[Dict], output_dir: str):
     """Create a graph for a specific shard count showing ratio vs performance/recall."""
@@ -443,6 +458,61 @@ def create_p95_summary_graph_for_shards_workers(shard_count: int, workers: int, 
     print(f"  P95 summary graph saved: {filename}")
     print(f"  K values included: {sorted(by_k_value.keys())}")
 
+def create_qps_vs_ratio_graph_for_k_workers(k_value: int, workers: int, summaries: List[Dict], output_dir: str):
+    """Create a QPS vs Ratio graph for a specific K value showing different shard counts as lines."""
+    if not summaries:
+        print(f"No data for K={k_value}, workers {workers}")
+        return
+
+    # Group summaries by shard_count
+    by_shard_count = {}
+    for summary in summaries:
+        shard_count = summary['shard_count']
+        if shard_count not in by_shard_count:
+            by_shard_count[shard_count] = []
+        by_shard_count[shard_count].append(summary)
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray']
+
+    for i, (shard_count, shard_summaries) in enumerate(sorted(by_shard_count.items())):
+        # Sort by k_ratio for proper line plotting
+        shard_summaries = sorted(shard_summaries, key=lambda x: x['k_ratio'])
+
+        # Extract data for plotting
+        ratios = [s['k_ratio'] for s in shard_summaries]
+        qps_values = [s['qps'] for s in shard_summaries]
+
+        # Plot line for this shard count
+        color = colors[i % len(colors)]
+        ax.plot(ratios, qps_values, 'o-', color=color, label=f'{shard_count} Shards',
+                linewidth=2, markersize=6)
+
+    # Set labels and title
+    ax.set_xlabel('Shard K Ratio', fontsize=12)
+    ax.set_ylabel('QPS (Queries Per Second)', fontsize=12)
+    ax.grid(True, alpha=0.3)
+
+    plt.title(f'QPS vs Shard K Ratio - K={k_value}, {workers} Workers',
+              fontsize=14, fontweight='bold')
+
+    # Add legend
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, fontsize=10)
+
+    # Improve layout
+    plt.tight_layout()
+
+    # Save the graph
+    filename = f"qps_vs_ratio_k_{k_value}_workers_{workers}.png"
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"  QPS vs Ratio graph saved: {filename}")
+    print(f"  Shard counts included: {sorted(by_shard_count.keys())}")
+
 def main():
     """Main function to orchestrate the analysis."""
     print("Starting shard_k_ratio analysis...")
@@ -505,6 +575,15 @@ def main():
         print(f"\nCreating summary graph for {shard_count} shards, {workers} workers:")
         create_summary_graph_for_shards_workers(shard_count, workers, summaries, OUTPUT_DIR)
         create_p95_summary_graph_for_shards_workers(shard_count, workers, summaries, OUTPUT_DIR)
+
+    # Create QPS vs Ratio graphs for each (k_value, workers) combination
+    by_k_and_workers = organize_data_by_k_and_workers(all_summaries)
+    print(f"\nCreating QPS vs Ratio graphs for K/worker combinations: {sorted(by_k_and_workers.keys())}")
+
+    for (k_value, workers) in sorted(by_k_and_workers.keys()):
+        summaries = by_k_and_workers[(k_value, workers)]
+        print(f"\nCreating QPS vs Ratio graph for K={k_value}, {workers} workers:")
+        create_qps_vs_ratio_graph_for_k_workers(k_value, workers, summaries, OUTPUT_DIR)
 
     print(f"\nAll graphs saved to: {OUTPUT_DIR}")
     print("Analysis complete!")
