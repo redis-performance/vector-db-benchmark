@@ -75,8 +75,12 @@ class BaseSearcher:
         search_one = functools.partial(self.__class__._search_one, top=top)
 
         # Convert queries to a list for potential reuse
-        queries_list = list(queries)
-
+        # Also, converts query vectors to bytes beforehand, preparing them for sending to client without affecting search time measurements
+        queries_list = []
+        for query in queries:
+            query.vector = np.array(query.vector).astype(np.float32).tobytes()
+            queries_list.append(query)
+        
         # Handle MAX_QUERIES environment variable
         if MAX_QUERIES > 0:
             queries_list = queries_list[:MAX_QUERIES]
@@ -114,11 +118,11 @@ class BaseSearcher:
             total_query_count = len(used_queries)
 
         if parallel == 1:
-            # Single-threaded execution
-            start = time.perf_counter()
-
             # Create a progress bar with the correct total
             pbar = tqdm.tqdm(total=total_query_count, desc="Processing queries", unit="queries")
+
+            # Single-threaded execution
+            start = time.perf_counter()
 
             # Process queries with progress updates
             results = []
@@ -148,29 +152,14 @@ class BaseSearcher:
                 # For lists, we can use the chunked_iterable function
                 query_chunks = list(chunked_iterable(used_queries, chunk_size))
 
-            # Function to be executed by each worker process
-            def worker_function(chunk, result_queue):
-                self.__class__.init_client(
-                    self.host,
-                    distance,
-                    self.connection_params,
-                    self.search_params,
-                )
-                self.setup_search()
-                results = process_chunk(chunk, search_one)
-                result_queue.put(results)
-
             # Create a queue to collect results
             result_queue = Queue()
 
             # Create worker processes
             processes = []
             for chunk in query_chunks:
-                process = Process(target=worker_function, args=(chunk, result_queue))
+                process = Process(target=worker_function, args=(self, distance, search_one, chunk, result_queue))
                 processes.append(process)
-
-            # Start measuring time for the critical work
-            start = time.perf_counter()
 
             # Start worker processes
             for process in processes:
@@ -178,12 +167,17 @@ class BaseSearcher:
 
             # Collect results from all worker processes
             results = []
+            min_start_time = time.perf_counter()
             for _ in processes:
-                chunk_results = result_queue.get()
+                proc_start_time, chunk_results = result_queue.get()
                 results.extend(chunk_results)
+                
+                # Update min_start_time if necessary
+                if proc_start_time < min_start_time:
+                    min_start_time = proc_start_time
 
             # Stop measuring time for the critical work
-            total_time = time.perf_counter() - start
+            total_time = time.perf_counter() - min_start_time
 
             # Wait for all worker processes to finish
             for process in processes:
@@ -226,13 +220,21 @@ def chunked_iterable(iterable, size):
     while chunk := list(islice(it, size)):
         yield chunk
 
+# Function to be executed by each worker process
+def worker_function(self, distance, search_one, chunk, result_queue):
+    self.init_client(
+        self.host,
+        distance,
+        self.connection_params,
+        self.search_params,
+    )
+    self.setup_search()
+
+    start_time = time.perf_counter()
+    results = process_chunk(chunk, search_one)
+    result_queue.put((start_time, results))
 
 def process_chunk(chunk, search_one):
     """Process a chunk of queries using the search_one function."""
     # No progress bar in worker processes to avoid cluttering the output
     return [search_one(query) for query in chunk]
-
-
-def process_chunk_wrapper(chunk, search_one):
-    """Wrapper to process a chunk of queries."""
-    return process_chunk(chunk, search_one)

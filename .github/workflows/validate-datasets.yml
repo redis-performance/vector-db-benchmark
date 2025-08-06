@@ -1,0 +1,44 @@
+name: Validate Datasets
+
+on:
+  push:
+    paths:
+      - 'datasets/datasets.json'
+      - 'run.py'
+      - 'benchmark/dataset.py'
+      - '.github/workflows/validate-datasets.yml'
+  pull_request:
+    paths:
+      - 'datasets/datasets.json'
+      - 'run.py'
+      - 'benchmark/dataset.py'
+      - '.github/workflows/validate-datasets.yml'
+
+jobs:
+  validate-datasets:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: Install dependencies
+      run: |
+        poetry install --no-root
+        
+    - name: Validate datasets.json
+      run: |
+        echo "Running dataset validation..."
+        poetry run python scripts/validate_datasets.py

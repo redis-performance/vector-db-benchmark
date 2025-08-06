@@ -1,8 +1,49 @@
 # vector-db-benchmark
 
-![Screenshot from 2022-08-23 14-10-01](https://user-images.githubusercontent.com/1935623/186516524-a61098d4-bca6-4aeb-acbe-d969cf30674e.png)
+A comprehensive benchmarking tool for vector databases, including Redis (both RediSearch and Vector Sets), Weaviate, Milvus, Qdrant, OpenSearch, Postgres, and others...
 
-> [View results](https://qdrant.tech/benchmarks/)
+In a one-liner cli tool you can get this and much more:
+
+```
+docker run --rm --network=host redis/vector-db-benchmark:latest run.py --host localhost --engines vectorsets-fp32-default --datasets glove-100-angular --parallels 100
+(...)
+================================================================================
+BENCHMARK RESULTS SUMMARY
+Experiment: vectorsets-fp32-default - glove-100-angular
+================================================================================
+
+Precision vs Performance Trade-off:
+--------------------------------------------------
+Precision  QPS      P50 (ms)   P95 (ms)  
+--------------------------------------------------
+0.86       1408.3   61.877     107.548   
+0.80       2136.3   38.722     69.102    
+0.72       2954.3   25.820     48.072    
+0.68       3566.5   20.229     38.581    
+
+QPS vs Precision Trade-off - vectorsets-fp32-default - glove-100-angular (up and to the right is better):
+
+  3566 │●                                                           
+       │             ●                                              
+       │                                                            
+  2594 │                                                            
+       │                                       ●                    
+       │                                                            
+  1621 │                                                           ●
+       │                                                            
+       │                                                            
+   648 │                                                            
+       │                                                            
+       │                                                            
+     0 │                                                            
+       └────────────────────────────────────────────────────────────
+        0.680          0.726          0.772          0.817          
+        Precision (0.0 = 0%, 1.0 = 100%)
+================================================================================
+
+```
+
+> [View results](https://redis.io/blog/benchmarking-results-for-vector-databases/)
 
 There are various vector search engines available, and each of them may offer
 a different set of features and efficiency. But how do we measure the
@@ -16,19 +57,137 @@ scenario against which it should be tested. A specific scenario may assume
 running the server in a single or distributed mode, a different client
 implementation and the number of client instances.
 
+
+## Quick Start
+
+### Quick Start with Docker
+
+The easiest way to run vector-db-benchmark is using Docker. We provide pre-built images on Docker Hub.
+
+```bash
+# Pull the latest image
+docker pull redis/vector-db-benchmark:latest
+
+# Run with help
+docker run --rm redis/vector-db-benchmark:latest run.py --help
+
+# Check which datasets are available
+docker run --rm redis/vector-db-benchmark:latest run.py --describe datasets
+
+# Basic Redis benchmark with local Redis
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  redis/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --datasets glove-25-angular
+
+# At the end of the run, you will find the results in the `results` directory. Lets open the summary one, in the precision summary
+
+$ jq ".precision_summary" results/*-summary.json
+{
+  "0.91": {
+    "qps": 1924.5,
+    "p50": 49.828,
+    "p95": 58.427
+  },
+  "0.94": {
+    "qps": 1819.9,
+    "p50": 51.68,
+    "p95": 66.83
+  },
+  "0.9775": {
+    "qps": 1477.8,
+    "p50": 65.368,
+    "p95": 73.849
+  },
+  "0.9950": {
+    "qps": 1019.8,
+    "p50": 95.115,
+    "p95": 106.73
+  }
+}
+```
+
+### Using with Redis
+
+For testing with Redis, start a Redis container first:
+
+```bash
+# Start Redis container
+docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
+
+# Run benchmark against Redis
+
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  redis/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --dataset random-100
+
+# Or use the convenience script
+./docker-run.sh -H localhost -e redis-default-simple -d random-100
+
+
+# Clean up Redis container when done
+docker stop redis-test && docker rm redis-test
+```
+
+### Available Docker Images
+
+- **Latest**: `redis/vector-db-benchmark:latest`
+
+For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
+
+
 ## Data sets
 
 We have a number of precomputed data sets. All data sets have been pre-split into train/test and include ground truth data for the top-100 nearest neighbors.
 
 | Dataset                                                                                                     | Dimensions |  Train size | Test size | Neighbors | Distance  |
 | ----------------------------------------------------------------------------------------------------------- | ---------: |  ---------: | --------: | --------: | --------- |
-| [LAION-1M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)   |        512 |   1,000,000 |    10,000 |       100 | Angular   |
-| [LAION-10M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  10,000,000 |    10,000 |       100 | Angular   |
-| [LAION-20M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  20,000,000 |    10,000 |       100 | Angular   |
-| [LAION-40M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  40,000,000 |    10,000 |       100 | Angular   |
-| [LAION-100M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 100,000,000 |    10,000 |       100 | Angular   |
-| [LAION-200M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 200,000,000 |    10,000 |       100 | Angular   |
-| [LAION-400M: from LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)      |        512 | 400,000,000 |    10,000 |       100 | Angular   |
+| **LAION Image Embeddings (512D)**                                                                          |            |             |           |           |           |
+| [LAION-1M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)   |        512 |   1,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-10M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  10,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-20M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  20,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-40M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)  |        512 |  40,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-100M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 100,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-200M: subset of LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/) |        512 | 200,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-400M: from LAION 400M English (image embedings)](https://laion.ai/blog/laion-400-open-dataset/)      |        512 | 400,000,000 |    10,000 |       100 | Cosine    |
+| **LAION Image Embeddings (768D)**                                                                          |            |             |           |           |           |
+| [LAION-1M: 768D image embeddings](https://laion.ai/blog/laion-400-open-dataset/)                           |        768 |   1,000,000 |    10,000 |       100 | Cosine    |
+| [LAION-1B: 768D image embeddings](https://laion.ai/blog/laion-400-open-dataset/)                           |        768 | 1,000,000,000|   10,000 |       100 | Cosine    |
+| **Standard Benchmarks**                                                                                    |            |             |           |           |           |
+| [GloVe-25: Word vectors](http://ann-benchmarks.com)                                                        |         25 |   1,183,514 |    10,000 |       100 | Cosine    |
+| [GloVe-100: Word vectors](http://ann-benchmarks.com)                                                       |        100 |   1,183,514 |    10,000 |       100 | Cosine    |
+| [Deep Image-96: CNN image features](http://ann-benchmarks.com)                                             |         96 |   9,990,000 |    10,000 |       100 | Cosine    |
+| [GIST-960: Image descriptors](http://ann-benchmarks.com)                                                   |        960 |   1,000,000 |     1,000 |       100 | L2        |
+| **Text and Knowledge Embeddings**                                                                          |            |             |           |           |           |
+| [DBpedia OpenAI-1M: Knowledge embeddings](https://www.dbpedia.org/)                                       |      1,536 |   1,000,000 |    10,000 |       100 | Cosine    |
+| [LAION Small CLIP: Small CLIP embeddings](https://laion.ai/blog/laion-400-open-dataset/)                   |        512 |     100,000 |     1,000 |       100 | Cosine    |
+| **Yandex Datasets**                                                                                        |            |             |           |           |           |
+| [Yandex T2I: Text-to-image embeddings](https://research.yandex.com/)                                      |        200 |   1,000,000 |   100,000 |       100 | Dot       |
+| **Random and Synthetic**                                                                                   |            |             |           |           |           |
+| Random-100: Small synthetic dataset                                                                        |        100 |         100 |         9 |         9 | Cosine    |
+| Random-100-Euclidean: Small synthetic dataset                                                              |        100 |         100 |         9 |         9 | L2        |
+| **Filtered Search Datasets**                                                                               |            |             |           |           |           |
+| H&M-2048: Fashion product embeddings (with filters)                                                        |      2,048 |     105,542 |     2,000 |       100 | Cosine    |
+| H&M-2048: Fashion product embeddings (no filters)                                                          |      2,048 |     105,542 |     2,000 |       100 | Cosine    |
+| ArXiv-384: Academic paper embeddings (with filters)                                                        |        384 |   2,205,995 |    10,000 |       100 | Cosine    |
+| ArXiv-384: Academic paper embeddings (no filters)                                                          |        384 |   2,205,995 |    10,000 |       100 | Cosine    |
+| Random Match Keyword-100: Synthetic keyword matching (with filters)                                        |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Keyword-100: Synthetic keyword matching (no filters)                                          |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Int-100: Synthetic integer matching (with filters)                                            |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Int-100: Synthetic integer matching (no filters)                                              |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Range-100: Synthetic range queries (with filters)                                                   |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Range-100: Synthetic range queries (no filters)                                                     |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Geo Radius-100: Synthetic geo queries (with filters)                                                |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Geo Radius-100: Synthetic geo queries (no filters)                                                  |        100 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Keyword-2048: Large synthetic keyword matching (with filters)                                 |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Keyword-2048: Large synthetic keyword matching (no filters)                                   |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Int-2048: Large synthetic integer matching (with filters)                                     |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Int-2048: Large synthetic integer matching (no filters)                                       |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Range-2048: Large synthetic range queries (with filters)                                            |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Range-2048: Large synthetic range queries (no filters)                                              |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Geo Radius-2048: Large synthetic geo queries (with filters)                                         |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Geo Radius-2048: Large synthetic geo queries (no filters)                                           |      2,048 |     100,000 |     1,000 |       100 | Cosine    |
+| Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (with filters)                     |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
+| Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (no filters)                       |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 
 
 ## How to run a benchmark?
@@ -61,20 +220,18 @@ poetry install
 Run the benchmark:
 
 ```bash
-Usage: run.py [OPTIONS]
+# Basic usage examples
+python run.py --engines redis-default-simple --dataset random-100
+python run.py --engines redis-default-simple --dataset glove-25-angular
+python run.py --engines "*-m-16-*" --dataset "glove-*"
 
-  Example: python3 -m run --engines *-m-16-* --datasets glove-*
+# Docker usage (recommended)
+docker run --rm -v $(pwd)/results:/app/results --network=host \
+  redis/vector-db-benchmark:latest \
+  run.py --host localhost --engines redis-default-simple --dataset random-100
 
-Options:
-  --engines TEXT                  [default: *]
-  --datasets TEXT                 [default: *]
-  --host TEXT                     [default: localhost]
-  --skip-upload / --no-skip-upload
-                                  [default: no-skip-upload]
-  --install-completion            Install completion for the current shell.
-  --show-completion               Show completion for the current shell, to
-                                  copy it or customize the installation.
-  --help                          Show this message and exit.
+# Get help
+python run.py --help
 ```
 
 Command allows you to specify wildcards for engines and datasets.

@@ -1,7 +1,6 @@
 import random
 from typing import List, Tuple
 
-import numpy as np
 from redis import Redis, RedisCluster
 
 
@@ -42,7 +41,7 @@ class RedisVsetSearcher(BaseSearcher):
     @classmethod
     def search_one(cls, vector, meta_conditions, top) -> List[Tuple[int, float]]:
         ef = cls.search_params["search_params"]["ef"]
-        response = cls.client.execute_command("VSIM", "idx", "FP32", np.array(vector).astype(np.float32).tobytes(), "WITHSCORES", "COUNT", top, "EF", ef)
+        response = cls.client.execute_command("VSIM", "idx", "FP32", vector, "WITHSCORES", "COUNT", top, "EF", ef)
         # decode responses
         # every even cell is id, every odd is the score
         # scores needs to be 1 - scores since on vector sets 1 is identical, 0 is opposite vector

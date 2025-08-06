@@ -8,7 +8,7 @@ from engine.base_client.distances import Distance
 from engine.clients.pgvector.config import get_db_config
 
 
-class PgVectorConfigurator(BaseConfigurator):
+class PgvectorConfigurator(BaseConfigurator):
     DISTANCE_MAPPING = {
         Distance.L2: "vector_l2_ops",
         Distance.COSINE: "vector_cosine_ops",
