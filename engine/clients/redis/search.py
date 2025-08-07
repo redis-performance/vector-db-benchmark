@@ -87,8 +87,14 @@ class RedisSearcher(BaseSearcher):
             .dialect(4)
             .timeout(REDIS_QUERY_TIMEOUT)
         )
+        # Handle case where vector is already in bytes format (after commit a9a7488)
+        if isinstance(vector, bytes):
+            vec_param = vector
+        else:
+            vec_param = np.array(vector).astype(cls.np_data_type).tobytes()
+            
         params_dict = {
-            "vec_param": np.array(vector).astype(cls.np_data_type).tobytes(),
+            "vec_param": vec_param,
             "K": top,
             **params,
         }
