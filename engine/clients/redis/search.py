@@ -1,9 +1,9 @@
 import random
 from typing import List, Tuple
-from ml_dtypes import bfloat16
 import numpy as np
 from redis import Redis, RedisCluster
 from redis.commands.search.query import Query
+from engine.base_client.utils import check_data_type
 from engine.base_client.search import BaseSearcher
 from engine.clients.redis.config import (
     REDIS_PORT,
@@ -44,13 +44,7 @@ class RedisSearcher(BaseSearcher):
             cls.data_type = (
                 cls.search_params["search_params"].get("data_type", "FLOAT32").upper()
             )
-        cls.np_data_type = np.float32
-        if cls.data_type == "FLOAT64":
-            cls.np_data_type = np.float64
-        if cls.data_type == "FLOAT16":
-            cls.np_data_type = np.float16
-        if cls.data_type == "BFLOAT16":
-            cls.np_data_type = bfloat16
+        cls.np_data_type = check_data_type(cls.data_type)
         cls._is_cluster = True if REDIS_CLUSTER else False
 
         # In the case of CLUSTER API enabled we randomly select the starting primary shard
