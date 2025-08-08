@@ -7,6 +7,7 @@ import random
 import numpy as np
 from redis import Redis, RedisCluster
 from engine.base_client.upload import BaseUploader
+from engine.base_client.utils import check_data_type
 from engine.clients.redis.config import (
     REDIS_PORT,
     REDIS_AUTH,
@@ -42,13 +43,7 @@ class RedisUploader(BaseUploader):
         cls.upload_params = upload_params
         cls.algorithm = cls.upload_params.get("algorithm", "hnsw").upper()
         cls.data_type = cls.upload_params.get("data_type", "FLOAT32").upper()
-        cls.np_data_type = np.float32
-        if cls.data_type == "FLOAT64":
-            cls.np_data_type = np.float64
-        if cls.data_type == "FLOAT16":
-            cls.np_data_type = np.float16
-        if cls.data_type == "BFLOAT16":
-            cls.np_data_type = bfloat16
+        cls.np_data_type = check_data_type(cls.data_type)
         cls._is_cluster = True if REDIS_CLUSTER else False
 
     @classmethod
