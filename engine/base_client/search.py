@@ -7,8 +7,10 @@ from itertools import islice
 import numpy as np
 import tqdm
 import os
+from ml_dtypes import bfloat16
 
 from dataset_reader.base_reader import Query
+from engine.base_client.utils import check_data_type
 
 DEFAULT_TOP = 10
 MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
@@ -66,6 +68,11 @@ class BaseSearcher:
     ):
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
+        single_search_params = self.search_params.get("search_params", None)
+        if single_search_params:
+            data_type = check_data_type(single_search_params.get("data_type", "FLOAT32").upper())
+        else:
+            data_type = np.float32  # Default data type if not specified
         # setup_search may require initialized client
         self.init_client(
             self.host, distance, self.connection_params, self.search_params
@@ -78,7 +85,7 @@ class BaseSearcher:
         # Also, converts query vectors to bytes beforehand, preparing them for sending to client without affecting search time measurements
         queries_list = []
         for query in queries:
-            query.vector = np.array(query.vector).astype(np.float32).tobytes()
+            query.vector = np.array(query.vector).astype(data_type).tobytes()
             queries_list.append(query)
         
         # Handle MAX_QUERIES environment variable
