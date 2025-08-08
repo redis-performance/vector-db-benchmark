@@ -1,6 +1,5 @@
 import random
 from typing import List, Tuple
-from ml_dtypes import bfloat16
 import numpy as np
 from redis import Redis, RedisCluster
 from redis.commands.search.query import Query
