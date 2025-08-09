@@ -272,10 +272,41 @@ def run(
 ```
 
 ### **Configuration**
+
+#### **Mixed Workload Parameters**
 ```json
 {
   "mixed_workload_params": {
     "insert_workers": 2
+  }
+}
+```
+
+#### **Redis Engine Configurations**
+
+**RediSearch Configuration**
+```json
+{
+  "search_params": {
+    "algorithm": "hnsw",
+    "search_params": {"ef": 200, "data_type": "FLOAT32"},
+    "upload_params": {
+      "data_type": "FLOAT32",
+      "parallel": 1,
+      "batch_size": 64
+    }
+  }
+}
+```
+
+**Vector Sets Configuration**  
+```json
+{
+  "search_params": {
+    "search_params": {"ef": 200},
+    "upload_params": {
+      "hnsw_config": {"M": 16, "EF_CONSTRUCTION": 200, "quant": "NOQUANT"}
+    }
   }
 }
 ```
@@ -381,35 +412,6 @@ vector_bytes = np.array(vector).astype(np.float32).tobytes()
 - **Automatic**: Both use existing cluster-aware connections
 - **Load Balancing**: Insert workers distribute across shards naturally  
 - **Connection Reuse**: Same connection pool as search operations
-
-### **Configuration Parameters**
-
-**RediSearch Configuration**
-```json
-{
-  "search_params": {
-    "algorithm": "hnsw",
-    "search_params": {"ef": 200, "data_type": "FLOAT32"},
-    "upload_params": {
-      "data_type": "FLOAT32",
-      "parallel": 1,
-      "batch_size": 64
-    }
-  }
-}
-```
-
-**Vector Sets Configuration**  
-```json
-{
-  "search_params": {
-    "search_params": {"ef": 200},
-    "upload_params": {
-      "hnsw_config": {"M": 16, "EF_CONSTRUCTION": 200, "quant": "NOQUANT"}
-    }
-  }
-}
-```
 
 ---
 
