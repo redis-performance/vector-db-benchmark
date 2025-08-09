@@ -1,3 +1,9 @@
+
+## TODO
+Instead of having a separate pool of search and insert workers, have a single pool as before. 
+However, some fraction of search requests will be converted to inserts. Reuse the test_set for vector inserts, and do not use random vectors. 
+
+
 # **Mixed Workload Implementation Plan**
 *Simple Strategy for Concurrent Search and Insert Operations*
 
