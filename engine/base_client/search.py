@@ -44,7 +44,7 @@ class BaseSearcher:
 
     @classmethod
     def insert_one(
-        cls, vector: List[float], meta_conditions, top: Optional[int]
+        cls, vector: List[float], meta_conditions
     ) -> List[Tuple[int, float]]:
         raise NotImplementedError()
 
@@ -67,11 +67,20 @@ class BaseSearcher:
             precision = len(ids.intersection(query.expected_result[:top])) / top
         return precision, end - start
 
+    @classmethod
+    def _insert_one(cls, query):
+        start = time.perf_counter()
+        cls.insert_one(query.vector, query.meta_conditions)
+        end = time.perf_counter()
+        # No precision metric for inserts, so precision=1.0
+        return 1.0, end - start
+
     def search_all(
         self,
         distance,
         queries: Iterable[Query],
         num_queries: int = -1,
+        insert_fraction: float = 0.0,
     ):
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
@@ -87,6 +96,7 @@ class BaseSearcher:
         self.setup_search()
 
         search_one = functools.partial(self.__class__._search_one, top=top)
+        insert_one = functools.partial(self.__class__._insert_one)
 
         # Convert queries to a list for potential reuse
         # Also, converts query vectors to bytes beforehand, preparing them for sending to client without affecting search time measurements
@@ -172,7 +182,8 @@ class BaseSearcher:
             # Create worker processes
             processes = []
             for chunk in query_chunks:
-                process = Process(target=worker_function, args=(self, distance, search_one, chunk, result_queue))
+                process = Process(target=worker_function, args=(self, distance, search_one, insert_one, 
+                                                                chunk, result_queue, insert_fraction))
                 processes.append(process)
 
             # Start worker processes
