@@ -68,8 +68,14 @@ def worker_function(self, distance, search_one, insert_one, chunk, result_queue,
 **File 3: `BaseSearcher.search_all()`**
 - When creating worker processes, pass `search_one`, `insert_one`, and `insert_fraction` as arguments to each worker.
 
-**File 4: Engine-specific `insert_one` implementations** (~5 lines each)
+**File 4: Base and Engine-specific `insert_one` implementations**
 ```python
+# In engine/base_client/search.py
+@classmethod
+def insert_one(cls, query):
+    """Insert a single vector - must be implemented by each engine."""
+    raise NotImplementedError("insert_one must be implemented by each engine")
+
 # Example: engine/clients/redis/search.py
 @classmethod
 def insert_one(cls, query):
@@ -80,14 +86,13 @@ def insert_one(cls, query):
         mapping={"vector": query.vector, **(getattr(query, 'metadata', {}) or {})}
     )
 
-# Example: engine/clients/qdrant/search.py  
+# Example: engine/clients/vectorsets/search.py
 @classmethod
 def insert_one(cls, query):
-    """Qdrant-specific single vector insert from a Query object"""
-    cls.client.upsert(
-        collection_name=QDRANT_COLLECTION_NAME,
-        points=[{"id": query.id, "vector": query.vector, "payload": getattr(query, 'metadata', {}) or {}}],
-        wait=False,
+    """Redis Vector Sets single vector insert from a Query object"""
+    # Extract params as needed from query or config
+    cls.client.execute_command(
+        "VADD", "idx", "FP32", query.vector, query.id, "NOQUANT", "M", 16, "EF", 200, "CAS"
     )
 ```
 
