@@ -102,28 +102,19 @@ class RedisSearcher(BaseSearcher):
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]
 
-    @classmethod
-    def insert_one(cls, doc_id: int, vector, metadata: dict = None):
-        """
-        Insert a single vector and optional metadata into Redis.
-        Designed for mixed workload support.
-        """
-        if cls.client is None:
-            raise RuntimeError("Redis client not initialized")
+@classmethod
+def insert_one(cls, doc_id: int, vector, meta_conditions):
+    if cls.client is None:
+        raise RuntimeError("Redis client not initialized")
 
-        # Convert vector to correct binary format
-        if isinstance(vector, bytes):
-            vec_param = vector
-        else:
-            vec_param = np.array(vector, dtype=cls.np_data_type).tobytes()
+    if not isinstance(vector, bytes):
+        vec_param = np.array(vector, dtype=cls.np_data_type).tobytes()
+    else:
+        vec_param = vector
 
-        # Prepare the document for Redis
-        doc = {"vector": vec_param}
-        if metadata:
-            # Flatten metadata into string fields Redis can store
-            for k, v in metadata.items():
-                doc[k] = str(v)
+    doc = {"vector": vec_param}
+    if meta_conditions:
+        for k, v in meta_conditions.items():
+            doc[k] = str(v)
 
-        # Use Redis hash to store the document
-        # You might use JSON.SET if your index expects JSON
-        cls.client.hset(f"doc:{doc_id}", mapping=doc)
+    cls.client.hset(f"doc:{doc_id}", mapping=doc)

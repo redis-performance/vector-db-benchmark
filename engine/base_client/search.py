@@ -1,5 +1,6 @@
 import functools
 import random
+import itertools
 import time
 from multiprocessing import Process, Queue
 from typing import Iterable, List, Optional, Tuple
@@ -19,6 +20,7 @@ MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
 
 
 class BaseSearcher:
+    _doc_id_counter = itertools.count(1)
     MP_CONTEXT = None
 
     def __init__(self, host, connection_params, search_params):
@@ -43,9 +45,7 @@ class BaseSearcher:
         raise NotImplementedError()
 
     @classmethod
-    def insert_one(
-        cls, vector: List[float], meta_conditions
-    ) -> List[Tuple[int, float]]:
+    def insert_one(cls, doc_id: int, vector: List[float], meta_conditions):
         raise NotImplementedError()
 
     @classmethod
@@ -70,7 +70,11 @@ class BaseSearcher:
     @classmethod
     def _insert_one(cls, query):
         start = time.perf_counter()
-        cls.insert_one(query.vector, query.meta_conditions)
+
+        # Generate unique doc_id here
+        doc_id = next(cls._doc_id_counter)
+
+        cls.insert_one(doc_id, query.vector, query.meta_conditions)
         end = time.perf_counter()
         # No precision metric for inserts, so precision=1.0
         return 1.0, end - start
