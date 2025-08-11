@@ -43,13 +43,11 @@ Flow: Search + Concurrent Inserts (reuses existing data)
 
 **File 1: `engine/base_client/search.py`**
 ```python
-def process_chunk(chunk, search_one, insert_one, insert_fraction=0.1, test_set=None):
+def process_chunk(chunk, search_one, insert_one, insert_fraction=0.1):
     results = []
     for i, query in enumerate(chunk):
         if random.random() < insert_fraction:
-            # Insert: use a vector from test_set
-            vector_id, vector, metadata = test_set[i % len(test_set)]
-            result = insert_one(vector_id, vector, metadata)
+            result = insert_one(query)
         else:
             # Search
             result = search_one(query)
@@ -59,35 +57,36 @@ def process_chunk(chunk, search_one, insert_one, insert_fraction=0.1, test_set=N
 
 **File 2: `worker_function`**
 ```python
-def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.1, test_set=None):
+def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.1):
     self.init_client(self.host, distance, self.connection_params, self.search_params)
     self.setup_search()
     start_time = time.perf_counter()
-    results = process_chunk(chunk, search_one, insert_one, insert_fraction, test_set)
+    results = process_chunk(chunk, search_one, insert_one, insert_fraction)
     result_queue.put((start_time, results))
 ```
 
 **File 3: `BaseSearcher.search_all()`**
-- When creating worker processes, pass `search_one`, `insert_one`, `insert_fraction`, and `test_set` as arguments to each worker.
+- When creating worker processes, pass `search_one`, `insert_one`, and `insert_fraction` as arguments to each worker.
 
 **File 4: Engine-specific `insert_one` implementations** (~5 lines each)
 ```python
 # Example: engine/clients/redis/search.py
 @classmethod
-def insert_one(cls, vector_id: int, vector: List[float], metadata: Optional[dict] = None):
-    """Redis-specific single vector insert"""
+def insert_one(cls, query):
+    """Redis-specific single vector insert from a Query object"""
+    # Extract vector_id, vector, metadata from query as needed
     cls.client.hset(
-        str(vector_id),
-        mapping={"vector": np.array(vector).astype(np.float32).tobytes(), **(metadata or {})}
+        str(query.id),
+        mapping={"vector": query.vector, **(getattr(query, 'metadata', {}) or {})}
     )
 
 # Example: engine/clients/qdrant/search.py  
 @classmethod
-def insert_one(cls, vector_id: int, vector: List[float], metadata: Optional[dict] = None):
-    """Qdrant-specific single vector insert"""
+def insert_one(cls, query):
+    """Qdrant-specific single vector insert from a Query object"""
     cls.client.upsert(
         collection_name=QDRANT_COLLECTION_NAME,
-        points=[{"id": vector_id, "vector": vector, "payload": metadata or {}}],
+        points=[{"id": query.id, "vector": query.vector, "payload": getattr(query, 'metadata', {}) or {}}],
         wait=False,
     )
 ```
