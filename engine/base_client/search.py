@@ -1,4 +1,5 @@
 import functools
+import random
 import time
 from multiprocessing import Process, Queue
 from typing import Iterable, List, Optional, Tuple
@@ -37,6 +38,12 @@ class BaseSearcher:
 
     @classmethod
     def search_one(
+        cls, vector: List[float], meta_conditions, top: Optional[int]
+    ) -> List[Tuple[int, float]]:
+        raise NotImplementedError()
+
+    @classmethod
+    def insert_one(
         cls, vector: List[float], meta_conditions, top: Optional[int]
     ) -> List[Tuple[int, float]]:
         raise NotImplementedError()
@@ -228,7 +235,7 @@ def chunked_iterable(iterable, size):
         yield chunk
 
 # Function to be executed by each worker process
-def worker_function(self, distance, search_one, chunk, result_queue):
+def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.0):
     self.init_client(
         self.host,
         distance,
@@ -238,10 +245,17 @@ def worker_function(self, distance, search_one, chunk, result_queue):
     self.setup_search()
 
     start_time = time.perf_counter()
-    results = process_chunk(chunk, search_one)
+    results = process_chunk(chunk, search_one, insert_one, insert_fraction)
     result_queue.put((start_time, results))
 
-def process_chunk(chunk, search_one):
-    """Process a chunk of queries using the search_one function."""
-    # No progress bar in worker processes to avoid cluttering the output
-    return [search_one(query) for query in chunk]
+
+def process_chunk(chunk, search_one, insert_one, insert_fraction):
+    results = []
+    for i, query in enumerate(chunk):
+        if random.random() < insert_fraction:
+            result = insert_one(query)
+        else:
+            # Search
+            result = search_one(query)
+        results.append(result)
+    return results
