@@ -1,6 +1,6 @@
 [
   {
-    "name": "dbpedia-cal-hnsw-float16",
+    "name": "dbpedia-cal-hnsw-float16-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -33,7 +33,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-hnsw-float32",
+    "name": "dbpedia-cal-hnsw-float32-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -66,7 +66,7 @@
     }
   },
 {
-    "name": "dbpedia-cal-svs-noquant-float16",
+    "name": "dbpedia-cal-svs-noquant-float16-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -100,7 +100,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-noquant-float32",
+    "name": "dbpedia-cal-svs-noquant-float32-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -134,7 +134,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-LVQ4X8-float16",
+    "name": "dbpedia-cal-svs-LVQ4X8-float16-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -169,7 +169,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-LVQ4X8-float32",
+    "name": "dbpedia-cal-svs-LVQ4X8-float32-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -204,7 +204,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-LVQ4X4-float32",
+    "name": "dbpedia-cal-svs-LVQ4X4-float32-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -239,7 +239,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-LVQ4X4-float16",
+    "name": "dbpedia-cal-svs-LVQ4X4-float16-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -274,7 +274,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-LeanVec4x8-float16",
+    "name": "dbpedia-cal-svs-LeanVec4x8-float16-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
@@ -309,7 +309,7 @@
     }
   },
   {
-    "name": "dbpedia-cal-svs-LeanVec4x8-float32",
+    "name": "dbpedia-cal-svs-LeanVec4x8-float32-mixed",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
