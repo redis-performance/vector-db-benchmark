@@ -1,37 +1,10 @@
 
-## TODO
-Implement a single pool of workers. For each task, a worker randomly chooses to perform a search or an insert, based on a configurable `insert_fraction` parameter. For inserts, reuse vectors from the test set (not random vectors).
-
-
-# **Mixed Workload Implementation Plan**
-*Simple Strategy for Concurrent Search and Insert Operations*
-
-**Date:** August 8, 2025  
-**Repository:** redis-scripts/vector-db-benchmark  
-**Branch:** mixed_workload  
 
 ---
 
 ## **Overview**
 
 Add mixed workload capabilities to vector-db-benchmark to measure search performance under concurrent insert load. This enables realistic testing of production scenarios where vector databases handle both read and write traffic simultaneously.
-
-### **Core Approach**
-- **Concurrent Operations**: Search existing vectors while inserting new ones
-- **Shared Graph**: Both operations work on the same HNSW graph structure  
-- **Insert-Only**: Append new vectors (no updates/deletes) to avoid accuracy complications
-- **Performance Focus**: Measure search QPS and latency degradation under insert load
-
----
-
-## **Implementation Strategy**
-
-### **Ultra-Simple Design**
-- **Reuse Everything**: Leverage existing search and upload infrastructure
-- **Zero New Files**: No new classes, configs, or dependencies
-- **Unified Worker Pool**: Extend existing worker pattern to handle both search and insert tasks
-- **Existing CLI Patterns**: Just add `--mixed-workload` flag
-
 
 ### **Technical Approach**
 ```python
@@ -65,70 +38,37 @@ Flow: Search + Concurrent Inserts (reuses existing data)
 
 ## **Implementation Details**
 
-### **Code Changes Required**
 
+### **Code Changes Required**
 
 **File 1: `engine/base_client/search.py`**
 ```python
-# Add insert_one method to BaseSearcher for consistency (engine-specific)
-# Add insert_fraction parameter to control insert/search ratio
-
-def worker_function(self, distance, chunk, result_queue, insert_fraction=0.1, test_set=None):
-    self.init_client(
-        self.host,
-        distance, 
-        self.connection_params,
-        self.search_params,
-    )
-    self.setup_search()
-
-    start_time = time.perf_counter()
+def process_chunk(chunk, search_one, insert_one, insert_fraction=0.1, test_set=None):
     results = []
     for i, query in enumerate(chunk):
         if random.random() < insert_fraction:
-            # Do insert using test_set[i % len(test_set)]
+            # Insert: use a vector from test_set
             vector_id, vector, metadata = test_set[i % len(test_set)]
-            result = self._insert_one((vector_id, vector, metadata))
+            result = insert_one(vector_id, vector, metadata)
         else:
-            result = self._search_one(query)
+            # Search
+            result = search_one(query)
         results.append(result)
+    return results
+```
+
+**File 2: `worker_function`**
+```python
+def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.1, test_set=None):
+    self.init_client(self.host, distance, self.connection_params, self.search_params)
+    self.setup_search()
+    start_time = time.perf_counter()
+    results = process_chunk(chunk, search_one, insert_one, insert_fraction, test_set)
     result_queue.put((start_time, results))
 ```
 
-
-**File 2: `engine/base_client/client.py`**
-```python
-def run_experiment(
-    # ... existing parameters ...
-    mixed_workload_params: Optional[dict] = None,
-):
-    if mixed_workload_params:
-        insert_fraction = mixed_workload_params.get("insert_fraction", 0.1)
-        test_set = ... # load or pass test set vectors
-        # Pass insert_fraction and test_set to searchers
-        return self._run_mixed_workload(dataset, insert_fraction, test_set, num_queries)
-    # ... existing code unchanged ...
-
-def _run_mixed_workload(self, dataset, insert_fraction, test_set, num_queries):
-    self.searchers[0].search_params["mixed_workload"] = {
-        "insert_fraction": insert_fraction,
-        "test_set": test_set,
-        "dataset": dataset
-    }
-    results = self.searchers[0].search_all(
-        dataset.config.distance, dataset.get_queries(), num_queries,
-        insert_fraction=insert_fraction, test_set=test_set
-    )
-    self.searchers[0].search_params.pop("mixed_workload", None)
-    return {"search": results}
-```
-
-**File 3: Extend `BaseSearcher.search_all()`** (~15 lines)
-```python
 **File 3: `BaseSearcher.search_all()`**
-- No need to create separate insert/search processes.
-- All workers use the same function and decide per-task.
-```
+- When creating worker processes, pass `search_one`, `insert_one`, `insert_fraction`, and `test_set` as arguments to each worker.
 
 **File 4: Engine-specific `insert_one` implementations** (~5 lines each)
 ```python
@@ -399,11 +339,12 @@ vector_bytes = np.array(vector).astype(np.float32).tobytes()
 
 **Total: ~7 hours**
 
----
-
-## **Summary**
-
-**Goal**: Measure search performance under concurrent insert load  
-**Approach**: Perfect consistency using insert_one mirroring search_one pattern  
-**Changes**: ~60 lines across 4+ files  
-**Benefits**: Architectural consistency with single-operation semantics
+**File 2: `worker_function`**
+```python
+def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.1, test_set=None):
+    self.init_client(self.host, distance, self.connection_params, self.search_params)
+    self.setup_search()
+    start_time = time.perf_counter()
+    results = process_chunk(chunk, search_one, insert_one, insert_fraction, test_set)
+    result_queue.put((start_time, results))
+```
