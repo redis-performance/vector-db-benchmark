@@ -1,7 +1,6 @@
 
 ## TODO
-Instead of having a separate pool of search and insert workers, have a single pool as before. 
-However, some fraction of search requests will be converted to inserts. Reuse the test_set for vector inserts, and do not use random vectors. 
+Implement a single pool of workers. For each task, a worker randomly chooses to perform a search or an insert, based on a configurable `insert_fraction` parameter. For inserts, reuse vectors from the test set (not random vectors).
 
 
 # **Mixed Workload Implementation Plan**
@@ -33,11 +32,13 @@ Add mixed workload capabilities to vector-db-benchmark to measure search perform
 - **Unified Worker Pool**: Extend existing worker pattern to handle both search and insert tasks
 - **Existing CLI Patterns**: Just add `--mixed-workload` flag
 
+
 ### **Technical Approach**
 ```python
-# Extend existing BaseSearcher.search_all() to support mixed workloads
-# Some workers get search chunks, others get insert tasks
-# Same worker_function pattern, different task types
+# In BaseSearcher.search_all() or equivalent:
+# - Each worker processes a chunk of tasks (queries).
+# - For each task, with probability insert_fraction, do an insert (using test_set vector), else do a search.
+# - Use a parameter like insert_fraction to control the ratio.
 ```
 
 ---
@@ -66,29 +67,13 @@ Flow: Search + Concurrent Inserts (reuses existing data)
 
 ### **Code Changes Required**
 
-**File 1: `engine/base_client/search.py`** (~25 lines)
+
+**File 1: `engine/base_client/search.py`**
 ```python
-# Add insert_one method to BaseSearcher for consistency
-@classmethod
-def insert_one(cls, vector_id: int, vector: List[float], metadata: Optional[dict] = None):
-    """Insert a single vector - raw database operation (like search_one)"""
-    # Delegate to uploader's upload_batch with single item
-    # This will be overridden by engines that have direct insert methods
-    raise NotImplementedError("insert_one must be implemented by each engine")
+# Add insert_one method to BaseSearcher for consistency (engine-specific)
+# Add insert_fraction parameter to control insert/search ratio
 
-@classmethod
-def _insert_one(cls, insert_record):
-    """Timed insert operation (like _search_one)"""
-    vector_id, vector, metadata = insert_record
-    start = time.perf_counter()
-    cls.insert_one(vector_id, vector, metadata)
-    end = time.perf_counter()
-    
-    # Return consistent metrics (no precision for inserts)
-    return 1.0, end - start  # Always "successful", return latency
-
-# Extend worker_function to support both task types
-def worker_function(self, distance, task_func, chunk_or_task, result_queue):
+def worker_function(self, distance, chunk, result_queue, insert_fraction=0.1, test_set=None):
     self.init_client(
         self.host,
         distance, 
@@ -98,86 +83,51 @@ def worker_function(self, distance, task_func, chunk_or_task, result_queue):
     self.setup_search()
 
     start_time = time.perf_counter()
-    results = task_func(chunk_or_task)  # process_chunk OR process_insert_chunk
+    results = []
+    for i, query in enumerate(chunk):
+        if random.random() < insert_fraction:
+            # Do insert using test_set[i % len(test_set)]
+            vector_id, vector, metadata = test_set[i % len(test_set)]
+            result = self._insert_one((vector_id, vector, metadata))
+        else:
+            result = self._search_one(query)
+        results.append(result)
     result_queue.put((start_time, results))
-
-# Mirror process_chunk for inserts
-def process_insert_chunk(insert_chunk):
-    """Process insert operations (mirrors process_chunk)"""
-    # insert_chunk contains insert records instead of queries
-    # Same pattern as search: [task_func(item) for item in chunk]
-    return [BaseSearcher._insert_one(record) for record in insert_chunk]
 ```
 
-**File 2: `engine/base_client/client.py`** (~15 lines)
+
+**File 2: `engine/base_client/client.py`**
 ```python
 def run_experiment(
     # ... existing parameters ...
-    mixed_workload_params: Optional[dict] = None,  # NEW
+    mixed_workload_params: Optional[dict] = None,
 ):
     if mixed_workload_params:
-        # Generate insert chunks and modify searcher for mixed workload
-        return self._run_mixed_workload(dataset, mixed_workload_params, num_queries)
+        insert_fraction = mixed_workload_params.get("insert_fraction", 0.1)
+        test_set = ... # load or pass test set vectors
+        # Pass insert_fraction and test_set to searchers
+        return self._run_mixed_workload(dataset, insert_fraction, test_set, num_queries)
     # ... existing code unchanged ...
 
-def _run_mixed_workload(self, dataset, mixed_params, num_queries):
-    """Generate insert records and configure searcher for unified workers"""
-    insert_workers = mixed_params.get("insert_workers", 2)
-    
-    # Generate insert chunks (same pattern as query chunks)
-    insert_chunk_size = 100  # Inserts per chunk
-    insert_chunks = []
-    for worker_id in range(insert_workers):
-        vector_id_start = 1000000 + worker_id * 100000
-        chunk = []
-        for i in range(insert_chunk_size):
-            vector = np.random.random(dataset.config.vector_size).astype(np.float32).tolist()
-            chunk.append((vector_id_start + i, vector, {}))
-        insert_chunks.append(chunk)
-    
-    # Configure searcher for mixed workload
+def _run_mixed_workload(self, dataset, insert_fraction, test_set, num_queries):
     self.searchers[0].search_params["mixed_workload"] = {
-        "insert_chunks": insert_chunks,
+        "insert_fraction": insert_fraction,
+        "test_set": test_set,
         "dataset": dataset
     }
-    
-    # Run normal search_all (now processes both search and insert chunks)
-    results = self.searchers[0].search_all(dataset.config.distance, dataset.get_queries(), num_queries)
-    
-    # Cleanup
+    results = self.searchers[0].search_all(
+        dataset.config.distance, dataset.get_queries(), num_queries,
+        insert_fraction=insert_fraction, test_set=test_set
+    )
     self.searchers[0].search_params.pop("mixed_workload", None)
-    
     return {"search": results}
 ```
 
 **File 3: Extend `BaseSearcher.search_all()`** (~15 lines)
 ```python
-# In BaseSearcher.search_all(), around line 160 where processes are created:
-
-# Check if mixed workload is enabled
-mixed_config = self.search_params.get("mixed_workload", None)
-if mixed_config:
-    insert_chunks = mixed_config["insert_chunks"]
-    
-    # Create search worker processes (unchanged)
-    search_processes = []
-    for chunk in query_chunks:
-        process = Process(target=worker_function, args=(self, distance, process_chunk, chunk, result_queue))
-        search_processes.append(process)
-    
-    # Create insert worker processes (same pattern!)
-    insert_processes = []
-    for chunk in insert_chunks:
-        process = Process(target=worker_function, args=(self, distance, process_insert_chunk, chunk, result_queue))
-        insert_processes.append(process)
-    
-    processes = search_processes + insert_processes
-else:
-    # Original search-only processes
-    processes = []
-    for chunk in query_chunks:
-        process = Process(target=worker_function, args=(self, distance, process_chunk, chunk, result_queue))
-        processes.append(process)
+**File 3: `BaseSearcher.search_all()`**
+- No need to create separate insert/search processes.
+- All workers use the same function and decide per-task.
 ```
 
 **File 4: Engine-specific `insert_one` implementations** (~5 lines each)
@@ -279,12 +229,13 @@ def run(
 
 ### **Configuration**
 
+
 #### **Mixed Workload Parameters**
 ```json
 {
-  "mixed_workload_params": {
-    "insert_workers": 2
-  }
+    "mixed_workload_params": {
+        "insert_fraction": 0.1
+    }
 }
 ```
 
@@ -326,10 +277,10 @@ def run(
     "mean_precisions": 0.945,
     "p95_time": 0.103,
     "mixed_workload": {
-      "insert_count": 360, 
-      "insert_rate": 6.8,
-      "insert_workers": 2,
-      "search_workers": 6
+    "insert_count": 360, 
+    "insert_rate": 6.8,
+    "insert_fraction": 0.1,
+    "search_workers": 8
     }
   }
 }
@@ -455,4 +406,4 @@ vector_bytes = np.array(vector).astype(np.float32).tobytes()
 **Goal**: Measure search performance under concurrent insert load  
 **Approach**: Perfect consistency using insert_one mirroring search_one pattern  
 **Changes**: ~60 lines across 4+ files  
-**Benefits**: Architectural consistency with single-operation semantics  
+**Benefits**: Architectural consistency with single-operation semantics
