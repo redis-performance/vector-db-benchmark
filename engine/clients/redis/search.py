@@ -102,19 +102,19 @@ class RedisSearcher(BaseSearcher):
 
         return [(int(result.id), float(result.vector_score)) for result in results.docs]
 
-@classmethod
-def insert_one(cls, doc_id: int, vector, meta_conditions):
-    if cls.client is None:
-        raise RuntimeError("Redis client not initialized")
+    @classmethod
+    def insert_one(cls, doc_id: int, vector, meta_conditions):
+        if cls.client is None:
+            raise RuntimeError("Redis client not initialized")
 
-    if not isinstance(vector, bytes):
-        vec_param = np.array(vector, dtype=cls.np_data_type).tobytes()
-    else:
-        vec_param = vector
+        if not isinstance(vector, bytes):
+            vec_param = np.array(vector, dtype=cls.np_data_type).tobytes()
+        else:
+            vec_param = vector
 
-    doc = {"vector": vec_param}
-    if meta_conditions:
-        for k, v in meta_conditions.items():
-            doc[k] = str(v)
+        doc = {"vector": vec_param}
+        if meta_conditions:
+            for k, v in meta_conditions.items():
+                doc[k] = str(v)
 
-    cls.client.hset(f"doc:{doc_id}", mapping=doc)
+        cls.client.hset(str(doc_id), mapping=doc)

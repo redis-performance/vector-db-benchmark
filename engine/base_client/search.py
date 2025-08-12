@@ -74,7 +74,7 @@ class BaseSearcher:
         # Generate unique doc_id here
         doc_id = next(cls._doc_id_counter)
 
-        cls.insert_one(doc_id, query.vector, query.meta_conditions)
+        cls.insert_one(str(doc_id), query.vector, query.meta_conditions)
         end = time.perf_counter()
         # No precision metric for inserts, so precision=1.0
         return 1.0, end - start
@@ -267,7 +267,8 @@ def worker_function(self, distance, search_one, insert_one, chunk, result_queue,
 def process_chunk(chunk, search_one, insert_one, insert_fraction):
     results = []
     for i, query in enumerate(chunk):
-        if random.random() < insert_fraction:
+        #if random.random() < insert_fraction:
+        if random.random() < 0.5:
             result = insert_one(query)
         else:
             # Search
