@@ -1303,7 +1303,9 @@
     "distance": "dot",
     "type": "h5",
     "path": "cohere-768-1M/cohere-768-1M.hdf5",
-    "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-1m.hdf5.bz2"
+    "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-1m.hdf5.bz2",
+    "vector_count": 1000000,
+    "description": "Wikipedia embeddings"
   },
   {
     "name": "cohere-768-10M",
@@ -1311,6 +1313,8 @@
     "distance": "dot",
     "type": "h5",
     "path": "cohere-768-10M/cohere-768-10M.hdf5",
-    "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-10m.hdf5.bz2"
+    "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-10m.hdf5.bz2",
+    "vector_count": 10000000,
+    "description": "Wikipedia embeddings"
   }
 ]
