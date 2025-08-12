@@ -86,6 +86,7 @@ class BaseSearcher:
         num_queries: int = -1,
         insert_fraction: float = 0.0,
     ):
+        insert_fraction = self.search_params.get("insert_fraction", 0.0)
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
         single_search_params = self.search_params.get("search_params", None)
@@ -267,8 +268,7 @@ def worker_function(self, distance, search_one, insert_one, chunk, result_queue,
 def process_chunk(chunk, search_one, insert_one, insert_fraction):
     results = []
     for i, query in enumerate(chunk):
-        #if random.random() < insert_fraction:
-        if random.random() < 0.5:
+        if random.random() < insert_fraction:
             result = insert_one(query)
         else:
             # Search
