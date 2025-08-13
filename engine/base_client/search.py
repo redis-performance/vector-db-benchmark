@@ -20,7 +20,7 @@ MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
 
 
 class BaseSearcher:
-    _doc_id_counter = itertools.count(1)
+    _doc_id_counter = itertools.count(1000000)
     MP_CONTEXT = None
 
     def __init__(self, host, connection_params, search_params):
@@ -86,8 +86,6 @@ class BaseSearcher:
         num_queries: int = -1,
         insert_fraction: float = 0.0,
     ):
-        print(f"In base_client/search_all. insert_fraction {insert_fraction}")
-
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
         single_search_params = self.search_params.get("search_params", None)
