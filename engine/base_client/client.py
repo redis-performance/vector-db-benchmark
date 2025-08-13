@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import warnings
+import random
 
 from benchmark import ROOT_DIR
 from benchmark.dataset import Dataset
@@ -174,7 +175,18 @@ class BaseClient:
         upload_end_idx: int = -1,
         num_queries: int = -1,
         ef_runtime: List[int] = [],
+        mixed_workload_params: dict = None,
     ):
+
+        # Extract mixed workload parameters
+        insert_fraction = 0.0
+        if mixed_workload_params:
+            insert_fraction = mixed_workload_params.get("insert_fraction", 0.1)
+            seed = mixed_workload_params.get("seed", None)
+            if seed is not None:
+                random.seed(seed)  # Set seed for reproducible patterns
+
+            print(f"In run_experiment. insert_fraction: {insert_fraction} seed: {seed}" )
         results = {"upload": {}, "search": {}}
         execution_params = self.configurator.execution_params(
             distance=dataset.config.distance, vector_size=dataset.config.vector_size
@@ -273,7 +285,7 @@ class BaseClient:
                     )
 
                     search_stats = searcher.search_all(
-                        dataset.config.distance, reader.read_queries(), num_queries
+                        dataset.config.distance, reader.read_queries(), num_queries, insert_fraction
                     )
                     # ensure we specify the client count in the results
                     search_params["parallel"] = client_count

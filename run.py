@@ -30,10 +30,14 @@ def run(
     ef_runtime: List[int] = typer.Option([], help="Filter search experiments by ef runtime values. Only experiments with these ef values will be run."),
     describe: str = typer.Option(None, help="Describe available options: 'datasets' or 'engines'. When used, shows information and exits."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed information when using --describe"),
+    mixed_workload: bool = typer.Option(False, help="Enable mixed workload mode"),
+    insert_fraction: float = typer.Option(0.1, help="Fraction of operations that are inserts (0.0-1.0)"),
+    mixed_workload_seed: int = typer.Option(None, help="Random seed for reproducible mixed workload patterns"),
 ):
     """
     Example:
         python3 run.py --engines *-m-16-* --engines qdrant-* --datasets glove-*
+        python3 run.py --engines redis --datasets glove-* --mixed-workload --insert-fraction 0.2
         python3 run.py --describe datasets
         python3 run.py --describe engines --verbose
     """
@@ -64,6 +68,14 @@ def run(
         if any(fnmatch.fnmatch(name, dataset) for dataset in datasets)
     }
 
+    mixed_params = {}
+    if mixed_workload:
+        mixed_params = {
+            "insert_fraction": insert_fraction,
+            "seed": mixed_workload_seed
+        }
+        print(f"Running mixed workload. insert_fraction: {insert_fraction} random_seed: {mixed_workload_seed}")
+
     for engine_name, engine_config in selected_engines.items():
         for dataset_name, dataset_config in selected_datasets.items():
             print(f"Running experiment: {engine_name} - {dataset_name}")
@@ -88,6 +100,7 @@ def run(
                         upload_end_idx,
                         queries,
                         ef_runtime,
+                        mixed_workload_params=mixed_params
                     )
                 client.delete_client()
 

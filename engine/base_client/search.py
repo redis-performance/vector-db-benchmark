@@ -86,7 +86,8 @@ class BaseSearcher:
         num_queries: int = -1,
         insert_fraction: float = 0.0,
     ):
-        insert_fraction = self.search_params.get("insert_fraction", 0.0)
+        print(f"In base_client/search_all. insert_fraction {insert_fraction}")
+
         parallel = self.search_params.get("parallel", 1)
         top = self.search_params.get("top", None)
         single_search_params = self.search_params.get("search_params", None)
@@ -271,7 +272,6 @@ def process_chunk(chunk, search_one, insert_one, insert_fraction):
         if random.random() < insert_fraction:
             result = insert_one(query)
         else:
-            # Search
             result = search_one(query)
         results.append(result)
     return results

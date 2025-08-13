@@ -28,6 +28,10 @@
       "parallel": 100,
       "algorithm": "hnsw",
       "data_type": "FLOAT16"
+    },
+    "mixed_workload_params": {
+        "insert_fraction": 0.1,
+        "seed": 42
     }
   },
   {
@@ -59,6 +63,10 @@
       "parallel": 100,
       "algorithm": "hnsw",
       "data_type": "FLOAT32"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
 {
@@ -91,6 +99,10 @@
       "parallel": 100,
       "data_type": "FLOAT16",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -123,6 +135,10 @@
       "parallel": 100,
       "data_type": "FLOAT32",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -156,6 +172,10 @@
       "parallel": 100,
       "data_type": "FLOAT16",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -189,6 +209,10 @@
       "parallel": 100,
       "data_type": "FLOAT32",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -222,6 +246,10 @@
       "parallel": 100,
       "data_type": "FLOAT32",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -255,6 +283,10 @@
       "parallel": 100,
       "data_type": "FLOAT16",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -288,6 +320,10 @@
       "parallel": 100,
       "data_type": "FLOAT16",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   },
   {
@@ -321,6 +357,10 @@
       "parallel": 100,
       "data_type": "FLOAT32",
       "algorithm": "svs-vamana"
+    },
+    "mixed_workload_params": {
+      "insert_fraction": 0.1,
+      "seed": 42
     }
   }
 ]
