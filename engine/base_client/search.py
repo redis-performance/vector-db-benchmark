@@ -272,9 +272,7 @@ def process_chunk(chunk, search_one, insert_one, insert_fraction):
     for i, query in enumerate(chunk):
         if random.random() < insert_fraction:
             result = insert_one(query)
-            insert_count += 1
         else:
             result = search_one(query)
-            search_count += 1
         results.append(result)
     return results

@@ -138,13 +138,16 @@ class RedisSearcher(BaseSearcher):
                 if isinstance(v, dict)
             }
 
-        #print(f"DEBUG: Redis inserting doc_id={doc_id}, vector_size={len(vec_param)} bytes")
-        cls.client.hset(
-            str(doc_id),
-            mapping={
-                "vector": vec_param,
-                **payload,
-                **geopoints,
-            },
-        )
-        #print(f"DEBUG: Redis insert complete for doc_id={doc_id}")
+        try:
+            res = cls.client.hset(
+                str(doc_id),
+                mapping={
+                    "vector": vec_param,
+                    **payload,
+                    **geopoints,
+                },
+            )
+            if res == 0:
+                print(f"ERROR: Redis hset did not create a new key for doc_id={doc_id}")
+        except Exception as e:
+            print(f"ERROR: Redis hset failed for doc_id={doc_id}: {e}")
