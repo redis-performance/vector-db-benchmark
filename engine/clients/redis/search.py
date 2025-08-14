@@ -117,4 +117,6 @@ class RedisSearcher(BaseSearcher):
             for k, v in meta_conditions.items():
                 doc[k] = str(v)
 
+        print(f"DEBUG: Redis inserting doc_id={doc_id}, vector_size={len(vec_param)} bytes")
         cls.client.hset(str(doc_id), mapping=doc)
+        print(f"DEBUG: Redis insert complete for doc_id={doc_id}")
