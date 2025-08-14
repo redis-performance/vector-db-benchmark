@@ -20,7 +20,7 @@ MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
 
 
 class BaseSearcher:
-    _doc_id_counter = itertools.count(1000000)
+    _doc_id_counter = itertools.count(100000000)
     MP_CONTEXT = None
 
     def __init__(self, host, connection_params, search_params):
