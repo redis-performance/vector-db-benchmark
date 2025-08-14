@@ -20,7 +20,7 @@ MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
 
 
 class BaseSearcher:
-    _doc_id_counter = itertools.count(1000000)
+    _doc_id_counter = itertools.count(1000000000)  # Start from 1 billion to avoid conflicts
     MP_CONTEXT = None
 
     def __init__(self, host, connection_params, search_params):
@@ -73,6 +73,9 @@ class BaseSearcher:
 
         # Generate unique doc_id here
         doc_id = next(cls._doc_id_counter)
+        
+        # Debug logging to verify inserts are happening
+        #print(f"DEBUG: Inserting vector with doc_id={doc_id}")
 
         cls.insert_one(str(doc_id), query.vector, query.meta_conditions)
         end = time.perf_counter()
@@ -266,10 +269,19 @@ def worker_function(self, distance, search_one, insert_one, chunk, result_queue,
 
 def process_chunk(chunk, search_one, insert_one, insert_fraction):
     results = []
+    insert_count = 0
+    search_count = 0
+    
+    #print(f"DEBUG: Processing chunk of {len(chunk)} queries with insert_fraction={insert_fraction}")
+    
     for i, query in enumerate(chunk):
         if random.random() < insert_fraction:
             result = insert_one(query)
+            insert_count += 1
         else:
             result = search_one(query)
+            search_count += 1
         results.append(result)
+    
+    #print(f"DEBUG: Chunk complete - {search_count} searches, {insert_count} inserts")
     return results
