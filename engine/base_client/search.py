@@ -20,7 +20,7 @@ MAX_QUERIES = int(os.getenv("MAX_QUERIES", -1))
 
 
 class BaseSearcher:
-    _doc_id_counter = itertools.count(100000000)
+    _doc_id_counter = None  # Will be initialized per process
     MP_CONTEXT = None
 
     def __init__(self, host, connection_params, search_params):
@@ -68,14 +68,21 @@ class BaseSearcher:
         return precision, end - start
 
     @classmethod
+    def _get_doc_id_counter(cls):
+        if cls._doc_id_counter is None:
+            # Use process ID to create unique starting point for each worker
+            process_id = os.getpid()
+            # Each process gets a unique range: 1000000000 + (pid * 1000000)
+            start_offset = 1000000000 + (process_id % 1000) * 1000000
+            cls._doc_id_counter = itertools.count(start_offset)
+        return cls._doc_id_counter
+
+    @classmethod
     def _insert_one(cls, query):
         start = time.perf_counter()
 
-        # Generate unique doc_id here
-        doc_id = next(cls._doc_id_counter)
-        
-        # Debug logging to verify inserts are happening
-        #print(f"DEBUG: Inserting vector with doc_id={doc_id}")
+        # Generate unique doc_id with process-safe counter
+        doc_id = next(cls._get_doc_id_counter())
 
         cls.insert_one(str(doc_id), query.vector, query.meta_conditions)
         end = time.perf_counter()
