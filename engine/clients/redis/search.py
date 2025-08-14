@@ -112,11 +112,39 @@ class RedisSearcher(BaseSearcher):
         else:
             vec_param = vector
 
-        doc = {"vector": vec_param}
-        if meta_conditions:
-            for k, v in meta_conditions.items():
-                doc[k] = str(v)
+        # Process metadata exactly like upload_batch does
+        meta = meta_conditions if meta_conditions else {}
+        geopoints = {}
+        payload = {}
+        
+        if meta is not None:
+            for k, v in meta.items():
+                # This is a patch for arxiv-titles dataset where we have a list of "labels", and
+                # we want to index all of them under the same TAG field (whose separator is ';').
+                if k == "labels":
+                    payload[k] = ";".join(v)
+                if (
+                    v is not None
+                    and not isinstance(v, dict)
+                    and not isinstance(v, list)
+                ):
+                    payload[k] = v
+            # Redis treats geopoints differently and requires putting them as
+            # a comma-separated string with lat and lon coordinates
+            from engine.clients.redis.helper import convert_to_redis_coords
+            geopoints = {
+                k: ",".join(map(str, convert_to_redis_coords(v["lon"], v["lat"])))
+                for k, v in meta.items()
+                if isinstance(v, dict)
+            }
 
-        print(f"DEBUG: Redis inserting doc_id={doc_id}, vector_size={len(vec_param)} bytes")
-        cls.client.hset(str(doc_id), mapping=doc)
-        print(f"DEBUG: Redis insert complete for doc_id={doc_id}")
+        #print(f"DEBUG: Redis inserting doc_id={doc_id}, vector_size={len(vec_param)} bytes")
+        cls.client.hset(
+            str(doc_id),
+            mapping={
+                "vector": vec_param,
+                **payload,
+                **geopoints,
+            },
+        )
+        #print(f"DEBUG: Redis insert complete for doc_id={doc_id}")
