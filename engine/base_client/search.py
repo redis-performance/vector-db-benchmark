@@ -266,10 +266,19 @@ def worker_function(self, distance, search_one, insert_one, chunk, result_queue,
 
 def process_chunk(chunk, search_one, insert_one, insert_fraction):
     results = []
+    insert_count = 0
+    search_count = 0
+
+    #print(f"DEBUG: processing chunk of {len(chunk)} queries with insert_fraction={insert_fraction}")
+
     for i, query in enumerate(chunk):
         if random.random() < insert_fraction:
             result = insert_one(query)
+            insert_count += 1
         else:
             result = search_one(query)
+            search_count += 1
         results.append(result)
+
+    #print(f"DEBUG: chunk complete. {search_count} searches, {insert_count} inserts")
     return results
