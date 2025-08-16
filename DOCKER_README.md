@@ -58,7 +58,7 @@ docker run --rm redis/vector-db-benchmark:latest run.py --describe datasets
 # Basic Redis benchmark (requires local Redis)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
+  run.py --host localhost --engines redis-default-simple --datasets random-100
 ```
 
 ## Features
@@ -78,12 +78,12 @@ docker run --rm -v $(pwd)/results:/app/results --network=host \
 ### Redis 8.2 with RediSearch
 ```bash
 # Start Redis 8.2 with built-in vector support
-docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
+docker run -d --name redis-test -p 6379:6379 redis:8.2-bookworm
 
 # Run benchmark
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset glove-25-angular
+  run.py --host localhost --engines redis-default-simple --datasets glove-25-angular
 ```
 
 
@@ -103,18 +103,18 @@ docker run --rm redis/vector-db-benchmark:latest run.py --describe engines
 # Quick test with small dataset
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
+  run.py --host localhost --engines redis-default-simple --datasets random-100
 
 # Comprehensive benchmark with multiple configurations
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines "*redis*" --dataset glove-25-angular
+  run.py --host localhost --engines "*redis*" --datasets glove-25-angular
 
 # With Redis authentication
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   -e REDIS_AUTH=mypassword -e REDIS_USER=myuser \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
+  run.py --host localhost --engines redis-default-simple --datasets random-100
 ```
 
 ### Results Analysis

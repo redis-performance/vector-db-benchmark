@@ -973,12 +973,52 @@
     "description": "Image embeddings"
   },
   {
+    "name": "dbpedia-openai-1M-512-angular",
+    "vector_size": 512,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "dbpedia-openai-1M-512-angular/dbpedia_openai_1M",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/dbpedia/dbpedia-openai-1M-text-embedding-3-large-512d.hdf5",
+    "vector_count": 1000000,
+    "description": "Knowledge embeddings"
+  },
+  {
+    "name": "dbpedia-openai-1M-1024-angular",
+    "vector_size": 1024,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "dbpedia-openai-1M-1024-angular/dbpedia_openai_1M",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/dbpedia/dbpedia-openai-1M-text-embedding-3-large-1024d.hdf5",
+    "vector_count": 1000000,
+    "description": "Knowledge embeddings"
+  },
+  {
     "name": "dbpedia-openai-1M-1536-angular",
     "vector_size": 1536,
     "distance": "cosine",
-    "type": "tar",
+    "type": "h5",
     "path": "dbpedia-openai-1M-1536-angular/dbpedia_openai_1M",
-    "link": "https://storage.googleapis.com/ann-filtered-benchmark/datasets/dbpedia_openai_1M.tgz",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/dbpedia/dbpedia-openai-1M-text-embedding-3-large-1536d.hdf5",
+    "vector_count": 1000000,
+    "description": "Knowledge embeddings"
+  },
+  {
+    "name": "dbpedia-openai-1M-2048-angular",
+    "vector_size": 2048,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "dbpedia-openai-1M-2048-angular/dbpedia_openai_1M",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/dbpedia/dbpedia-openai-1M-text-embedding-3-large-2048d.hdf5",
+    "vector_count": 1000000,
+    "description": "Knowledge embeddings"
+  },
+  {
+    "name": "dbpedia-openai-1M-3072-angular",
+    "vector_size": 3072,
+    "distance": "cosine",
+    "type": "h5",
+    "path": "dbpedia-openai-1M-3072-angular/dbpedia_openai_1M",
+    "link": "http://benchmarks.redislabs.s3.amazonaws.com/vecsim/dbpedia/dbpedia-openai-1M-text-embedding-3-large-3072d.hdf5",
     "vector_count": 1000000,
     "description": "Knowledge embeddings"
   },
