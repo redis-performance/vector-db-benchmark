@@ -112,13 +112,13 @@ For testing with Redis, start a Redis container first:
 
 ```bash
 # Start Redis container
-docker run -d --name redis-test -p 6379:6379 redis:8.2-rc1-bookworm
+docker run -d --name redis-test -p 6379:6379 redis:8.2-bookworm
 
 # Run benchmark against Redis
 
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
+  run.py --host localhost --engines redis-default-simple --datasets random-100
 
 # Or use the convenience script
 ./docker-run.sh -H localhost -e redis-default-simple -d random-100
@@ -221,14 +221,14 @@ Run the benchmark:
 
 ```bash
 # Basic usage examples
-python run.py --engines redis-default-simple --dataset random-100
-python run.py --engines redis-default-simple --dataset glove-25-angular
-python run.py --engines "*-m-16-*" --dataset "glove-*"
+python run.py --engines redis-default-simple --datasets random-100
+python run.py --engines redis-default-simple --datasets glove-25-angular
+python run.py --engines "*-m-16-*" --datasets "glove-*"
 
 # Docker usage (recommended)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --dataset random-100
+  run.py --host localhost --engines redis-default-simple --datasets random-100
 
 # Get help
 python run.py --help

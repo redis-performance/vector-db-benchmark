@@ -1,6 +1,10 @@
 import fnmatch
 import traceback
+import warnings
 from typing import List
+
+# Suppress the pkg_resources deprecation warning from stopit
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
 
 import stopit
 import typer
