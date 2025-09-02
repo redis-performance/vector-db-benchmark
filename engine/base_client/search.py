@@ -156,13 +156,10 @@ class BaseSearcher:
             total_query_count = len(used_queries)
 
         if parallel == 1:
-            # Create a progress bar with the correct total
-            pbar = tqdm.tqdm(total=total_query_count, desc="Processing queries", unit="queries")
-
             # Single-threaded execution
             start = time.perf_counter()
 
-            # Process queries with progress updates
+            # Process queries
             results = []
             total_insert_count = 0
             total_search_count = 0
@@ -180,10 +177,7 @@ class BaseSearcher:
                     total_search_count += 1
                     all_search_latencies.append(latency)
                     results.append(('search', precision, latency))
-                pbar.update(1)
 
-            # Close the progress bar
-            pbar.close()
             total_time = time.perf_counter() - start
         else:
             # Dynamically calculate chunk size based on total_query_count
