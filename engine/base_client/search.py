@@ -109,6 +109,9 @@ class BaseSearcher:
         )
         self.setup_search()
 
+        # Reset the doc_id counter to prevent any initialization during client setup
+        self.__class__._doc_id_counter = None
+
         search_one = functools.partial(self.__class__._search_one, top=top)
         insert_one = functools.partial(self.__class__._insert_one)
 
@@ -155,88 +158,184 @@ class BaseSearcher:
             used_queries = queries_list
             total_query_count = len(used_queries)
 
-        if parallel == 1:
-            # Single-threaded execution
-            start = time.perf_counter()
-
-            # Process queries
-            results = []
-            total_insert_count = 0
-            total_search_count = 0
-            all_insert_latencies = []
-            all_search_latencies = []
-            
-            for query in used_queries:
-                if random.random() < insert_fraction:
-                    precision, latency = insert_one(query)
-                    total_insert_count += 1
-                    all_insert_latencies.append(latency)
-                    results.append(('insert', precision, latency))
-                else:
-                    precision, latency = search_one(query)
-                    total_search_count += 1
-                    all_search_latencies.append(latency)
-                    results.append(('search', precision, latency))
-
-            total_time = time.perf_counter() - start
+        # Interval reporting setup
+        interval_size = 10000  # Report every 10K operations 
+        need_interval_reporting = total_query_count >= interval_size
+        interval_counter = 0
+        overall_start_time = time.perf_counter()
+        
+        # Calculate total number of intervals for progress tracking
+        total_intervals = (total_query_count + interval_size - 1) // interval_size  # Ceiling division
+        
+        # Initialize progress bar for intervals if needed (only if output is to terminal)
+        if need_interval_reporting and os.isatty(1):  # Check if stdout is a terminal
+            interval_pbar = tqdm.tqdm(total=total_intervals, desc="Intervals", unit="interval")
         else:
-            # Dynamically calculate chunk size based on total_query_count
-            chunk_size = max(1, total_query_count // parallel)
-
-            # If used_queries is a generator, we need to handle it differently
-            if hasattr(used_queries, '__next__'):
-                # For generators, we'll create chunks on-the-fly
-                query_chunks = []
-                remaining = total_query_count
-                while remaining > 0:
-                    current_chunk_size = min(chunk_size, remaining)
-                    chunk = [next(used_queries) for _ in range(current_chunk_size)]
-                    query_chunks.append(chunk)
-                    remaining -= current_chunk_size
-            else:
-                # For lists, we can use the chunked_iterable function
-                query_chunks = list(chunked_iterable(used_queries, chunk_size))
-
-            # Create a queue to collect results
-            result_queue = Queue()
-
-            # Create worker processes
-            processes = []
-            for chunk in query_chunks:
-                process = Process(target=worker_function, args=(self, distance, search_one, insert_one, 
-                                                                chunk, result_queue, insert_fraction))
-                processes.append(process)
-
-            # Start worker processes
-            for process in processes:
-                process.start()
-
-            # Collect results from all worker processes
-            results = []
-            total_insert_count = 0
-            total_search_count = 0
-            all_insert_latencies = []
-            all_search_latencies = []
-            min_start_time = time.perf_counter()
-
-            for _ in processes:
-                proc_start_time, chunk_results, insert_count, search_count, insert_latencies, search_latencies = result_queue.get()
-                results.extend(chunk_results)
-                total_insert_count += insert_count
-                total_search_count += search_count
-                all_insert_latencies.extend(insert_latencies)
-                all_search_latencies.extend(search_latencies)
+            interval_pbar = None
+        
+        # Initialize global doc_id offset to ensure uniqueness across intervals
+        global_doc_id_offset = 0
+        
+        # Overall accumulators
+        overall_results = []
+        overall_insert_count = 0
+        overall_search_count = 0
+        overall_insert_latencies = []
+        overall_search_latencies = []
+        
+        # Interval statistics for output file
+        interval_stats = []
+        
+        # Convert generator to iterator for interval processing
+        query_iterator = iter(used_queries)
+        
+        # Process queries in intervals of 10K
+        while True:
+            # Get next interval chunk (up to 10K queries)
+            interval_queries = list(islice(query_iterator, interval_size))
+            if not interval_queries:
+                break  # No more queries
                 
-                # Update min_start_time if necessary
-                if proc_start_time < min_start_time:
-                    min_start_time = proc_start_time
+            interval_counter += 1
+            current_interval_size = len(interval_queries)
+            
+            if parallel == 1:
+                # Single-threaded execution for this interval
+                interval_start = time.perf_counter()
+                
+                # Force reset and set doc_id counter offset for single-threaded execution
+                # This ensures we override any previous initialization
+                self.__class__._doc_id_counter = itertools.count(global_doc_id_offset)
 
-            # Stop measuring time for the critical work
-            total_time = time.perf_counter() - min_start_time
+                # Process queries for this interval
+                interval_results = []
+                interval_insert_count = 0
+                interval_search_count = 0
+                interval_insert_latencies = []
+                interval_search_latencies = []
+                
+                for query in interval_queries:
+                    if random.random() < insert_fraction:
+                        precision, latency = insert_one(query)
+                        interval_insert_count += 1
+                        interval_insert_latencies.append(latency)
+                        interval_results.append(('insert', precision, latency))
+                    else:
+                        precision, latency = search_one(query)
+                        interval_search_count += 1
+                        interval_search_latencies.append(latency)
+                        interval_results.append(('search', precision, latency))
 
-            # Wait for all worker processes to finish
-            for process in processes:
-                process.join()
+                interval_time = time.perf_counter() - interval_start
+            else:
+                # Parallel execution for this interval
+                # Dynamically calculate chunk size based on current interval size
+                chunk_size = max(1, current_interval_size // parallel)
+
+                # For interval queries (always a list), use chunked_iterable
+                query_chunks = list(chunked_iterable(interval_queries, chunk_size))
+
+                # Create a queue to collect results
+                result_queue = Queue()
+
+                # Create worker processes
+                processes = []
+                for i, chunk in enumerate(query_chunks):
+                    # Calculate unique doc_id offset for this worker in this interval
+                    worker_doc_id_offset = global_doc_id_offset + (i * 1000000)
+                    process = Process(target=worker_function, args=(self, distance, search_one, insert_one, 
+                                                                    chunk, result_queue, insert_fraction, worker_doc_id_offset))
+                    processes.append(process)
+
+                # Start worker processes
+                for process in processes:
+                    process.start()
+
+                # Collect results from all worker processes
+                interval_results = []
+                interval_insert_count = 0
+                interval_search_count = 0
+                interval_insert_latencies = []
+                interval_search_latencies = []
+                min_start_time = time.perf_counter()
+
+                for _ in processes:
+                    proc_start_time, chunk_results, insert_count, search_count, insert_latencies, search_latencies = result_queue.get()
+                    interval_results.extend(chunk_results)
+                    interval_insert_count += insert_count
+                    interval_search_count += search_count
+                    interval_insert_latencies.extend(insert_latencies)
+                    interval_search_latencies.extend(search_latencies)
+                    
+                    # Update min_start_time if necessary
+                    if proc_start_time < min_start_time:
+                        min_start_time = proc_start_time
+
+                # Stop measuring time for the critical work
+                interval_time = time.perf_counter() - min_start_time
+
+                # Wait for all worker processes to finish
+                for process in processes:
+                    process.join()
+            
+            # Accumulate overall results
+            overall_results.extend(interval_results)
+            overall_insert_count += interval_insert_count
+            overall_search_count += interval_search_count
+            overall_insert_latencies.extend(interval_insert_latencies)
+            overall_search_latencies.extend(interval_search_latencies)
+            
+            # Update global doc_id offset for next interval
+            if parallel == 1:
+                # For single-threaded, reserve space based on actual inserts in this interval
+                global_doc_id_offset += max(1000000, interval_insert_count * 2)  # Some buffer
+            else:
+                # Reserve space for all parallel workers in this interval
+                global_doc_id_offset += parallel * 1000000
+            
+            # Report interval metrics if needed
+            if need_interval_reporting:
+                interval_search_precisions = [result[1] for result in interval_results if result[0] == 'search']
+                
+                # Create interval statistics for output file
+                interval_stat = {
+                    "interval": interval_counter,
+                    "operations": current_interval_size,
+                    "time_seconds": float(interval_time),  # Ensure it's a float
+                    "rps": float(current_interval_size / interval_time),  # Ensure it's a float
+                    "searches": interval_search_count,
+                    "inserts": interval_insert_count,
+                    "search_precision": float(np.mean(interval_search_precisions)) if interval_search_precisions else None
+                }
+                interval_stats.append(interval_stat)
+                
+                # Debug: Print number of intervals collected so far
+                print(f"DEBUG: Collected {len(interval_stats)} intervals so far", flush=True)
+                
+                # Update progress bar with same metrics (this goes to terminal)
+                if interval_pbar:
+                    interval_pbar.update(1)
+                    interval_pbar.set_postfix({
+                        'RPS': f"{current_interval_size / interval_time:.1f}",
+                        'Searches': interval_search_count,
+                        'Inserts': interval_insert_count,
+                        'Precision': f"{np.mean(interval_search_precisions):.4f}" if interval_search_precisions else "N/A"
+                    })
+        
+        # Close progress bar when done
+        if interval_pbar:
+            interval_pbar.close()
+            print()  # Add a blank line after progress bar
+        
+        # Calculate total time for overall metrics
+        total_time = time.perf_counter() - overall_start_time
+        
+        # Use overall accumulated results
+        results = overall_results
+        total_insert_count = overall_insert_count
+        total_search_count = overall_search_count
+        all_insert_latencies = overall_insert_latencies
+        all_search_latencies = overall_search_latencies
 
         # Extract overall precisions and latencies
         all_precisions = [result[1] for result in results]
@@ -246,6 +345,11 @@ class BaseSearcher:
         search_precisions = [result[1] for result in results if result[0] == 'search']
 
         self.__class__.delete_client()
+
+
+        if len(interval_stats) > 0:
+            print(f"DEBUG: First interval: {interval_stats[0]}", flush=True)
+            print(f"DEBUG: Last interval: {interval_stats[-1]}", flush=True)
 
         return {
             # Overall metrics
@@ -273,6 +377,9 @@ class BaseSearcher:
             # Mixed workload metrics
             "actual_insert_fraction": total_insert_count / len(all_latencies) if len(all_latencies) > 0 else 0,
             "target_insert_fraction": insert_fraction,
+            
+            # Interval statistics (only included if intervals were used)
+            "interval_stats": interval_stats if interval_stats else None,
             
             # Legacy compatibility (for existing code that expects these)
             "mean_time": np.mean(all_latencies),
@@ -326,7 +433,7 @@ def process_chunk(chunk, search_one, insert_one, insert_fraction):
     return results, insert_count, search_count, insert_latencies, search_latencies
 
 # Function to be executed by each worker process
-def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.0):
+def worker_function(self, distance, search_one, insert_one, chunk, result_queue, insert_fraction=0.0, doc_id_offset=0):
     self.init_client(
         self.host,
         distance,
@@ -334,6 +441,9 @@ def worker_function(self, distance, search_one, insert_one, chunk, result_queue,
         self.search_params,
     )
     self.setup_search()
+
+    # Force set the doc_id counter offset for this worker (overrides any previous state)
+    self.__class__._doc_id_counter = itertools.count(doc_id_offset)
 
     start_time = time.perf_counter()
     results, insert_count, search_count, insert_latencies, search_latencies = process_chunk(
