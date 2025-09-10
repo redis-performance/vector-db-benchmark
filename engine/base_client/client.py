@@ -180,8 +180,9 @@ class BaseClient:
 
         # Extract mixed workload parameters
         insert_fraction = 0.0
+        seed = None
         if mixed_workload_params:
-            insert_fraction = mixed_workload_params.get("insert_fraction", 0.1)
+            insert_fraction = mixed_workload_params.get("insert_fraction", 0.0)
             seed = mixed_workload_params.get("seed", None)
             if seed is not None:
                 random.seed(seed)  # Set seed for reproducible patterns

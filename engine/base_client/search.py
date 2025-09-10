@@ -297,12 +297,18 @@ class BaseSearcher:
             if need_interval_reporting:
                 interval_search_precisions = [result[1] for result in interval_results if result[0] == 'search']
                 
+                # Calculate separate RPS for searches and inserts
+                search_rps = interval_search_count / interval_time if interval_search_count > 0 else 0
+                insert_rps = interval_insert_count / interval_time if interval_insert_count > 0 else 0
+                
                 # Create interval statistics for output file
                 interval_stat = {
                     "interval": interval_counter,
                     "operations": current_interval_size,
                     "time_seconds": float(interval_time),  # Ensure it's a float
-                    "rps": float(current_interval_size / interval_time),  # Ensure it's a float
+                    "total_rps": float(current_interval_size / interval_time),  # Overall RPS
+                    "search_rps": float(search_rps),  # Search-only RPS
+                    "insert_rps": float(insert_rps),  # Insert-only RPS
                     "searches": interval_search_count,
                     "inserts": interval_insert_count,
                     "search_precision": float(np.mean(interval_search_precisions)) if interval_search_precisions else None
@@ -312,11 +318,13 @@ class BaseSearcher:
                 # Debug: Print number of intervals collected so far
                 print(f"DEBUG: Collected {len(interval_stats)} intervals so far", flush=True)
                 
-                # Update progress bar with same metrics (this goes to terminal)
+                # Update progress bar with separate RPS metrics
                 if interval_pbar:
                     interval_pbar.update(1)
                     interval_pbar.set_postfix({
-                        'RPS': f"{current_interval_size / interval_time:.1f}",
+                        'Total_RPS': f"{current_interval_size / interval_time:.1f}",
+                        'Search_RPS': f"{search_rps:.1f}",
+                        'Insert_RPS': f"{insert_rps:.1f}",
                         'Searches': interval_search_count,
                         'Inserts': interval_insert_count,
                         'Precision': f"{np.mean(interval_search_precisions):.4f}" if interval_search_precisions else "N/A"
