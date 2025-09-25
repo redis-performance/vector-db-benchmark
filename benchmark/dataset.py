@@ -1,6 +1,7 @@
 import os
 import shutil
 import tarfile
+import bz2
 import urllib.request
 import urllib.parse
 from dataclasses import dataclass, field
@@ -200,6 +201,19 @@ class Dataset:
             (DATASETS_DIR / self.config.path).mkdir(exist_ok=True, parents=True)
             with tarfile.open(tmp_path) as file:
                 file.extractall(target_path)
+            os.remove(tmp_path)
+        elif tmp_path.endswith(".bz2"):
+            print(f"Extracting bz2: {tmp_path} -> {target_path}")
+            Path(target_path).parent.mkdir(exist_ok=True)
+            # Remove .bz2 extension from target path if present
+            if str(target_path).endswith(".bz2"):
+                final_target_path = str(target_path)[:-4]  # Remove .bz2
+            else:
+                final_target_path = target_path
+            
+            with bz2.BZ2File(tmp_path, 'rb') as f_in:
+                with open(final_target_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
             os.remove(tmp_path)
         else:
             print(f"Moving: {tmp_path} -> {target_path}")
