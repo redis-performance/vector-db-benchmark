@@ -225,6 +225,15 @@ python run.py --engines redis-default-simple --datasets random-100
 python run.py --engines redis-default-simple --datasets glove-25-angular
 python run.py --engines "*-m-16-*" --datasets "glove-*"
 
+# Using custom engine configurations from a JSON file
+python run.py --engines-file custom_engines.json --datasets glove-25-angular
+
+# Get information about available engines (with pattern matching)
+python run.py --engines "*redis*" --describe engines --verbose
+
+# Get information about engines from a custom file  
+python run.py --engines-file custom_engines.json --describe engines --verbose
+
 # Docker usage (recommended)
 docker run --rm -v $(pwd)/results:/app/results --network=host \
   redis/vector-db-benchmark:latest \
@@ -236,6 +245,62 @@ python run.py --help
 
 Command allows you to specify wildcards for engines and datasets.
 Results of the benchmarks are stored in the `./results/` directory.
+
+## Using Custom Engine Configurations
+
+The benchmark tool supports two ways to specify which engine configurations to use:
+
+### 1. Pattern Matching (Default)
+Use the `--engines` flag with wildcard patterns to select configurations from the `experiments/configurations/` directory:
+
+```bash
+python run.py --engines "*redis*" --datasets glove-25-angular
+python run.py --engines "qdrant-m-*" --datasets random-100
+```
+
+### 2. Custom Configuration File
+Use the `--engines-file` flag to specify a JSON file containing custom engine configurations:
+
+```bash
+python run.py --engines-file my_engines.json --datasets glove-25-angular
+```
+
+The JSON file should contain an array of engine configuration objects. Each configuration must have a `name` field and follow the same structure as configurations in `experiments/configurations/`:
+
+```json
+[
+  {
+    "name": "my-custom-redis-config",
+    "engine": "redis",
+    "connection_params": {},
+    "collection_params": {
+      "algorithm": "hnsw",
+      "data_type": "FLOAT32",
+      "hnsw_config": {
+        "M": 16,
+        "DISTANCE_METRIC": "L2",
+        "EF_CONSTRUCTION": 200
+      }
+    },
+    "search_params": [
+      {
+        "parallel": 1,
+        "top": 10,
+        "search_params": {
+          "ef": 100,
+          "data_type": "FLOAT32"
+        }
+      }
+    ],
+    "upload_params": {
+      "parallel": 16,
+      "data_type": "FLOAT32"
+    }
+  }
+]
+```
+
+**Note:** You cannot use both `--engines` and `--engines-file` at the same time.
 
 ## How to update benchmark parameters?
 
