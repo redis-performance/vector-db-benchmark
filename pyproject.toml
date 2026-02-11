@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "vector-benchmark"
 version = "0.1.0"
-description = "Benchmark suite for vector databases with Redis support"
-authors = ["Kacper Łukawski <kacper.lukawski@qdrant.com>", "Redis Performance Team <performance@redis.com>"]
+description = "Benchmark suite for vector databases with Redis support. Forked from the original vector-db-benchmark project."
+authors = ["Redis Performance Team <performance@redis.com>"]
 readme = "README.md"
 license = "LICENSE"
 homepage = "https://github.com/redislabs/vector-db-benchmark"
