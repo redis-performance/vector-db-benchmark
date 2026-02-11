@@ -61,7 +61,7 @@ print_step "Testing basic functionality..."
 
 # Test help command
 print_info "Testing --help command..."
-if docker run --rm "$FULL_IMAGE_NAME" run.py --help > /dev/null; then
+if docker run --rm "$FULL_IMAGE_NAME" vector-db-benchmark --help > /dev/null; then
     print_info "✅ Help command works"
 else
     print_error "❌ Help command failed"
@@ -70,7 +70,7 @@ fi
 
 # Test Python environment
 print_info "Testing Python environment..."
-if docker run --rm "$FULL_IMAGE_NAME" -c "import sys; print(f'Python {sys.version}'); import redis; print('Redis module available')" > /dev/null; then
+if docker run --rm --entrypoint python "$FULL_IMAGE_NAME" -c "import sys; print(f'Python {sys.version}'); import redis; print('Redis module available')" > /dev/null; then
     print_info "✅ Python environment works"
 else
     print_error "❌ Python environment test failed"
@@ -91,14 +91,14 @@ if docker run -d --name "$REDIS_CONTAINER_NAME" -p 6379:6379 redis:8.2-rc1-bookw
     sleep 5
 
     # Test basic connection
-    if timeout 10 docker run --rm --network=host "$FULL_IMAGE_NAME" \
+    if timeout 10 docker run --rm --network=host --entrypoint python "$FULL_IMAGE_NAME" \
         -c "import redis; r = redis.Redis(host='localhost', port=6379); r.ping(); print('Redis connection successful')" > /dev/null 2>&1; then
         print_info "✅ Redis connectivity test passed"
 
         # Test benchmark execution with specific configuration
         print_info "Testing benchmark execution with redis-default-simple configuration..."
-        if timeout 120 docker run --rm --network=host -v "$(pwd)/results:/app/results" "$FULL_IMAGE_NAME" \
-            run.py --host localhost --engines redis --dataset random-100 --experiment redis-default-simple > /dev/null 2>&1; then
+        if timeout 120 docker run --rm --network=host -v "$(pwd)/results:/code/results" "$FULL_IMAGE_NAME" \
+            vector-db-benchmark --host localhost --engines redis --dataset random-100 --experiment redis-default-simple > /dev/null 2>&1; then
             print_info "✅ Benchmark execution test passed"
         else
             print_warning "⚠️ Benchmark execution test failed (this may be expected without proper dataset setup)"
@@ -118,8 +118,8 @@ fi
 # Step 4: Test file output permissions
 print_step "Testing file output permissions..."
 TEMP_DIR=$(mktemp -d)
-if docker run --rm -v "$TEMP_DIR:/app/results" "$FULL_IMAGE_NAME" \
-    -c "import os; os.makedirs('/app/results', exist_ok=True); open('/app/results/test.txt', 'w').write('test'); print('File write successful')" > /dev/null 2>&1; then
+if docker run --rm -v "$TEMP_DIR:/code/results" --entrypoint python "$FULL_IMAGE_NAME" \
+    -c "import os; os.makedirs('/code/results', exist_ok=True); open('/code/results/test.txt', 'w').write('test'); print('File write successful')" > /dev/null 2>&1; then
     if [ -f "$TEMP_DIR/test.txt" ]; then
         print_info "✅ File output test passed"
     else
@@ -137,8 +137,8 @@ print_info "Image size: $IMAGE_SIZE"
 
 # Step 6: Test benchmark configuration loading
 print_step "Testing benchmark configuration loading..."
-if docker run --rm "$FULL_IMAGE_NAME" \
-    -c "import json; import os; print('Configuration loading test'); print(os.listdir('/app'))" > /dev/null 2>&1; then
+if docker run --rm --entrypoint python "$FULL_IMAGE_NAME" \
+    -c "import json; import os; print('Configuration loading test'); print(os.listdir('/code'))" > /dev/null 2>&1; then
     print_info "✅ Configuration loading test passed"
 else
     print_warning "⚠️ Configuration loading test completed with warnings"
