@@ -36,10 +36,15 @@ def run(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed information when using --describe"),
 ):
     """
-    Example:
-        python3 run.py --engines *-m-16-* --engines qdrant-* --datasets glove-*
-        python3 run.py --describe datasets
-        python3 run.py --describe engines --verbose
+    Run vector database benchmarks.
+
+    Examples:
+
+      vector-db-benchmark --engines redis-* --datasets glove-*
+
+      vector-db-benchmark --describe datasets
+
+      vector-db-benchmark --describe engines --verbose
     """
     # Handle describe option first
     if describe:

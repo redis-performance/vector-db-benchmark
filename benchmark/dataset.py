@@ -178,7 +178,7 @@ class Dataset:
                     except botocore.exceptions.NoCredentialsError:
                         print("Credentials not found, downloading without boto3")
                 if not downloaded_withboto:
-                    print(f"Downloading from URL {self.config.link}...")
+                    print(f"Downloading from URL {self.config.link} to {target_path}...")
                     tmp_path, _ = download_with_headers(
                         self.config.link, None, show_progress
                     )
@@ -190,7 +190,7 @@ class Dataset:
             print(f"{target_path} already exists")
             return
 
-        print(f"Downloading from {url} to {target_path}")
+        print(f"Downloading from {url} to {target_path}...")
         tmp_path, _ = download_with_headers(url, None, show_progress)
         self._extract_or_move_file(tmp_path, target_path)
 
@@ -200,6 +200,14 @@ class Dataset:
             (DATASETS_DIR / self.config.path).mkdir(exist_ok=True, parents=True)
             with tarfile.open(tmp_path) as file:
                 file.extractall(target_path)
+            os.remove(tmp_path)
+        elif tmp_path.endswith(".bz2"):
+            print(f"Decompressing bz2: {tmp_path} -> {target_path}")
+            import bz2
+            Path(target_path).parent.mkdir(exist_ok=True)
+            with bz2.BZ2File(tmp_path, 'rb') as f_in:
+                with open(target_path, 'wb') as f_out:
+                    f_out.write(f_in.read())
             os.remove(tmp_path)
         else:
             print(f"Moving: {tmp_path} -> {target_path}")
@@ -213,7 +221,7 @@ class Dataset:
         tmp_path = f"/tmp/{os.path.basename(s3_key)}"
 
         print(
-            f"Downloading from S3: {link}... bucket_name={bucket_name}, s3_key={s3_key}"
+            f"Downloading from S3: {link} to {target_path}... (bucket={bucket_name}, key={s3_key})"
         )
         object_info = s3.head_object(Bucket=bucket_name, Key=s3_key)
         total_size = object_info["ContentLength"]
