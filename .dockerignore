@@ -85,9 +85,9 @@ Thumbs.db
 
 # Documentation
 # README.md and LICENSE are needed for Poetry package metadata
+*.md
 !README.md
 !LICENSE
-*.md
 docs/
 
 # Temporary files
