@@ -26,8 +26,8 @@ packages = [
     { include = "engine" },
     { include = "datasets" },
     { include = "experiments" },
-    { include = "run.py" },
 ]
+include = ["run.py"]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.14"
