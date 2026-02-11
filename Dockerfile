@@ -30,6 +30,15 @@ WORKDIR /code
 
 # Copy dependency files first for better caching
 COPY poetry.lock pyproject.toml /code/
+COPY README.md /code/
+
+# Copy package directories needed by Poetry
+COPY benchmark /code/benchmark
+COPY dataset_reader /code/dataset_reader
+COPY engine /code/engine
+COPY datasets /code/datasets
+COPY experiments /code/experiments
+COPY run.py /code/run.py
 
 # Configure Poetry and install dependencies
 RUN poetry config virtualenvs.create false \
@@ -38,7 +47,7 @@ RUN poetry config virtualenvs.create false \
 # Install additional dependencies
 RUN pip install "boto3"
 
-# Copy source code
+# Copy remaining source code
 COPY . /code
 
 # Store Git information
@@ -76,7 +85,6 @@ COPY --from=builder /code /app
 
 # Create directories with proper permissions
 RUN mkdir -p /app/results /app/datasets && \
-
     chmod -R 777 /app/results /app/datasets && \
     chmod -R 755 /app
 

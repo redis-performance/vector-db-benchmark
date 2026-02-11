@@ -84,9 +84,11 @@ Thumbs.db
 .github/
 
 # Documentation
-README.md
-LICENSE
+# README.md and LICENSE are needed for Poetry package metadata
+!README.md
+!LICENSE
 *.md
+!README.md
 docs/
 
 # Temporary files

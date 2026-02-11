@@ -24,10 +24,15 @@ packages = [
     { include = "benchmark" },
     { include = "dataset_reader" },
     { include = "engine" },
-    { include = "datasets" },
-    { include = "experiments" },
 ]
-include = ["run.py"]
+include = [
+    "run.py",
+    "datasets/__init__.py",
+    "datasets/datasets.json",
+    "datasets/random-100/**/*",
+    "experiments/__init__.py",
+    "experiments/configurations/**/*",
+]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.14"
