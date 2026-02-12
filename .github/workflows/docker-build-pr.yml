@@ -93,22 +93,22 @@ jobs:
 
           # Test help command
           echo "Testing --help command..."
-          docker run --rm ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} run.py --help
+          docker run --rm ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} vector-db-benchmark --help
 
           # Test Python environment
           echo "Testing Python environment..."
-          docker run --rm ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} -c "import sys; print(f'Python {sys.version}'); import redis; print('Redis module available')"
+          docker run --rm --entrypoint python ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} -c "import sys; print(f'Python {sys.version}'); import redis; print('Redis module available')"
 
           # Test Redis connectivity
           echo "Testing Redis connectivity..."
-          docker run --rm --network host ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} \
+          docker run --rm --network host --entrypoint python ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} \
             -c "import redis; r = redis.Redis(host='localhost', port=6379); r.ping(); print('Redis connection successful')"
 
           # Test benchmark execution with specific configuration
           echo "Testing benchmark execution with redis-m-16-ef-64 configuration..."
           mkdir -p ./test-results
-          docker run --rm --network host -v "$(pwd)/test-results:/app/results" ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} \
-            run.py --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64 --skip-upload --skip-search || echo "Benchmark test completed (expected to fail without proper dataset setup)"
+          docker run --rm --network host -v "$(pwd)/test-results:/code/results" ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} \
+            vector-db-benchmark --host localhost --engines redis --dataset random-100 --experiment redis-m-16-ef-64 --skip-upload --skip-search || echo "Benchmark test completed (expected to fail without proper dataset setup)"
 
           echo "✅ Docker image tests passed!"
 

@@ -83,16 +83,15 @@ def run(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed information when using --describe"),
 ):
     """
+    Run vector database benchmarks.
+
     Examples:
-        # Use pattern matching to select engines (original behavior)
-        python3 run.py --engines *-m-16-* --engines qdrant-* --datasets glove-*
-        
-        # Use engines from a specific JSON file
-        python3 run.py --engines-file my_engines.json --datasets glove-*
-        
-        # Describe available options
-        python3 run.py --describe datasets
-        python3 run.py --describe engines --verbose
+
+      vector-db-benchmark --engines redis-* --datasets glove-*
+
+      vector-db-benchmark --describe datasets
+
+      vector-db-benchmark --describe engines --verbose
     """
     # Handle describe option first
     if describe:

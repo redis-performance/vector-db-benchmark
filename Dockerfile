@@ -30,6 +30,15 @@ WORKDIR /code
 
 # Copy dependency files first for better caching
 COPY poetry.lock pyproject.toml /code/
+COPY README.md /code/
+
+# Copy package directories needed by Poetry
+COPY benchmark /code/benchmark
+COPY dataset_reader /code/dataset_reader
+COPY engine /code/engine
+COPY datasets /code/datasets
+COPY experiments /code/experiments
+COPY run.py /code/run.py
 
 # Configure Poetry and install dependencies
 RUN poetry config virtualenvs.create false \
@@ -38,7 +47,7 @@ RUN poetry config virtualenvs.create false \
 # Install additional dependencies
 RUN pip install "boto3"
 
-# Copy source code
+# Copy remaining source code
 COPY . /code
 
 # Store Git information
@@ -65,31 +74,28 @@ RUN apt-get update && apt-get install -y \
 
 
 # Set working directory
-WORKDIR /app
+WORKDIR /code
 
 # Copy Python environment from builder
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY --from=builder /code /app
+COPY --from=builder /code /code
 
 # Create directories with proper permissions
-RUN mkdir -p /app/results /app/datasets && \
-
-    chmod -R 777 /app/results /app/datasets && \
-    chmod -R 755 /app
+RUN mkdir -p /code/results /code/datasets && \
+    chmod -R 777 /code/results /code/datasets && \
+    chmod -R 755 /code
 
 # Create entrypoint script to handle user permissions
 RUN echo '#!/bin/bash\n\
 # Handle user permissions for volume mounts\n\
-if [ "$1" = "run.py" ]; then\n\
-    # Ensure results directory is writable\n\
-    mkdir -p /app/results\n\
-    chmod 777 /app/results\n\
-fi\n\
-exec python "$@"' > /app/entrypoint.sh && \
-    chmod +x /app/entrypoint.sh
+# Ensure results directory is writable\n\
+mkdir -p /code/results\n\
+chmod 777 /code/results\n\
+exec "$@"' > /code/entrypoint.sh && \
+    chmod +x /code/entrypoint.sh
 
 
 # Health check
@@ -100,10 +106,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 6379 6380
 
 # Set entrypoint
-
-ENTRYPOINT ["/app/entrypoint.sh"]
-
+ENTRYPOINT ["/code/entrypoint.sh"]
 
 # Default command (show help)
-CMD ["run.py", "--help"]
+CMD ["vector-db-benchmark", "--help"]
 
