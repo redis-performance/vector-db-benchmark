@@ -48,9 +48,7 @@ jobs:
 
     - name: Build Rust extension
       run: |
-        cd rust
         maturin develop --release
-        cd ..
         python -c "import vector_db_benchmark_rs; print('Rust module loaded successfully')"
 
     - name: Install Redis CLI

@@ -52,10 +52,10 @@ RUN poetry config virtualenvs.create false \
 # Install additional dependencies
 RUN pip install "boto3"
 
-# Copy Rust crate and build the PyO3 native extension
+# Copy Rust crate and build the PyO3 native extension (maturin reads root pyproject.toml)
 COPY rust /code/rust
-RUN cd /code/rust && maturin build --release \
-    && pip install target/wheels/*.whl
+RUN maturin build --release --out /tmp/wheels \
+    && pip install /tmp/wheels/*.whl
 
 # Copy remaining source code
 COPY . /code

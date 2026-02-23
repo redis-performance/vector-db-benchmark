@@ -5,33 +5,29 @@ on:
   pull_request:
 
 jobs:
-  # Build Rust wheels on each platform and verify they import correctly
-  test-rust-wheels:
-    name: Rust wheel (${{ matrix.os }}, ${{ matrix.target }}, py${{ matrix.python-version }})
+  # Build wheel on each platform and verify everything works from a single pip install
+  test-wheel:
+    name: Wheel (${{ matrix.os }}, ${{ matrix.target }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64
             python-version: '3.10'
           - os: ubuntu-latest
             target: x86_64
             python-version: '3.13'
-          # macOS Apple Silicon
           - os: macos-14
             target: aarch64
             python-version: '3.10'
           - os: macos-14
             target: aarch64
             python-version: '3.13'
-          # macOS x86_64
           - os: macos-13
             target: x86_64
             python-version: '3.10'
-          # Windows x86_64
           - os: windows-latest
             target: x64
             python-version: '3.10'
@@ -50,21 +46,20 @@ jobs:
         target: ${{ matrix.target }}
         args: --release --out dist --interpreter ${{ matrix.python-version }}
         manylinux: auto
-        working-directory: rust
 
     - name: Install wheel and smoke test
       shell: bash
       run: |
-        pip install rust/dist/vector_db_benchmark_rs*.whl
+        pip install dist/vector_benchmark*.whl
 
-        echo "=== Test 1: Module imports ==="
+        echo "=== Test 1: Rust extension imports ==="
         python -c "
         import vector_db_benchmark_rs
-        print('Module imported:', vector_db_benchmark_rs)
-        print('Dir:', [x for x in dir(vector_db_benchmark_rs) if not x.startswith('_')])
+        print('Rust module:', vector_db_benchmark_rs)
+        print('Exports:', [x for x in dir(vector_db_benchmark_rs) if not x.startswith('_')])
         "
 
-        echo "=== Test 2: All classes are accessible ==="
+        echo "=== Test 2: All Rust classes accessible ==="
         python -c "
         from vector_db_benchmark_rs import (
             RustVsetConfigurator,
@@ -74,78 +69,30 @@ jobs:
             RustRedisUploader,
             RustRedisSearcher,
         )
-        print('RustVsetConfigurator:', RustVsetConfigurator)
-        print('RustVsetUploader:', RustVsetUploader)
-        print('RustVsetSearcher:', RustVsetSearcher)
-        print('RustRedisConfigurator:', RustRedisConfigurator)
-        print('RustRedisUploader:', RustRedisUploader)
-        print('RustRedisSearcher:', RustRedisSearcher)
-        print('All 6 classes imported successfully')
+        print('All 6 Rust classes imported successfully')
         "
 
-        echo "=== Test 3: Classes are instantiable ==="
-        python -c "
-        from vector_db_benchmark_rs import RustVsetSearcher, RustRedisSearcher
-        # These constructors take (host, search_params) — just verify they exist
-        import inspect
-        for cls in [RustVsetSearcher, RustRedisSearcher]:
-            print(f'{cls.__name__}: methods = {[m for m in dir(cls) if not m.startswith(\"_\")]}')
-        print('Smoke test passed')
-        "
-
-  # Build the Python sdist/wheel and verify it installs
-  test-python-package:
-    name: Python package (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.13']
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: latest
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-
-    - name: Build package
-      run: poetry build
-
-    - name: Check package with twine
-      run: |
-        pip install twine
-        twine check dist/*
-
-    - name: Install from wheel and verify
-      run: |
-        # Install the built wheel in a clean way
-        pip install dist/*.whl
-
-        echo "=== Test: Package metadata ==="
-        pip show vector-benchmark
-
-        echo "=== Test: CLI entry point exists ==="
-        which vector-db-benchmark || echo "Entry point not in PATH (expected in some envs)"
-
-        echo "=== Test: Core modules import ==="
+        echo "=== Test 3: Python packages import ==="
         python -c "
         import benchmark
         import dataset_reader
         import engine
-        print('Core modules imported successfully')
+        print('Core Python modules imported successfully')
         "
 
-  # Build Rust sdist and verify it compiles from source
-  test-rust-sdist:
-    name: Rust sdist (build from source)
+        echo "=== Test 4: Engine wrappers import ==="
+        python -c "
+        from engine.clients.vectorsets_rs import RustVsetConfigurator, RustVsetUploader, RustVsetSearcher
+        from engine.clients.redis_rs import RustRedisConfigurator, RustRedisUploader, RustRedisSearcher
+        print('Engine wrappers imported successfully')
+        "
+
+        echo "=== Test 5: CLI entry point ==="
+        vector-db-benchmark --help || python -c "from run import app; print('CLI module OK')"
+
+  # Build sdist and verify it compiles from source
+  test-sdist:
+    name: sdist (build from source)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -163,15 +110,15 @@ jobs:
       with:
         command: sdist
         args: --out dist
-        working-directory: rust
 
     - name: Install from sdist and smoke test
       run: |
-        pip install rust/dist/vector_db_benchmark_rs*.tar.gz
+        pip install dist/vector_benchmark*.tar.gz
         python -c "
         from vector_db_benchmark_rs import (
             RustVsetConfigurator, RustVsetUploader, RustVsetSearcher,
             RustRedisConfigurator, RustRedisUploader, RustRedisSearcher,
         )
-        print('All 6 classes imported from sdist build')
+        import benchmark, dataset_reader, engine
+        print('Single package: Python + Rust all imported successfully')
         "
