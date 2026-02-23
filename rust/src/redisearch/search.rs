@@ -21,6 +21,7 @@ struct SearchConfig {
     top: Option<usize>,
     algorithm: String,
     hybrid_policy: String,
+    #[allow(dead_code)]
     data_type: String,
     query_timeout: i64,
 }

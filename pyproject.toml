@@ -43,8 +43,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/redislabs/vector-db-benchmark"
-Repository = "https://github.com/redislabs/vector-db-benchmark"
+Homepage = "https://github.com/redis-performance/vector-db-benchmark"
+Repository = "https://github.com/redis-performance/vector-db-benchmark"
 
 [project.scripts]
 vector-db-benchmark = "run:app"
