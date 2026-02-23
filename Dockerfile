@@ -15,15 +15,20 @@ ENV PYTHONFAULTHANDLER=1 \
     PIP_DEFAULT_TIMEOUT=100 \
     POETRY_VERSION=1.5.1
 
-# Install system dependencies
+# Install system dependencies (including Rust toolchain prerequisites)
 RUN apt-get update && apt-get install -y \
     wget \
     git \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
-RUN pip install "poetry==$POETRY_VERSION"
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install Poetry and maturin
+RUN pip install "poetry==$POETRY_VERSION" maturin
 
 # Set working directory
 WORKDIR /code
@@ -46,6 +51,11 @@ RUN poetry config virtualenvs.create false \
 
 # Install additional dependencies
 RUN pip install "boto3"
+
+# Copy Rust crate and build the PyO3 native extension
+COPY rust /code/rust
+RUN cd /code/rust && maturin build --release \
+    && pip install target/wheels/*.whl
 
 # Copy remaining source code
 COPY . /code

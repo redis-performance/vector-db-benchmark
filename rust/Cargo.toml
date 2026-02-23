@@ -1,0 +1,14 @@
+[package]
+name = "vector_db_benchmark_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "vector_db_benchmark_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+redis = { version = "0.27", features = ["cluster"] }
+rayon = "1.10"
+half = "2.4"

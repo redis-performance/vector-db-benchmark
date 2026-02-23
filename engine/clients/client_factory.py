@@ -29,6 +29,12 @@ def _import_engine_classes(engine_name: str) -> Dict[str, Type]:
     if engine_name == "vectorsets":
         module_name = f"engine.clients.vectorsets"
         class_prefix = "RedisVset"
+    elif engine_name == "vectorsets-rs":
+        module_name = f"engine.clients.vectorsets_rs"
+        class_prefix = "RustVset"
+    elif engine_name == "redis-rs":
+        module_name = f"engine.clients.redis_rs"
+        class_prefix = "RustRedis"
     else:
         module_name = f"engine.clients.{engine_name}"
         # Convert first letter to uppercase for class name

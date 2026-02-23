@@ -321,6 +321,51 @@ Exact values of the parameters are individual for each engine.
 Datasets are configured in the [datasets/datasets.json](./datasets/datasets.json) file.
 Framework will automatically download the dataset and store it in the [datasets](./datasets/) directory.
 
+## Development Environment Setup
+
+The project includes Rust-backed engine implementations (`vectorsets-rs`, `redis-rs`) that use [PyO3](https://pyo3.rs) to expose native Rust code as a Python extension module. These provide better concurrency (no GIL) and lower latency for Redis-based engines.
+
+### Prerequisites
+
+- **Python 3.9+**
+- **Rust toolchain** (install via [rustup](https://rustup.rs/)):
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+- **maturin** (Rust-Python build tool):
+  ```bash
+  pip install maturin
+  ```
+
+### Setup
+
+```bash
+# Install Python dependencies
+pip install poetry
+poetry install
+
+# Build and install the Rust native extension (from repo root)
+cd rust && maturin develop --release && cd ..
+```
+
+After this, the `vector_db_benchmark_rs` module is available and the Rust-backed engines (`vectorsets-rs`, `redis-rs`) can be used identically to their Python counterparts:
+
+```bash
+# Python engine
+python run.py --engines "redis-hnsw-m-16-ef-128" --datasets random-100
+
+# Rust engine (same results, better concurrency)
+python run.py --engines "redis-rs-m-16-ef-128" --datasets random-100
+```
+
+To swap between Python and Rust, change `"engine": "redis"` to `"engine": "redis-rs"` (or `"vectorsets"` to `"vectorsets-rs"`) in the config JSON. Both produce identical results and are fully cross-compatible (upload with one, search with the other).
+
+### Rebuilding after Rust changes
+
+```bash
+cd rust && maturin develop --release && cd ..
+```
+
 ## How to implement a new engine?
 
 There are a few base classes that you can use to implement a new engine.
