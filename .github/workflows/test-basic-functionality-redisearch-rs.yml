@@ -1,0 +1,130 @@
+name: Test Basic Functionality - Redis RediSearch (Rust)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-basic-functionality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+
+    services:
+      redis:
+        image: redis:8.2-rc1-bookworm
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: Install dependencies
+      run: |
+        poetry install --no-root
+        poetry run pip install maturin
+
+    - name: Build Rust extension
+      run: |
+        poetry run maturin develop --release
+        poetry run python -c "import vector_db_benchmark_rs; print('Rust module loaded successfully')"
+
+    - name: Install Redis CLI
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y redis-tools
+
+    - name: Wait for Redis to be ready
+      run: |
+        echo "Waiting for Redis to be ready..."
+        timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 1; done'
+        echo "Redis is ready!"
+
+    - name: Test describe functionality
+      run: |
+        echo "Testing --describe commands..."
+        poetry run python run.py --describe datasets | head -10
+        poetry run python run.py --describe engines | head -10
+        echo "✅ Describe functionality works"
+
+    - name: Test basic benchmark functionality
+      run: |
+        echo "Testing basic benchmark with Redis (Rust)..."
+        echo "Running: python run.py --host localhost --engines redis-rs-m-16-ef-128 --datasets random-100 --queries 10"
+
+        # Run with limited queries for faster testing
+        poetry run python run.py \
+          --host localhost \
+          --engines redis-rs-m-16-ef-128 \
+          --datasets random-100 \
+          --queries 10 \
+          --timeout 300
+
+    - name: Verify results were generated
+      run: |
+        echo "Checking if results were generated..."
+        if [ -d "results" ] && [ "$(ls -A results)" ]; then
+          echo "✅ Results directory contains files:"
+          ls -la results/
+
+          # Check for summary file
+          if ls results/*summary.json 1> /dev/null 2>&1; then
+            echo "✅ Summary file found"
+            echo "Sample summary content:"
+            head -20 results/*summary.json
+          else
+            echo "⚠️  No summary file found"
+          fi
+
+          # Check for experiment files
+          if ls results/*redis-rs*.json 1> /dev/null 2>&1; then
+            echo "✅ Experiment result files found"
+          else
+            echo "⚠️  No experiment result files found"
+          fi
+        else
+          echo "❌ No results generated"
+          exit 1
+        fi
+
+    - name: Test with skip options
+      run: |
+        echo "Testing with --skip-upload (search only)..."
+        poetry run python run.py \
+          --host localhost \
+          --engines redis-rs-m-16-ef-128 \
+          --datasets random-100 \
+          --queries 50 \
+          --skip-upload \
+          --timeout 180
+
+        echo "✅ Skip upload test completed"
+
+    - name: Cleanup
+      run: |
+        echo "Cleaning up test files..."
+        rm -rf datasets/random-100/
+        rm -rf results/
+        echo "✅ Cleanup completed"
