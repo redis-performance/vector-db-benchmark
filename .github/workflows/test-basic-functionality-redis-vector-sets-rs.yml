@@ -2,6 +2,7 @@ name: Test Basic Functionality - Redis Vector Sets (Rust)
 
 on:
   push:
+    branches: [master, main]
   pull_request:
 
 jobs:
