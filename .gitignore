@@ -10,3 +10,5 @@ tools/custom/data.json
 *.png
 venv/
 rust/target/
+
+dist/

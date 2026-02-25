@@ -265,6 +265,8 @@ impl RustRedisSearcher {
         let host = self.host.clone();
         let parallel = search_params.parallel;
 
+        // Measure wall-clock time for the entire batch
+        let start = Instant::now();
         let results: Vec<SearchResult> =
             Python::with_gil(|py| -> PyResult<Vec<SearchResult>> {
                 py.allow_threads(|| {
@@ -276,12 +278,12 @@ impl RustRedisSearcher {
                 })
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
             })?;
+        let total_time = start.elapsed().as_secs_f64();
 
         // Compute stats
         Python::with_gil(|py| -> PyResult<PyObject> {
             let precisions: Vec<f64> = results.iter().map(|(p, _)| *p).collect();
             let latencies: Vec<f64> = results.iter().map(|(_, l)| *l).collect();
-            let total_time: f64 = latencies.iter().sum();
 
             let mean_precision = if precisions.is_empty() {
                 0.0
