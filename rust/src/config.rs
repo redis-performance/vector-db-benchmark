@@ -1,5 +1,6 @@
 use std::env;
 
+#[derive(Clone)]
 pub struct RedisConfig {
     pub port: u16,
     pub auth: Option<String>,

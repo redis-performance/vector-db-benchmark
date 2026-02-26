@@ -29,10 +29,15 @@ class RustVsetConfigurator(BaseConfigurator):
 
 
 class RustVsetUploader(BaseUploader):
-    """Rust-backed vectorsets uploader. Delegates upload_batch to Rust."""
+    """Rust-backed vectorsets uploader. upload() runs entirely in Rust."""
 
     def __init__(self, host, connection_params, upload_params):
         super().__init__(host, connection_params, upload_params)
+        self._rust = _RustUploader(host, connection_params=connection_params, upload_params=upload_params)
+
+    def upload(self, distance, records):
+        """Override BaseUploader.upload — runs the full loop in Rust."""
+        return self._rust.upload_all(distance, records)
 
     @classmethod
     def init_client(cls, host, distance, connection_params, upload_params):
