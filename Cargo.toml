@@ -1,0 +1,42 @@
+[package]
+name = "vector_db_benchmark"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "vector_db_benchmark"
+crate-type = ["lib"]
+
+[dependencies]
+redis = { version = "0.27", features = ["cluster"] }
+rayon = "1.10"
+half = "2.4"
+indicatif = "0.18.4"
+hdf5 = "0.8.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ndarray = "0.16"
+ndarray-npy = "0.9"
+clap = { version = "4.5", features = ["derive"] }
+glob = "0.3"
+chrono = "0.4"
+dirs = "5.0"
+reqwest = { version = "0.12", features = ["blocking"] }
+flate2 = "1"
+tar = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+rand = "0.8"
+
+[[bin]]
+name = "bench_jsonl"
+path = "src/bin/bench_jsonl.rs"
+
+[[bin]]
+name = "bench_npy"
+path = "src/bin/bench_npy.rs"
+
+[[bin]]
+name = "vector-db-benchmark"
+path = "src/bin/vector_db_benchmark/main.rs"

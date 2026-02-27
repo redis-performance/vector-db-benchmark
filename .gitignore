@@ -12,3 +12,10 @@ venv/
 rust/target/
 
 dist/
+
+.claude/
+
+
+memory-bank/*
+.specsmd/
+target/

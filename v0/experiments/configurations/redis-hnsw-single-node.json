@@ -10,7 +10,7 @@
     "search_params": [
       { "parallel": 1, "search_params": { "ef": 64 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   },
   {
     "name": "redis-hnsw-m-16-ef-128",
@@ -24,7 +24,7 @@
       { "parallel": 1, "search_params": { "ef": 64 } }, { "parallel": 1, "search_params": { "ef": 128 } }, { "parallel": 1, "search_params": { "ef": 256 } }, { "parallel": 1, "search_params": { "ef": 512 } },
       { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   },
   {
     "name": "redis-hnsw-m-32-ef-128",
@@ -38,7 +38,7 @@
       { "parallel": 1, "search_params": { "ef": 64 } }, { "parallel": 1, "search_params": { "ef": 128 } }, { "parallel": 1, "search_params": { "ef": 256 } }, { "parallel": 1, "search_params": { "ef": 512 } },
       { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   },
   {
     "name": "redis-hnsw-m-32-ef-256",
@@ -52,7 +52,7 @@
       { "parallel": 1, "search_params": { "ef": 64 } }, { "parallel": 1, "search_params": { "ef": 128 } }, { "parallel": 1, "search_params": { "ef": 256 } }, { "parallel": 1, "search_params": { "ef": 512 } },
       { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   },
   {
     "name": "redis-hnsw-m-32-ef-512",
@@ -66,7 +66,7 @@
       { "parallel": 1, "search_params": { "ef": 64 } }, { "parallel": 1, "search_params": { "ef": 128 } }, { "parallel": 1, "search_params": { "ef": 256 } }, { "parallel": 1, "search_params": { "ef": 512 } },
       { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   },
   {
     "name": "redis-hnsw-m-64-ef-256",
@@ -80,7 +80,7 @@
       { "parallel": 1, "search_params": { "ef": 64 } }, { "parallel": 1, "search_params": { "ef": 128 } }, { "parallel": 1, "search_params": { "ef": 256 } }, { "parallel": 1, "search_params": { "ef": 512 } },
       { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   },
   {
     "name": "redis-hnsw-m-64-ef-512",
@@ -94,6 +94,6 @@
       { "parallel": 1, "search_params": { "ef": 64 } }, { "parallel": 1, "search_params": { "ef": 128 } }, { "parallel": 1, "search_params": { "ef": 256 } }, { "parallel": 1, "search_params": { "ef": 512 } },
       { "parallel": 100, "search_params": { "ef": 64 } }, { "parallel": 100, "search_params": { "ef": 128 } }, { "parallel": 100, "search_params": { "ef": 256 } }, { "parallel": 100, "search_params": { "ef": 512 } }
     ],
-    "upload_params": { "parallel": 100 }
+    "upload_params": { "parallel": 16 }
   }
 ]

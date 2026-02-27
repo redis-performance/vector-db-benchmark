@@ -1,0 +1,23 @@
+{
+  "params": {
+    "dataset": "h-and-m-2048-angular-filters",
+    "experiment": "redis-m-16-ef-128",
+    "engine": "redis",
+    "parallel": 100,
+    "search_params": {
+      "ef": 512
+    }
+  },
+  "results": {
+    "total_time": 31.19365254499644,
+    "mean_time": 0.30074958825289505,
+    "mean_precisions": 0.9329868656869444,
+    "std_time": 0.12875720562419044,
+    "min_time": 0.010867081000469625,
+    "max_time": 1.4691052710004442,
+    "rps": 320.5780402142753,
+    "p50_time": 0.3009052185007022,
+    "p95_time": 0.4974810913985492,
+    "p99_time": 0.6102475202693314
+  }
+}

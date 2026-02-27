@@ -1,7 +1,7 @@
 [
   {
-    "name": "vectorsets-rs-fp32-default",
-    "engine": "vectorsets-rs",
+    "name": "vectorsets-fp32-default",
+    "engine": "vectorsets",
     "connection_params": {},
     "collection_params": {},
     "search_params": [

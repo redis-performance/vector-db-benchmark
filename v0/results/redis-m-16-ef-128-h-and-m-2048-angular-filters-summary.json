@@ -1,0 +1,131 @@
+{
+  "upload": {},
+  "search": {
+    "redis-m-16-ef-128-h-and-m-2048-angular-filters-search-4-294125-2026-02-26-16-35-25": {
+      "params": {
+        "dataset": "h-and-m-2048-angular-filters",
+        "experiment": "redis-m-16-ef-128",
+        "engine": "redis",
+        "parallel": 100,
+        "search_params": {
+          "ef": 64
+        }
+      },
+      "results": {
+        "total_time": 30.086992728996847,
+        "mean_time": 0.27890288809768754,
+        "mean_precisions": 0.5458011636729172,
+        "std_time": 0.11229839475344028,
+        "min_time": 0.06197376999989501,
+        "max_time": 0.851698550999572,
+        "rps": 332.3695422162392,
+        "p50_time": 0.2609573720001208,
+        "p95_time": 0.5043950375482381,
+        "p99_time": 0.5766663331408199
+      }
+    },
+    "redis-m-16-ef-128-h-and-m-2048-angular-filters-search-5-294125-2026-02-26-16-35-57": {
+      "params": {
+        "dataset": "h-and-m-2048-angular-filters",
+        "experiment": "redis-m-16-ef-128",
+        "engine": "redis",
+        "parallel": 100,
+        "search_params": {
+          "ef": 128
+        }
+      },
+      "results": {
+        "total_time": 22.70130924499972,
+        "mean_time": 0.2190534339211954,
+        "mean_precisions": 0.9983265714285713,
+        "std_time": 0.1490369172445706,
+        "min_time": 0.0021469280000019353,
+        "max_time": 2.0679320500021277,
+        "rps": 440.5032279009476,
+        "p50_time": 0.17372177450124582,
+        "p95_time": 0.5360461353475329,
+        "p99_time": 0.8549533719594548
+      }
+    },
+    "redis-m-16-ef-128-h-and-m-2048-angular-filters-search-6-294125-2026-02-26-16-36-24": {
+      "params": {
+        "dataset": "h-and-m-2048-angular-filters",
+        "experiment": "redis-m-16-ef-128",
+        "engine": "redis",
+        "parallel": 100,
+        "search_params": {
+          "ef": 256
+        }
+      },
+      "results": {
+        "total_time": 21.837229737997404,
+        "mean_time": 0.20403360915340782,
+        "mean_precisions": 0.9985745714285713,
+        "std_time": 0.07918815245206266,
+        "min_time": 0.0006848330012871884,
+        "max_time": 0.4740229319977516,
+        "rps": 457.93354376813255,
+        "p50_time": 0.21561993149953196,
+        "p95_time": 0.31865919099982415,
+        "p99_time": 0.35828146356165236
+      }
+    },
+    "redis-m-16-ef-128-h-and-m-2048-angular-filters-search-7-294125-2026-02-26-16-36-44": {
+      "params": {
+        "dataset": "h-and-m-2048-angular-filters",
+        "experiment": "redis-m-16-ef-128",
+        "engine": "redis",
+        "parallel": 100,
+        "search_params": {
+          "ef": 512
+        }
+      },
+      "results": {
+        "total_time": 13.86725151200153,
+        "mean_time": 0.12291595031310935,
+        "mean_precisions": 0.9985745714285714,
+        "std_time": 0.04400678835208843,
+        "min_time": 0.0006659639984718524,
+        "max_time": 0.372056939999311,
+        "rps": 721.1234318022872,
+        "p50_time": 0.1199601355001505,
+        "p95_time": 0.20173928030180818,
+        "p99_time": 0.25873170877202945
+      }
+    }
+  },
+  "precision": {
+    "0.55": {
+      "rps": 332.3695422162392,
+      "config": {
+        "parallel": 100,
+        "search_params": {
+          "ef": 64
+        }
+      },
+      "experiment_id": "redis-m-16-ef-128-h-and-m-2048-angular-filters-search-4-294125-2026-02-26-16-35-25"
+    },
+    "0.9975": {
+      "rps": 721.1234318022872,
+      "config": {
+        "parallel": 100,
+        "search_params": {
+          "ef": 512
+        }
+      },
+      "experiment_id": "redis-m-16-ef-128-h-and-m-2048-angular-filters-search-7-294125-2026-02-26-16-36-44"
+    }
+  },
+  "precision_summary": {
+    "0.55": {
+      "qps": 332.4,
+      "p50": 260.957,
+      "p95": 504.395
+    },
+    "0.9975": {
+      "qps": 721.1,
+      "p50": 119.96,
+      "p95": 201.739
+    }
+  }
+}

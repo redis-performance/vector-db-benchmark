@@ -1,0 +1,47 @@
+{
+  "upload": {},
+  "search": {
+    "redis-test-random-100-search-0-240829-2026-02-26-14-33-17": {
+      "params": {
+        "dataset": "random-100",
+        "experiment": "redis-test",
+        "engine": "redis",
+        "parallel": 1,
+        "search_params": {
+          "ef": 64
+        }
+      },
+      "results": {
+        "total_time": 0.0034514310009399196,
+        "mean_time": 0.00033019600014085884,
+        "mean_precisions": 1.0,
+        "std_time": 0.00021205755331912544,
+        "min_time": 0.00022704900038661435,
+        "max_time": 0.0009626020000723656,
+        "rps": 2897.3489538909294,
+        "p50_time": 0.000260673999946448,
+        "p95_time": 0.0006657126994468847,
+        "p99_time": 0.0009032241399472697
+      }
+    }
+  },
+  "precision": {
+    "1.0000": {
+      "rps": 2897.3489538909294,
+      "config": {
+        "parallel": 1,
+        "search_params": {
+          "ef": 64
+        }
+      },
+      "experiment_id": "redis-test-random-100-search-0-240829-2026-02-26-14-33-17"
+    }
+  },
+  "precision_summary": {
+    "1.0000": {
+      "qps": 2897.3,
+      "p50": 0.261,
+      "p95": 0.666
+    }
+  }
+}
