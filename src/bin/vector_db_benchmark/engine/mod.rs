@@ -7,6 +7,7 @@
 //! - `Searcher` trait = BaseSearcher
 
 mod elasticsearch;
+mod milvus;
 mod opensearch;
 mod pgvector;
 mod qdrant;
@@ -18,6 +19,7 @@ use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 
 pub use elasticsearch::ElasticsearchEngine;
+pub use milvus::MilvusEngine;
 pub use opensearch::OpenSearchEngine;
 pub use pgvector::PgVectorEngine;
 pub use qdrant::QdrantEngine;
@@ -106,8 +108,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "qdrant" => Ok(Box::new(QdrantEngine::new(engine_config, host)?)),
         "weaviate" => Ok(Box::new(WeaviateEngine::new(engine_config, host)?)),
         "pgvector" => Ok(Box::new(PgVectorEngine::new(engine_config, host)?)),
+        "milvus" => Ok(Box::new(MilvusEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus'.",
             other
         )),
     }

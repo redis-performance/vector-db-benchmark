@@ -48,6 +48,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "qdrant",
         "weaviate",
         "pgvector",
+        "milvus",
     ];
     let engines: Vec<_> = engine_configs
         .iter()

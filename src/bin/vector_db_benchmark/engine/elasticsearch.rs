@@ -1013,6 +1013,7 @@ mod tests {
                     m: Some(32),
                     ef_construction: Some(256),
                 }),
+                extra: None,
             }),
             search_params: None,
             upload_params: Some(serde_json::json!({
