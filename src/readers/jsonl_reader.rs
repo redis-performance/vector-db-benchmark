@@ -48,6 +48,7 @@ pub fn read_jsonl_vectors(
 /// Read queries and ground truth neighbors from a JSONL dataset directory.
 /// Expects: queries.jsonl (required) and neighbours.jsonl (optional).
 /// Returns (query_vectors, neighbors).
+#[allow(clippy::type_complexity)]
 pub fn read_jsonl_queries(
     dir_path: &str,
     normalize: bool,

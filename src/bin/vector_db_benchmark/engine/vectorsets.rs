@@ -375,6 +375,7 @@ impl Engine for VectorSetsEngine {
             upload_count: vectors.len(),
             parallel: self.config.parallel,
             batch_size: self.config.batch_size,
+            memory_usage: None,
         })
     }
 
@@ -538,5 +539,23 @@ impl Engine for VectorSetsEngine {
         let mut conn = self.get_connection()?;
         let _ = redis::cmd("DEL").arg("idx").query::<()>(&mut conn);
         Ok(())
+    }
+
+    fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
+        let mut conn = self.get_connection().ok()?;
+
+        let info: std::collections::HashMap<String, String> = redis::cmd("INFO")
+            .arg("memory")
+            .query(&mut conn)
+            .ok()?;
+        let used_memory = info
+            .get("used_memory")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+
+        Some(serde_json::json!({
+            "used_memory": used_memory,
+            "shards": 1,
+        }))
     }
 }

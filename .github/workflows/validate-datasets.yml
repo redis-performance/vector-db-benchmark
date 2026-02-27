@@ -4,41 +4,36 @@ on:
   push:
     paths:
       - 'datasets/datasets.json'
-      - 'run.py'
-      - 'benchmark/dataset.py'
+      - 'experiments/configurations/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/validate-datasets.yml'
   pull_request:
     paths:
       - 'datasets/datasets.json'
-      - 'run.py'
-      - 'benchmark/dataset.py'
+      - 'experiments/configurations/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/validate-datasets.yml'
 
 jobs:
-  validate-datasets:
+  validate:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: latest
-        virtualenvs-create: true
-        virtualenvs-in-project: true
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
 
-    - name: Install dependencies
-      run: |
-        poetry install --no-root
-        
-    - name: Validate datasets.json
-      run: |
-        echo "Running dataset validation..."
-        poetry run python scripts/validate_datasets.py
+    - name: Cache Rust toolchain and dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Validate datasets
+      run: cargo run --release --bin vector-db-benchmark -- --describe datasets
+
+    - name: Validate engine configurations
+      run: cargo run --release --bin vector-db-benchmark -- --describe engines

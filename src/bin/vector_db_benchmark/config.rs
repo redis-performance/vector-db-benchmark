@@ -52,11 +52,18 @@ pub struct SearchParams {
     pub search_params: Option<InnerSearchParams>,
     pub top: Option<i64>,
     pub num_candidates: Option<i64>,
+    /// Calibration: name of the search param to tune (e.g., "ef")
+    pub calibration_param: Option<String>,
+    /// Calibration: target precision to achieve
+    pub calibration_precision: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InnerSearchParams {
     pub ef: Option<i64>,
+    /// Catch-all for additional search params (e.g., SEARCH_WINDOW_SIZE, data_type)
+    #[serde(flatten)]
+    pub extra: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// Engine configuration from experiments/configurations/*.json
@@ -122,13 +129,14 @@ pub fn read_engine_configs() -> Result<HashMap<String, EngineConfig>, String> {
 
     let mut all_configs = HashMap::new();
 
-    for entry in glob::glob(pattern.to_str().unwrap()).map_err(|e| e.to_string())? {
-        if let Ok(path) = entry {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(configs) = serde_json::from_str::<Vec<EngineConfig>>(&content) {
-                    for config in configs {
-                        all_configs.insert(config.name.clone(), config);
-                    }
+    for path in glob::glob(pattern.to_str().unwrap())
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(configs) = serde_json::from_str::<Vec<EngineConfig>>(&content) {
+                for config in configs {
+                    all_configs.insert(config.name.clone(), config);
                 }
             }
         }

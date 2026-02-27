@@ -437,6 +437,11 @@ fn upload_batch_internal(
                 .map(|&f| half::f16::from_f32(f).to_bits())
                 .flat_map(|v| v.to_le_bytes())
                 .collect(),
+            "BFLOAT16" => vectors[i]
+                .iter()
+                .map(|&f| half::bf16::from_f32(f).to_bits())
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
             _ => vectors[i].iter().flat_map(|f| f.to_le_bytes()).collect(),
         };
 
@@ -470,6 +475,39 @@ fn upload_batch_internal(
 
     pipe.query::<()>(conn).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Convert a redis::Value to serde_json::Value for serialization.
+fn redis_value_to_json(val: &redis::Value) -> serde_json::Value {
+    match val {
+        redis::Value::Nil => serde_json::Value::Null,
+        redis::Value::Int(n) => serde_json::json!(n),
+        redis::Value::Double(f) => serde_json::json!(f),
+        redis::Value::Boolean(b) => serde_json::json!(b),
+        redis::Value::SimpleString(s) => serde_json::json!(s),
+        redis::Value::BulkString(bytes) => {
+            match String::from_utf8(bytes.clone()) {
+                Ok(s) => serde_json::json!(s),
+                Err(_) => serde_json::json!(format!("<{} bytes>", bytes.len())),
+            }
+        }
+        redis::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(redis_value_to_json).collect())
+        }
+        redis::Value::Map(pairs) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in pairs {
+                let key = match k {
+                    redis::Value::SimpleString(s) => s.clone(),
+                    redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
+                    other => format!("{:?}", other),
+                };
+                map.insert(key, redis_value_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!(format!("{:?}", other)),
+    }
 }
 
 // ── Condition parser ─────────────────────────────────────────────────────
@@ -934,6 +972,7 @@ impl Engine for RedisEngine {
             upload_count: vectors.len(),
             parallel: self.config.parallel,
             batch_size: self.config.batch_size,
+            memory_usage: None,
         })
     }
 
@@ -1127,5 +1166,31 @@ impl Engine for RedisEngine {
             .arg("DD")
             .query::<()>(&mut conn);
         Ok(())
+    }
+
+    fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
+        let mut conn = self.get_connection().ok()?;
+
+        // Get used_memory from INFO memory
+        let info: HashMap<String, String> = redis::cmd("INFO")
+            .arg("memory")
+            .query(&mut conn)
+            .ok()?;
+        let used_memory = info
+            .get("used_memory")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+
+        // Get FT.INFO for index stats
+        let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
+            .arg("idx")
+            .query::<redis::Value>(&mut conn)
+            .ok()
+            .map(|v| redis_value_to_json(&v));
+
+        Some(serde_json::json!({
+            "used_memory": [used_memory],
+            "index_info": ft_info,
+        }))
     }
 }

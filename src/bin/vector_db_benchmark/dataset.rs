@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use crate::config::{datasets_dir, project_root, DatasetConfig};
+use crate::config::{datasets_dir, DatasetConfig};
 use crate::download;
 use vector_db_benchmark::readers::metadata::MetadataItem;
 use vector_db_benchmark::readers::{
@@ -85,6 +85,7 @@ impl Dataset {
     }
 
     /// Read all vectors and metadata from the dataset
+    #[allow(clippy::type_complexity)]
     pub fn read_vectors(
         &self,
         normalize: bool,
@@ -138,6 +139,7 @@ impl Dataset {
 
     /// Read query vectors, ground truth neighbors, and filter conditions from the dataset.
     /// Returns (queries, neighbors, conditions) where conditions is per-query filter JSON.
+    #[allow(clippy::type_complexity)]
     pub fn read_queries(
         &self,
     ) -> Result<(Vec<Vec<f32>>, Vec<Vec<i64>>, Vec<Option<serde_json::Value>>), String> {
@@ -194,6 +196,7 @@ impl Dataset {
     }
 
     /// Read queries from HDF5 file (test + neighbors datasets).
+    #[allow(clippy::type_complexity)]
     fn read_hdf5_queries(&self, path_str: &str) -> Result<(Vec<Vec<f32>>, Vec<Vec<i64>>), String> {
         let file =
             hdf5::File::open(path_str).map_err(|e| format!("Failed to open HDF5 file: {}", e))?;

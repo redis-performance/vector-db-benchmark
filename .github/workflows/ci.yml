@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  check:
+    name: Check (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Check formatting
+      run: cargo fmt --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Run unit tests
+      run: cargo test --lib --release
+
+  integration-redis:
+    name: Integration tests (Redis)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Redis
+      run: docker compose -f tests/docker-compose.test.yml up -d redis --wait
+
+    - name: Run Redis integration tests
+      run: cargo test --test integration_redis --release -- --test-threads=1
+
+    - name: Stop Redis
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-elasticsearch:
+    name: Integration tests (Elasticsearch)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Elasticsearch
+      run: docker compose -f tests/docker-compose.test.yml up -d elasticsearch --wait
+
+    - name: Run Elasticsearch integration tests
+      run: ELASTIC_PORT=9201 cargo test --test integration_elasticsearch --release -- --test-threads=1
+
+    - name: Stop Elasticsearch
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down

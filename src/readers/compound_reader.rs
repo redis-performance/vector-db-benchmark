@@ -32,6 +32,7 @@ pub fn read_payloads_jsonl(path: &str) -> Result<Vec<Option<MetadataItem>>, Stri
 
 /// Read compound data from directory containing vectors.npy and optionally payloads.jsonl.
 /// Returns (ids, vectors, metadata).
+#[allow(clippy::type_complexity)]
 pub fn read_compound_data(
     dir_path: &str,
     normalize: bool,
@@ -95,6 +96,7 @@ pub fn read_compound_vectors_only(
 /// ```
 ///
 /// Returns (query_vectors, neighbors, conditions).
+#[allow(clippy::type_complexity)]
 pub fn read_compound_queries(
     dir_path: &str,
     normalize: bool,

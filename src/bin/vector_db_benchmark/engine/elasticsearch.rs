@@ -749,6 +749,7 @@ impl Engine for ElasticsearchEngine {
             upload_count: vectors.len(),
             parallel: self.config.parallel,
             batch_size: self.config.batch_size,
+            memory_usage: None,
         })
     }
 

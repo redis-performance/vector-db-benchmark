@@ -25,9 +25,11 @@ pub struct UploadStats {
     pub upload_count: usize,
     pub parallel: usize,
     pub batch_size: usize,
+    pub memory_usage: Option<serde_json::Value>,
 }
 
 /// Search results — matches Python v0 search result JSON fields
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct SearchResults {
     pub total_time: f64,
@@ -77,6 +79,11 @@ pub trait Engine {
 
     /// Get search parameter configurations
     fn search_params(&self) -> &[SearchParams];
+
+    /// Collect memory usage stats after upload (matches Python v0 get_memory_usage)
+    fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// Create an engine based on config

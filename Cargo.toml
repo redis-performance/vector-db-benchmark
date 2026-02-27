@@ -25,6 +25,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 flate2 = "1"
 tar = "0.4"
 uuid = "1"
+bzip2 = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

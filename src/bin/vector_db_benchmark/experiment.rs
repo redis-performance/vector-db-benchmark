@@ -12,6 +12,7 @@ use crate::cli::Args;
 use crate::config::{matches_pattern, project_root, read_dataset_configs, read_engine_configs};
 use crate::dataset::Dataset;
 use crate::engine::{create_engine, Engine};
+use crate::summary::{self, SearchEntry};
 
 /// Results directory
 fn results_dir() -> PathBuf {
@@ -36,20 +37,19 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
 
     // Filter engines by pattern
+    let supported_engines = ["redis", "vectorsets", "elasticsearch"];
     let engines: Vec<_> = engine_configs
         .iter()
         .filter(|(name, config)| {
-            // Only support redis and vectorsets
             let engine_type = config.engine.as_deref().unwrap_or("");
-            (engine_type == "redis" || engine_type == "vectorsets")
-                && matches_pattern(name, &args.engines)
+            supported_engines.contains(&engine_type) && matches_pattern(name, &args.engines)
         })
         .collect();
 
     if engines.is_empty() {
         return Err(format!(
-            "No engines match pattern: '{}'. Only redis and vectorsets are supported.",
-            args.engines
+            "No engines match pattern: '{}'. Supported: {:?}.",
+            args.engines, supported_engines
         ));
     }
 
@@ -110,13 +110,18 @@ fn run_single_experiment(
 
         // Upload phase
         println!("Experiment stage: Upload");
-        let upload_stats = engine.upload(dataset)?;
+        let mut upload_stats = engine.upload(dataset)?;
+
+        // Collect memory usage after upload
+        upload_stats.memory_usage = engine.get_memory_usage();
 
         // Save upload results
         save_upload_results(engine.name(), &dataset.config.name, &upload_stats)?;
     }
 
     // Search phase
+    let mut search_entries: Vec<SearchEntry> = Vec::new();
+
     if !args.skip_search {
         println!("Experiment stage: Search");
 
@@ -169,12 +174,31 @@ fn run_single_experiment(
                         search_params,
                         &results,
                     )?;
+
+                    search_entries.push(SearchEntry {
+                        search_id,
+                        ef: ef.clone(),
+                        parallel,
+                        results,
+                    });
                 }
                 Err(e) => {
                     eprintln!("\tSearch failed: {}", e);
                 }
             }
         }
+    }
+
+    // Display precision summary and save summary JSON
+    if !search_entries.is_empty() {
+        summary::display_results_summary(engine.name(), &dataset.config.name, &search_entries);
+        summary::save_summary(
+            engine.name(),
+            &dataset.config.name,
+            &search_entries,
+            None,
+            &results_dir(),
+        )?;
     }
 
     // Cleanup
@@ -254,6 +278,7 @@ fn save_upload_results(
             "upload_time": stats.upload_time,
             "total_time": stats.total_time,
             "upload_count": stats.upload_count,
+            "memory_usage": stats.memory_usage,
         }
     });
 
