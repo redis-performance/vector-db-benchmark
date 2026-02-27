@@ -8,6 +8,7 @@
 
 mod elasticsearch;
 mod opensearch;
+mod pgvector;
 mod qdrant;
 mod redis;
 mod vectorsets;
@@ -18,6 +19,7 @@ use crate::dataset::Dataset;
 
 pub use elasticsearch::ElasticsearchEngine;
 pub use opensearch::OpenSearchEngine;
+pub use pgvector::PgVectorEngine;
 pub use qdrant::QdrantEngine;
 pub use redis::RedisEngine;
 pub use vectorsets::VectorSetsEngine;
@@ -103,8 +105,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "opensearch" => Ok(Box::new(OpenSearchEngine::new(engine_config, host)?)),
         "qdrant" => Ok(Box::new(QdrantEngine::new(engine_config, host)?)),
         "weaviate" => Ok(Box::new(WeaviateEngine::new(engine_config, host)?)),
+        "pgvector" => Ok(Box::new(PgVectorEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector'.",
             other
         )),
     }
