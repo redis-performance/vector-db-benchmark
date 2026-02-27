@@ -1,143 +1,117 @@
 # vector-db-benchmark
 
-A comprehensive benchmarking tool for vector databases, including Redis (both RediSearch and Vector Sets), Weaviate, Milvus, Qdrant, OpenSearch, Postgres, and others...
+A benchmarking tool for vector databases, written in Rust. Measures upload throughput, search QPS, latency percentiles (p50/p95/p99), and recall for vector search engines.
 
-In a one-liner cli tool you can get this and much more:
+Currently supported engines: **Redis** (RediSearch HNSW), **VectorSets**, and **Elasticsearch**.
 
 ```
-docker run --rm --network=host redis/vector-db-benchmark:latest run.py --host localhost --engines vectorsets-fp32-default --datasets glove-100-angular --parallels 100
+docker run --rm --network=host redis/vector-db-benchmark:latest \
+  --host localhost --engines 'redis-single*' --datasets glove-25-angular
 (...)
-================================================================================
-BENCHMARK RESULTS SUMMARY
-Experiment: vectorsets-fp32-default - glove-100-angular
-================================================================================
-
-Precision vs Performance Trade-off:
---------------------------------------------------
-Precision  QPS      P50 (ms)   P95 (ms)  
---------------------------------------------------
-0.86       1408.3   61.877     107.548   
-0.80       2136.3   38.722     69.102    
-0.72       2954.3   25.820     48.072    
-0.68       3566.5   20.229     38.581    
-
-QPS vs Precision Trade-off - vectorsets-fp32-default - glove-100-angular (up and to the right is better):
-
-  3566 │●                                                           
-       │             ●                                              
-       │                                                            
-  2594 │                                                            
-       │                                       ●                    
-       │                                                            
-  1621 │                                                           ●
-       │                                                            
-       │                                                            
-   648 │                                                            
-       │                                                            
-       │                                                            
-     0 │                                                            
-       └────────────────────────────────────────────────────────────
-        0.680          0.726          0.772          0.817          
-        Precision (0.0 = 0%, 1.0 = 100%)
-================================================================================
-
+============================================================
+Running experiment: redis-single-node - glove-25-angular
+============================================================
+Experiment stage: Configure
+Using algorithm hnsw with config {'M': 16, 'EF_CONSTRUCTION': 128}
+Experiment stage: Upload
+Reading dataset from datasets/glove-25-angular/...
+Read 1183514 vectors (25d) in 0.82s
+Upload time: 12.3s (96,220 records/sec)
+Experiment stage: Search
+  Running search 0: ef=128, parallel=4
+  → QPS: 3214.5, Precision: 0.9785
+  Running search 1: ef=128, parallel=8
+  → QPS: 5891.2, Precision: 0.9785
+Experiment stage: Done
 ```
 
-> [View results](https://redis.io/blog/benchmarking-results-for-vector-databases/)
-
-There are various vector search engines available, and each of them may offer
-a different set of features and efficiency. But how do we measure the
-performance? There is no clear definition and in a specific case you
-may worry about a specific thing, while not paying much attention to other aspects. This
-project is a general framework for benchmarking different engines under the
-same hardware constraints, so you can choose what works best for you.
-
-Running any benchmark requires choosing an engine, a dataset and defining the
-scenario against which it should be tested. A specific scenario may assume
-running the server in a single or distributed mode, a different client
-implementation and the number of client instances.
-
+> [View published results](https://redis.io/blog/benchmarking-results-for-vector-databases/)
 
 ## Quick Start
 
-### Quick Start with Docker
-
-The easiest way to run vector-db-benchmark is using Docker. We provide pre-built images on Docker Hub.
+### Docker (recommended)
 
 ```bash
-# Pull the latest image
-docker pull redis/vector-db-benchmark:latest
+# Show help
+docker run --rm redis/vector-db-benchmark:latest --help
 
-# Run with help
-docker run --rm redis/vector-db-benchmark:latest run.py --help
+# List available datasets and engines
+docker run --rm redis/vector-db-benchmark:latest --describe datasets
+docker run --rm redis/vector-db-benchmark:latest --describe engines
 
-# Check which datasets are available
-docker run --rm redis/vector-db-benchmark:latest run.py --describe datasets
-
-# Basic Redis benchmark with local Redis
-docker run --rm -v $(pwd)/results:/app/results --network=host \
+# Run a benchmark against a local Redis instance
+docker run --rm --network=host \
+  -v $(pwd)/datasets:/code/datasets \
+  -v $(pwd)/results:/code/results \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --datasets glove-25-angular
-
-# At the end of the run, you will find the results in the `results` directory. Lets open the summary one, in the precision summary
-
-$ jq ".precision_summary" results/*-summary.json
-{
-  "0.91": {
-    "qps": 1924.5,
-    "p50": 49.828,
-    "p95": 58.427
-  },
-  "0.94": {
-    "qps": 1819.9,
-    "p50": 51.68,
-    "p95": 66.83
-  },
-  "0.9775": {
-    "qps": 1477.8,
-    "p50": 65.368,
-    "p95": 73.849
-  },
-  "0.9950": {
-    "qps": 1019.8,
-    "p50": 95.115,
-    "p95": 106.73
-  }
-}
+  --host localhost --engines 'redis-single*' --datasets glove-25-angular
 ```
 
 ### Using with Redis
 
-For testing with Redis, start a Redis container first:
-
 ```bash
-# Start Redis container
-docker run -d --name redis-test -p 6379:6379 redis:8.2-bookworm
+# Start Redis
+docker run -d --name redis -p 6379:6379 redis:8.6.0
 
-# Run benchmark against Redis
-
-docker run --rm -v $(pwd)/results:/app/results --network=host \
+# Run benchmark
+docker run --rm --network=host \
+  -v $(pwd)/datasets:/code/datasets \
+  -v $(pwd)/results:/code/results \
   redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --datasets random-100
+  --host localhost --engines redis-docker-test --datasets random-100
 
-# Or use the convenience script
-./docker-run.sh -H localhost -e redis-default-simple -d random-100
-
-
-# Clean up Redis container when done
-docker stop redis-test && docker rm redis-test
+# Clean up
+docker stop redis && docker rm redis
 ```
 
-### Available Docker Images
+### Using Docker Compose
 
-- **Latest**: `redis/vector-db-benchmark:latest`
+```bash
+# Full integration test (downloads h-and-m dataset ~200MB)
+make docker-integration
 
-For detailed Docker setup and publishing information, see [DOCKER_SETUP.md](DOCKER_SETUP.md).
+# Fast smoke test (uses random-100 dataset baked into image, 228KB)
+make docker-integration-fast
+```
 
+### Build from source
 
-## Data sets
+```bash
+# Prerequisites: Rust toolchain, libhdf5-dev, pkg-config
+cargo build --release --bin vector-db-benchmark
 
-We have a number of precomputed data sets. All data sets have been pre-split into train/test and include ground truth data for the top-100 nearest neighbors.
+# Run
+./target/release/vector-db-benchmark --help
+./target/release/vector-db-benchmark --describe datasets
+./target/release/vector-db-benchmark \
+  --host localhost --engines 'redis-single*' --datasets glove-25-angular
+```
+
+## CLI Options
+
+```
+Usage: vector-db-benchmark [OPTIONS]
+
+Options:
+    --engines <PATTERN>        Engine config patterns (wildcards supported) [default: *]
+    --engines-file <PATH>      Path to JSON file with custom engine configs
+    --datasets <PATTERN>       Dataset patterns (wildcards supported) [default: *]
+    --host <HOST>              Redis/engine host [default: localhost]
+    --parallels <N,N,...>      Filter by parallel thread counts
+    --ef-runtime <N,N,...>     Filter by ef runtime values
+    --skip-upload              Skip the upload phase
+    --skip-search              Skip the search phase
+    --skip-if-exists           Skip if results already exist
+    --exit-on-error            Stop on first error
+    --timeout <SECS>           Timeout in seconds [default: 86400]
+    --describe <TYPE>          Describe available 'datasets' or 'engines'
+    -v, --verbose              Verbose output for --describe
+    -h, --help                 Print help
+```
+
+## Datasets
+
+All datasets are automatically downloaded on first use. The image includes `random-100` (228KB) for quick smoke tests.
 
 | Dataset                                                                                                     | Dimensions |  Train size | Test size | Neighbors | Distance  |
 | ----------------------------------------------------------------------------------------------------------- | ---------: |  ---------: | --------: | --------: | --------- |
@@ -189,192 +163,87 @@ We have a number of precomputed data sets. All data sets have been pre-split int
 | Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (with filters)                     |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 | Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (no filters)                       |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 
+## Engine Configurations
 
-## How to run a benchmark?
+Engine configurations live in [`experiments/configurations/`](./experiments/configurations/). Each JSON file defines one or more experiment configurations specifying the engine, index parameters, search parameters, and upload parallelism.
 
-Benchmarks are implemented in server-client mode, meaning that the server is
-running in a single machine, and the client is running on another.
-
-### Run the server
-
-All engines are served using docker compose. The configuration is in the [servers](./engine/servers/).
-
-To launch the server instance, run the following command:
-
-```bash
-cd ./engine/servers/<engine-configuration-name>
-docker compose up
-```
-
-Containers are expected to expose all necessary ports, so the client can connect to them.
-
-### Run the client
-
-Install dependencies:
-
-```bash
-pip install poetry
-poetry install
-```
-
-Run the benchmark:
-
-```bash
-# Basic usage examples
-python run.py --engines redis-default-simple --datasets random-100
-python run.py --engines redis-default-simple --datasets glove-25-angular
-python run.py --engines "*-m-16-*" --datasets "glove-*"
-
-# Using custom engine configurations from a JSON file
-python run.py --engines-file custom_engines.json --datasets glove-25-angular
-
-# Get information about available engines (with pattern matching)
-python run.py --engines "*redis*" --describe engines --verbose
-
-# Get information about engines from a custom file  
-python run.py --engines-file custom_engines.json --describe engines --verbose
-
-# Docker usage (recommended)
-docker run --rm -v $(pwd)/results:/app/results --network=host \
-  redis/vector-db-benchmark:latest \
-  run.py --host localhost --engines redis-default-simple --datasets random-100
-
-# Get help
-python run.py --help
-```
-
-Command allows you to specify wildcards for engines and datasets.
-Results of the benchmarks are stored in the `./results/` directory.
-
-## Using Custom Engine Configurations
-
-The benchmark tool supports two ways to specify which engine configurations to use:
-
-### 1. Pattern Matching (Default)
-Use the `--engines` flag with wildcard patterns to select configurations from the `experiments/configurations/` directory:
-
-```bash
-python run.py --engines "*redis*" --datasets glove-25-angular
-python run.py --engines "qdrant-m-*" --datasets random-100
-```
-
-### 2. Custom Configuration File
-Use the `--engines-file` flag to specify a JSON file containing custom engine configurations:
-
-```bash
-python run.py --engines-file my_engines.json --datasets glove-25-angular
-```
-
-The JSON file should contain an array of engine configuration objects. Each configuration must have a `name` field and follow the same structure as configurations in `experiments/configurations/`:
+Example (`redis-docker-test.json`):
 
 ```json
 [
   {
-    "name": "my-custom-redis-config",
+    "name": "redis-docker-test",
     "engine": "redis",
     "connection_params": {},
     "collection_params": {
-      "algorithm": "hnsw",
-      "data_type": "FLOAT32",
-      "hnsw_config": {
-        "M": 16,
-        "DISTANCE_METRIC": "L2",
-        "EF_CONSTRUCTION": 200
-      }
+      "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 }
     },
     "search_params": [
-      {
-        "parallel": 1,
-        "top": 10,
-        "search_params": {
-          "ef": 100,
-          "data_type": "FLOAT32"
-        }
-      }
+      { "parallel": 1, "search_params": { "ef": 128 } }
     ],
-    "upload_params": {
-      "parallel": 16,
-      "data_type": "FLOAT32"
-    }
+    "upload_params": { "parallel": 8 }
   }
 ]
 ```
 
-**Note:** You cannot use both `--engines` and `--engines-file` at the same time.
+Use `--engines` with wildcard patterns to select configurations:
 
-## How to update benchmark parameters?
+```bash
+vector-db-benchmark --engines 'redis-single*' --datasets 'glove*'
+vector-db-benchmark --engines 'vectorsets*' --datasets 'h-and-m*'
+```
 
-Each engine has a configuration file, which is used to define the parameters for the benchmark.
-Configuration files are located in the [configuration](./experiments/configurations/) directory.
+Or provide a custom file with `--engines-file`:
 
-Each step in the benchmark process is using a dedicated configuration's path:
-
-* `connection_params` - passed to the client during the connection phase.
-* `collection_params` - parameters, used to create the collection, indexing parameters are usually defined here.
-* `upload_params` - parameters, used to upload the data to the server.
-* `search_params` - passed to the client during the search phase. Framework allows multiple search configurations for the same experiment run.
-
-Exact values of the parameters are individual for each engine.
+```bash
+vector-db-benchmark --engines-file my_engines.json --datasets glove-25-angular
+```
 
 ## How to register a dataset?
 
-Datasets are configured in the [datasets/datasets.json](./datasets/datasets.json) file.
-Framework will automatically download the dataset and store it in the [datasets](./datasets/) directory.
+Datasets are configured in [`datasets/datasets.json`](./datasets/datasets.json). The tool automatically downloads datasets on first use if a download link is provided.
 
-## Development Environment Setup
-
-The project includes Rust-backed engine implementations (`vectorsets-rs`, `redis-rs`) that use [PyO3](https://pyo3.rs) to expose native Rust code as a Python extension module. These provide better concurrency (no GIL) and lower latency for Redis-based engines.
+## Development
 
 ### Prerequisites
 
-- **Python 3.9+**
-- **Rust toolchain** (install via [rustup](https://rustup.rs/)):
-  ```bash
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  ```
-- **maturin** (Rust-Python build tool):
-  ```bash
-  pip install maturin
-  ```
-
-### Setup
+- **Rust toolchain** (install via [rustup](https://rustup.rs/))
+- **libhdf5-dev** and **pkg-config**
 
 ```bash
-# Install Python dependencies
-pip install poetry
-poetry install
+# Ubuntu/Debian
+sudo apt-get install libhdf5-dev pkg-config
 
-# Build and install the Rust native extension (from repo root)
-cd rust && maturin develop --release && cd ..
+# macOS
+brew install hdf5 pkg-config
 ```
 
-After this, the `vector_db_benchmark_rs` module is available and the Rust-backed engines (`vectorsets-rs`, `redis-rs`) can be used identically to their Python counterparts:
+### Build and test
 
 ```bash
-# Python engine
-python run.py --engines "redis-hnsw-m-16-ef-128" --datasets random-100
-
-# Rust engine (same results, better concurrency)
-python run.py --engines "redis-rs-m-16-ef-128" --datasets random-100
+make build              # Build release binary
+make test               # Run unit tests
+make integration-test   # Run integration tests (starts Redis via docker)
+make check              # Clippy + rustfmt
+make docker-build       # Build Docker image
 ```
 
-To swap between Python and Rust, change `"engine": "redis"` to `"engine": "redis-rs"` (or `"vectorsets"` to `"vectorsets-rs"`) in the config JSON. Both produce identical results and are fully cross-compatible (upload with one, search with the other).
+### Project structure
 
-### Rebuilding after Rust changes
-
-```bash
-cd rust && maturin develop --release && cd ..
 ```
-
-## How to implement a new engine?
-
-There are a few base classes that you can use to implement a new engine.
-
-* `BaseConfigurator` - defines methods to create collections, setup indexing parameters.
-* `BaseUploader` - defines methods to upload the data to the server.
-* `BaseSearcher` - defines methods to search the data.
-
-See the examples in the [clients](./engine/clients) directory.
-
-Once all the necessary classes are implemented, you can register the engine in the [ClientFactory](./engine/clients/client_factory.py).
-
+src/
+  lib.rs                              # Library: readers, data formats
+  readers/                            # HDF5, NPY, JSONL, compound readers
+  bin/
+    vector_db_benchmark/
+      main.rs                         # CLI entry point
+      config.rs                       # Configuration loading
+      dataset.rs                      # Dataset resolution and reading
+      engine/
+        mod.rs                        # Engine trait and factory
+        redis.rs                      # Redis (RediSearch) engine
+        vectorsets.rs                  # VectorSets engine
+        elasticsearch.rs              # Elasticsearch engine
+experiments/configurations/           # Engine configuration JSON files
+datasets/datasets.json                # Dataset definitions
+```
