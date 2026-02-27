@@ -825,26 +825,6 @@ fn ft_search_knn(
         .query(conn)
         .map_err(|e| format!("FT.SEARCH error: {}", e))?;
 
-    // Debug: print first query info
-    static DEBUG_ONCE: std::sync::Once = std::sync::Once::new();
-    DEBUG_ONCE.call_once(|| {
-        eprintln!("[debug] query_str: {}", query_str);
-        eprintln!("[debug] total_param_count: {}", total_param_count);
-        eprintln!("[debug] ef: {}", ef);
-        eprintln!("[debug] top: {}", top);
-        if let Some((expr, params)) = filter {
-            eprintln!("[debug] filter: {} ({} params)", expr, params.len());
-        }
-        if !response.is_empty() {
-            eprintln!("[debug] response[0] (total): {:?}", response[0]);
-            if response.len() >= 3 {
-                eprintln!("[debug] response[1] (doc_id): {:?}", response[1]);
-                eprintln!("[debug] response[2] (fields): {:?}", response[2]);
-            }
-        }
-        eprintln!("[debug] response len: {}", response.len());
-    });
-
     parse_ft_search_response(&response)
 }
 
@@ -1171,14 +1151,16 @@ impl Engine for RedisEngine {
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
-        // Get used_memory from INFO memory
-        let info: HashMap<String, String> = redis::cmd("INFO")
+        // Get used_memory from INFO memory (returns bulk string, parse key:value lines)
+        let info_str: String = redis::cmd("INFO")
             .arg("memory")
             .query(&mut conn)
             .ok()?;
-        let used_memory = info
-            .get("used_memory")
-            .and_then(|v| v.parse::<i64>().ok())
+        let used_memory: i64 = info_str
+            .lines()
+            .find(|l| l.starts_with("used_memory:"))
+            .and_then(|l| l.strip_prefix("used_memory:"))
+            .and_then(|v| v.trim().parse().ok())
             .unwrap_or(0);
 
         // Get FT.INFO for index stats

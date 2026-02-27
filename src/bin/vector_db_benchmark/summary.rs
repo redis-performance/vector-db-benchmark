@@ -283,8 +283,13 @@ mod tests {
     #[test]
     fn test_format_precision_key_high() {
         // Near 1.0: finer 0.0025 granularity
-        assert_eq!(format_precision_key(0.9986), "0.9988"); // rounds to nearest 0.0025
+        // 0.9986 / 0.0025 = 399.44 → rounds to 399 → 399 * 0.0025 = 0.9975
+        assert_eq!(format_precision_key(0.9986), "0.9975");
         assert_eq!(format_precision_key(1.0), "1.0000");
+        // 0.9988 / 0.0025 = 399.52 → rounds to 400 → 400 * 0.0025 = 1.0000
+        assert_eq!(format_precision_key(0.9988), "1.0000");
+        // 0.98 / 0.0025 = 392 → 392 * 0.0025 = 0.9800
+        assert_eq!(format_precision_key(0.98), "0.9800");
     }
 
     #[test]

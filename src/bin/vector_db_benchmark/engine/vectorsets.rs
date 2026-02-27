@@ -544,13 +544,15 @@ impl Engine for VectorSetsEngine {
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
-        let info: std::collections::HashMap<String, String> = redis::cmd("INFO")
+        let info_str: String = redis::cmd("INFO")
             .arg("memory")
             .query(&mut conn)
             .ok()?;
-        let used_memory = info
-            .get("used_memory")
-            .and_then(|v| v.parse::<i64>().ok())
+        let used_memory: i64 = info_str
+            .lines()
+            .find(|l| l.starts_with("used_memory:"))
+            .and_then(|l| l.strip_prefix("used_memory:"))
+            .and_then(|v| v.trim().parse().ok())
             .unwrap_or(0);
 
         Some(serde_json::json!({
