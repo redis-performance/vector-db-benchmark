@@ -9,7 +9,10 @@ use chrono::Local;
 use serde_json::json;
 
 use crate::cli::Args;
-use crate::config::{matches_pattern, project_root, read_dataset_configs, read_engine_configs};
+use crate::config::{
+    matches_pattern, project_root, read_dataset_configs, read_engine_configs, InnerSearchParams,
+    SearchParams,
+};
 use crate::dataset::Dataset;
 use crate::engine::{create_engine, Engine};
 use crate::summary::{self, SearchEntry};
