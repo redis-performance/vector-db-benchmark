@@ -4,6 +4,11 @@
 //! Start with: docker compose -f tests/docker-compose.test.yml up -d
 //! Run with:   cargo test --test integration_redis -- --test-threads=1
 
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,6 +50,15 @@ fn wait_for_redis() {
 }
 
 fn flush_db(conn: &mut Connection) {
+    // Drop all FT indexes first (FLUSHALL does NOT remove them in Redis 8)
+    if let Ok(indexes) = redis::cmd("FT._LIST").query::<Vec<String>>(conn) {
+        for idx_name in indexes {
+            let _ = redis::cmd("FT.DROPINDEX")
+                .arg(&idx_name)
+                .arg("DD")
+                .query::<()>(conn);
+        }
+    }
     let _: () = redis::cmd("FLUSHALL").query(conn).unwrap();
 }
 
@@ -77,6 +91,98 @@ fn brute_force_neighbors(query: &[f32], vectors: &[Vec<f32>], top: usize) -> Vec
         .collect();
     dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     dists.iter().take(top).map(|(id, _)| *id).collect()
+}
+
+/// Compute brute-force nearest neighbors by cosine distance (1 - cosine_similarity).
+fn brute_force_neighbors_cosine(query: &[f32], vectors: &[Vec<f32>], top: usize) -> Vec<i64> {
+    let q_norm: f64 = query
+        .iter()
+        .map(|x| (*x as f64).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let mut dists: Vec<(i64, f64)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let dot: f64 = query
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| *a as f64 * *b as f64)
+                .sum();
+            let v_norm: f64 = v.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+            let cos_sim = if q_norm * v_norm > 0.0 {
+                dot / (q_norm * v_norm)
+            } else {
+                0.0
+            };
+            (i as i64, 1.0 - cos_sim)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    dists.iter().take(top).map(|(id, _)| *id).collect()
+}
+
+/// Parse FT.SEARCH result IDs from response (skipping field-value pairs).
+fn parse_ft_search_ids(response: &[redis::Value]) -> Vec<i64> {
+    let mut ids = Vec::new();
+    let mut i = 1; // skip total count at index 0
+    while i < response.len() {
+        // Doc IDs may be BulkString (RESP2) or SimpleString (Redis 8)
+        let id_str = match &response[i] {
+            redis::Value::BulkString(data) => Some(String::from_utf8_lossy(data).to_string()),
+            redis::Value::SimpleString(s) => Some(s.clone()),
+            _ => None,
+        };
+        if let Some(s) = id_str {
+            if let Ok(id) = s.parse::<i64>() {
+                ids.push(id);
+            }
+        }
+        i += 2; // skip field values
+    }
+    ids
+}
+
+/// Extract a numeric value from an FT.INFO response by key name.
+/// Handles both RESP2 (flat Array of key/value pairs) and RESP3 (Map).
+fn extract_ft_info_value(info: &redis::Value, key: &str) -> Option<i64> {
+    fn value_to_string(v: &redis::Value) -> Option<String> {
+        match v {
+            redis::Value::BulkString(s) => Some(String::from_utf8_lossy(s).to_string()),
+            redis::Value::SimpleString(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+    fn value_to_i64(v: &redis::Value) -> Option<i64> {
+        match v {
+            redis::Value::Int(n) => Some(*n),
+            redis::Value::BulkString(s) => String::from_utf8_lossy(s).parse::<i64>().ok(),
+            redis::Value::SimpleString(s) => s.parse::<i64>().ok(),
+            redis::Value::Double(f) => Some(*f as i64),
+            _ => None,
+        }
+    }
+    match info {
+        // RESP3 Map: Vec<(Value, Value)>
+        redis::Value::Map(pairs) => {
+            for (k, v) in pairs {
+                if value_to_string(k).as_deref() == Some(key) {
+                    return value_to_i64(v);
+                }
+            }
+            None
+        }
+        // RESP2 flat array: [key, value, key, value, ...]
+        redis::Value::Array(items) => {
+            for i in 0..items.len().saturating_sub(1) {
+                if value_to_string(&items[i]).as_deref() == Some(key) {
+                    return value_to_i64(&items[i + 1]);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +488,520 @@ fn test_redis_metadata_upload() {
     assert_eq!(tags, "sale;new");
 }
 
+#[test]
+fn test_redis_filtered_knn_search() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 8;
+    let count = 20;
+    let top = 5;
+    let (ids, vectors) = generate_test_vectors(count, dim);
+
+    // Create index with vector + TAG + NUMERIC metadata fields
+    redis::cmd("FT.CREATE")
+        .arg("idx_filter")
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg("1")
+        .arg("")
+        .arg("SCHEMA")
+        .arg("vector")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg("6")
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dim)
+        .arg("DISTANCE_METRIC")
+        .arg("L2")
+        .arg("category")
+        .arg("TAG")
+        .arg("SEPARATOR")
+        .arg(";")
+        .arg("SORTABLE")
+        .arg("price")
+        .arg("NUMERIC")
+        .arg("SORTABLE")
+        .query::<()>(&mut conn)
+        .expect("FT.CREATE with metadata failed");
+
+    // Upload vectors with metadata: even IDs = "electronics", odd = "clothing"
+    // price = 10 * id (0, 10, 20, ..., 190)
+    {
+        let mut pipe = redis::pipe();
+        for i in 0..ids.len() {
+            let key = ids[i].to_string();
+            let vec_bytes = vec_to_bytes(&vectors[i]);
+            let category = if i % 2 == 0 {
+                "electronics"
+            } else {
+                "clothing"
+            };
+            let price = (i * 10).to_string();
+            let mut cmd = redis::cmd("HSET");
+            cmd.arg(key)
+                .arg("vector")
+                .arg(&vec_bytes[..])
+                .arg("category")
+                .arg(category)
+                .arg("price")
+                .arg(&price);
+            pipe.add_command(cmd);
+        }
+        pipe.query::<()>(&mut conn)
+            .expect("Pipeline HSET with metadata failed");
+    }
+
+    thread::sleep(Duration::from_millis(500));
+
+    let query_vec = &vectors[0];
+    let query_bytes = vec_to_bytes(query_vec);
+
+    // --- Test 1: TAG filter (electronics only) ---
+    let response: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+        .arg("idx_filter")
+        .arg("@category:{electronics}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]")
+        .arg("SORTBY")
+        .arg("vector_score")
+        .arg("ASC")
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("RETURN")
+        .arg(1)
+        .arg("vector_score")
+        .arg("DIALECT")
+        .arg(4)
+        .arg("PARAMS")
+        .arg(6)
+        .arg("vec_param")
+        .arg(&query_bytes[..])
+        .arg("K")
+        .arg(top)
+        .arg("EF")
+        .arg(128)
+        .query(&mut conn)
+        .expect("FT.SEARCH with TAG filter failed");
+
+    let tag_ids = parse_ft_search_ids(&response);
+    assert!(!tag_ids.is_empty(), "TAG filter should return results");
+    for id in &tag_ids {
+        assert_eq!(
+            *id % 2,
+            0,
+            "TAG filter for electronics should only return even IDs, got {}",
+            id
+        );
+    }
+
+    // --- Test 2: NUMERIC range filter (price 50..100 → IDs 5-10) ---
+    let response: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+        .arg("idx_filter")
+        .arg("@price:[50 100]=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]")
+        .arg("SORTBY")
+        .arg("vector_score")
+        .arg("ASC")
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("RETURN")
+        .arg(1)
+        .arg("vector_score")
+        .arg("DIALECT")
+        .arg(4)
+        .arg("PARAMS")
+        .arg(6)
+        .arg("vec_param")
+        .arg(&query_bytes[..])
+        .arg("K")
+        .arg(top)
+        .arg("EF")
+        .arg(128)
+        .query(&mut conn)
+        .expect("FT.SEARCH with NUMERIC filter failed");
+
+    let range_ids = parse_ft_search_ids(&response);
+    assert!(
+        !range_ids.is_empty(),
+        "NUMERIC range filter should return results"
+    );
+    for id in &range_ids {
+        let price = *id * 10;
+        assert!(
+            (50..=100).contains(&price),
+            "NUMERIC filter should only return IDs with price in [50,100], got id={} price={}",
+            id,
+            price
+        );
+    }
+
+    // --- Test 3: AND condition (electronics AND price 0..80) ---
+    let response: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+        .arg("idx_filter")
+        .arg(
+            "(@category:{electronics} @price:[0 80])=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]",
+        )
+        .arg("SORTBY")
+        .arg("vector_score")
+        .arg("ASC")
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("RETURN")
+        .arg(1)
+        .arg("vector_score")
+        .arg("DIALECT")
+        .arg(4)
+        .arg("PARAMS")
+        .arg(6)
+        .arg("vec_param")
+        .arg(&query_bytes[..])
+        .arg("K")
+        .arg(top)
+        .arg("EF")
+        .arg(128)
+        .query(&mut conn)
+        .expect("FT.SEARCH with AND filter failed");
+
+    let and_ids = parse_ft_search_ids(&response);
+    assert!(!and_ids.is_empty(), "AND filter should return results");
+    for id in &and_ids {
+        assert_eq!(
+            *id % 2,
+            0,
+            "AND filter: should be electronics (even), got {}",
+            id
+        );
+        let price = *id * 10;
+        assert!(
+            (0..=80).contains(&price),
+            "AND filter: price should be in [0,80], got id={} price={}",
+            id,
+            price
+        );
+    }
+
+    // --- Test 4: No filter (baseline) ---
+    let response: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+        .arg("idx_filter")
+        .arg("*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]")
+        .arg("SORTBY")
+        .arg("vector_score")
+        .arg("ASC")
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("RETURN")
+        .arg(1)
+        .arg("vector_score")
+        .arg("DIALECT")
+        .arg(4)
+        .arg("PARAMS")
+        .arg(6)
+        .arg("vec_param")
+        .arg(&query_bytes[..])
+        .arg("K")
+        .arg(top)
+        .arg("EF")
+        .arg(128)
+        .query(&mut conn)
+        .expect("FT.SEARCH unfiltered failed");
+
+    let all_ids = parse_ft_search_ids(&response);
+    assert_eq!(
+        all_ids.len(),
+        top,
+        "Unfiltered search should return exactly top={} results",
+        top
+    );
+
+    assert!(
+        tag_ids.len() <= all_ids.len(),
+        "Filtered results should not exceed unfiltered results"
+    );
+
+    let _: () = redis::cmd("FT.DROPINDEX")
+        .arg("idx_filter")
+        .arg("DD")
+        .query(&mut conn)
+        .unwrap();
+}
+
+#[test]
+fn test_redis_cosine_precision() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 200;
+    let top = 5;
+    let (ids, vectors) = generate_test_vectors(count, dim);
+
+    redis::cmd("FT.CREATE")
+        .arg("idx_cos")
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg("1")
+        .arg("")
+        .arg("SCHEMA")
+        .arg("vector")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg("6")
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dim)
+        .arg("DISTANCE_METRIC")
+        .arg("COSINE")
+        .query::<()>(&mut conn)
+        .expect("FT.CREATE with COSINE failed");
+
+    {
+        let mut pipe = redis::pipe();
+        for i in 0..ids.len() {
+            let key = ids[i].to_string();
+            let vec_bytes = vec_to_bytes(&vectors[i]);
+            let mut cmd = redis::cmd("HSET");
+            cmd.arg(key).arg("vector").arg(&vec_bytes[..]);
+            pipe.add_command(cmd);
+        }
+        pipe.query::<()>(&mut conn).expect("Pipeline HSET failed");
+    }
+
+    thread::sleep(Duration::from_millis(500));
+
+    let query_idx = 42;
+    let query_vec = &vectors[query_idx];
+    let expected = brute_force_neighbors_cosine(query_vec, &vectors, top);
+
+    let query_bytes = vec_to_bytes(query_vec);
+    let response: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+        .arg("idx_cos")
+        .arg("*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]")
+        .arg("SORTBY")
+        .arg("vector_score")
+        .arg("ASC")
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("RETURN")
+        .arg(1)
+        .arg("vector_score")
+        .arg("DIALECT")
+        .arg(4)
+        .arg("PARAMS")
+        .arg(6)
+        .arg("vec_param")
+        .arg(&query_bytes[..])
+        .arg("K")
+        .arg(top)
+        .arg("EF")
+        .arg(256)
+        .query(&mut conn)
+        .expect("FT.SEARCH COSINE failed");
+
+    let result_ids = parse_ft_search_ids(&response);
+
+    // Query vector should be its own nearest neighbor
+    assert!(
+        !result_ids.is_empty() && result_ids[0] == query_idx as i64,
+        "Query vector should be top-1 result, got {:?}",
+        result_ids
+    );
+
+    let expected_set: std::collections::HashSet<i64> = expected.into_iter().collect();
+    let found_set: std::collections::HashSet<i64> = result_ids.iter().copied().collect();
+    let hits = expected_set.intersection(&found_set).count();
+    let precision = hits as f64 / top as f64;
+
+    assert!(
+        precision >= 0.8,
+        "COSINE precision should be >= 0.8, got {} (expected {:?}, found {:?})",
+        precision,
+        expected_set,
+        found_set
+    );
+
+    let _: () = redis::cmd("FT.DROPINDEX")
+        .arg("idx_cos")
+        .arg("DD")
+        .query(&mut conn)
+        .unwrap();
+}
+
+#[test]
+fn test_redis_parallel_upload_search() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 8;
+    let count = 500;
+    let top = 5;
+    let num_threads = 4;
+    let (ids, vectors) = generate_test_vectors(count, dim);
+
+    redis::cmd("FT.CREATE")
+        .arg("idx_par")
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg("1")
+        .arg("")
+        .arg("SCHEMA")
+        .arg("vector")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg("6")
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dim)
+        .arg("DISTANCE_METRIC")
+        .arg("L2")
+        .query::<()>(&mut conn)
+        .expect("FT.CREATE failed");
+
+    // Parallel upload across 4 threads
+    let chunk_size = (count + num_threads - 1) / num_threads;
+    thread::scope(|s| {
+        for chunk_idx in 0..num_threads {
+            let start = chunk_idx * chunk_size;
+            let end = (start + chunk_size).min(count);
+            let ids_slice = &ids[start..end];
+            let vecs_slice = &vectors[start..end];
+
+            s.spawn(move || {
+                let mut t_conn = get_test_connection();
+                let mut pipe = redis::pipe();
+                for i in 0..ids_slice.len() {
+                    let key = ids_slice[i].to_string();
+                    let vec_bytes = vec_to_bytes(&vecs_slice[i]);
+                    let mut cmd = redis::cmd("HSET");
+                    cmd.arg(key).arg("vector").arg(&vec_bytes[..]);
+                    pipe.add_command(cmd);
+                }
+                pipe.query::<()>(&mut t_conn)
+                    .expect("Parallel pipeline HSET failed");
+            });
+        }
+    });
+
+    thread::sleep(Duration::from_millis(1000));
+
+    // Verify document count via FT.INFO
+    let info: redis::Value = redis::cmd("FT.INFO")
+        .arg("idx_par")
+        .query(&mut conn)
+        .expect("FT.INFO failed");
+
+    // Extract num_docs from FT.INFO response.
+    // Handles RESP2 (flat array of key/value) and RESP3 (Map).
+    let num_docs = extract_ft_info_value(&info, "num_docs");
+
+    assert_eq!(
+        num_docs,
+        Some(count as i64),
+        "All {} documents should be indexed after parallel upload",
+        count
+    );
+
+    // Parallel search across 4 threads.
+    // Store results indexed by query number so precision check uses the right entry.
+    let num_queries = 20;
+    let query_idx = Arc::new(AtomicUsize::new(0));
+    let results: Arc<Mutex<Vec<(usize, Vec<i64>)>>> = Arc::new(Mutex::new(Vec::new()));
+
+    thread::scope(|s| {
+        for _ in 0..num_threads {
+            let qi = Arc::clone(&query_idx);
+            let res = Arc::clone(&results);
+            let vecs = &vectors;
+
+            s.spawn(move || {
+                let mut t_conn = get_test_connection();
+                loop {
+                    let idx = qi.fetch_add(1, Ordering::SeqCst);
+                    if idx >= num_queries {
+                        break;
+                    }
+                    let qv = &vecs[idx];
+                    let qb = vec_to_bytes(qv);
+
+                    let response: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+                        .arg("idx_par")
+                        .arg("*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]")
+                        .arg("SORTBY")
+                        .arg("vector_score")
+                        .arg("ASC")
+                        .arg("LIMIT")
+                        .arg(0)
+                        .arg(top)
+                        .arg("RETURN")
+                        .arg(1)
+                        .arg("vector_score")
+                        .arg("DIALECT")
+                        .arg(4)
+                        .arg("PARAMS")
+                        .arg(6)
+                        .arg("vec_param")
+                        .arg(&qb[..])
+                        .arg("K")
+                        .arg(top)
+                        .arg("EF")
+                        .arg(128)
+                        .query(&mut t_conn)
+                        .expect("Parallel FT.SEARCH failed");
+
+                    let r_ids = parse_ft_search_ids(&response);
+                    res.lock().unwrap().push((idx, r_ids));
+                }
+            });
+        }
+    });
+
+    let all_results = results.lock().unwrap();
+    assert_eq!(
+        all_results.len(),
+        num_queries,
+        "All {} parallel queries should produce results",
+        num_queries
+    );
+    for (qi, r) in all_results.iter() {
+        assert!(
+            !r.is_empty(),
+            "Query {} should return at least 1 result",
+            qi
+        );
+    }
+
+    // Precision check on query 0
+    let query0_result = all_results.iter().find(|(qi, _)| *qi == 0).unwrap();
+    let expected = brute_force_neighbors(&vectors[0], &vectors, top);
+    let expected_set: std::collections::HashSet<i64> = expected.into_iter().collect();
+    let found_set: std::collections::HashSet<i64> = query0_result.1.iter().copied().collect();
+    let hits = expected_set.intersection(&found_set).count();
+    let precision = hits as f64 / top as f64;
+    assert!(
+        precision >= 0.6,
+        "Parallel search precision should be >= 0.6, got {}",
+        precision
+    );
+
+    let _: () = redis::cmd("FT.DROPINDEX")
+        .arg("idx_par")
+        .arg("DD")
+        .query(&mut conn)
+        .unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // VectorSets (VADD/VSIM) Integration Tests
 // ---------------------------------------------------------------------------
@@ -577,4 +1197,417 @@ fn test_vectorsets_pipeline_batch() {
     assert_eq!(top_id, 0, "Query vector should be its own nearest neighbor");
 
     let _: () = redis::cmd("DEL").arg("vset_pipe").query(&mut conn).unwrap();
+}
+
+#[test]
+fn test_vectorsets_knn_precision() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 200;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+
+    // Upload via pipeline with NOQUANT, M=16, EF=200
+    let mut pipe = redis::pipe();
+    for (i, vec) in vectors.iter().enumerate() {
+        let vec_bytes = vec_to_bytes(vec);
+        let mut cmd = redis::cmd("VADD");
+        cmd.arg("vset_precision")
+            .arg("FP32")
+            .arg(&vec_bytes[..])
+            .arg(i.to_string())
+            .arg("NOQUANT")
+            .arg("M")
+            .arg(16)
+            .arg("EF")
+            .arg(200)
+            .arg("CAS");
+        pipe.add_command(cmd);
+    }
+    pipe.query::<()>(&mut conn).expect("Pipeline VADD failed");
+
+    // Query with vector[42]
+    let query_idx = 42;
+    let query_vec = &vectors[query_idx];
+    let expected = brute_force_neighbors_cosine(query_vec, &vectors, top);
+
+    let query_bytes = vec_to_bytes(query_vec);
+    let response: Vec<redis::Value> = redis::cmd("VSIM")
+        .arg("vset_precision")
+        .arg("FP32")
+        .arg(&query_bytes[..])
+        .arg("WITHSCORES")
+        .arg("COUNT")
+        .arg(top)
+        .arg("EF")
+        .arg(64)
+        .query(&mut conn)
+        .expect("VSIM precision query failed");
+
+    // Parse results: alternating [id, score, id, score, ...]
+    assert!(
+        response.len() >= 2,
+        "Should get at least 1 result from VSIM"
+    );
+
+    let mut result_ids: Vec<i64> = Vec::new();
+    let mut scores: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i + 1 < response.len() {
+        let id = match &response[i] {
+            redis::Value::BulkString(data) => String::from_utf8_lossy(data).parse::<i64>().unwrap(),
+            redis::Value::Int(n) => *n,
+            _ => panic!("Unexpected ID type at index {}: {:?}", i, response[i]),
+        };
+        let score = match &response[i + 1] {
+            redis::Value::BulkString(data) => String::from_utf8_lossy(data).parse::<f64>().unwrap(),
+            redis::Value::Double(f) => *f,
+            _ => panic!(
+                "Unexpected score type at index {}: {:?}",
+                i + 1,
+                response[i + 1]
+            ),
+        };
+        result_ids.push(id);
+        scores.push(score);
+        i += 2;
+    }
+
+    // Query vector should be top-1
+    assert_eq!(
+        result_ids[0], query_idx as i64,
+        "Query vector should be its own nearest neighbor, got {}",
+        result_ids[0]
+    );
+
+    // Self-distance should be ~0 (score ~1, distance = 1 - score)
+    let self_dist = 1.0 - scores[0];
+    assert!(
+        self_dist.abs() < 0.01,
+        "Self-distance should be ~0, got {}",
+        self_dist
+    );
+
+    // Precision check against brute-force cosine neighbors
+    let expected_set: std::collections::HashSet<i64> = expected.into_iter().collect();
+    let found_set: std::collections::HashSet<i64> = result_ids.iter().copied().collect();
+    let hits = expected_set.intersection(&found_set).count();
+    let precision = hits as f64 / top as f64;
+
+    assert!(
+        precision >= 0.8,
+        "VectorSets precision should be >= 0.8, got {} (expected {:?}, found {:?})",
+        precision,
+        expected_set,
+        found_set
+    );
+
+    let _: () = redis::cmd("DEL")
+        .arg("vset_precision")
+        .query(&mut conn)
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Subprocess tests — run the actual vector-db-benchmark binary
+// ---------------------------------------------------------------------------
+
+/// Create a temporary project layout that the binary can discover:
+///   tmp/v0/datasets/datasets.json
+///   tmp/datasets/<name>/vectors.jsonl + queries.jsonl + neighbours.jsonl
+///   tmp/experiments/configurations/<engine>.json
+///   tmp/results/
+///
+/// Returns the temp dir path.
+fn create_test_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    vectors: &[Vec<f32>],
+    queries: &[Vec<f32>],
+    neighbors: &[Vec<i64>],
+    distance: &str,
+    dim: usize,
+) -> PathBuf {
+    let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+    let root = tmp.path().to_path_buf();
+    // Leak the TempDir so the directory persists until explicit cleanup
+    std::mem::forget(tmp);
+
+    // Create directory structure
+    let dataset_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&dataset_dir).unwrap();
+    fs::create_dir_all(root.join("v0/datasets")).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    // Write vectors.jsonl
+    let mut vecs_content = String::new();
+    for v in vectors {
+        let line: Vec<f64> = v.iter().map(|x| *x as f64).collect();
+        vecs_content.push_str(&serde_json::to_string(&line).unwrap());
+        vecs_content.push('\n');
+    }
+    fs::write(dataset_dir.join("vectors.jsonl"), &vecs_content).unwrap();
+
+    // Write queries.jsonl
+    let mut queries_content = String::new();
+    for q in queries {
+        let line: Vec<f64> = q.iter().map(|x| *x as f64).collect();
+        queries_content.push_str(&serde_json::to_string(&line).unwrap());
+        queries_content.push('\n');
+    }
+    fs::write(dataset_dir.join("queries.jsonl"), &queries_content).unwrap();
+
+    // Write neighbours.jsonl
+    let mut neighbors_content = String::new();
+    for n in neighbors {
+        neighbors_content.push_str(&serde_json::to_string(n).unwrap());
+        neighbors_content.push('\n');
+    }
+    fs::write(dataset_dir.join("neighbours.jsonl"), &neighbors_content).unwrap();
+
+    // Write datasets.json
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name,
+        "type": "jsonl",
+        "path": format!("{}/", dataset_name),
+        "distance": distance,
+        "vector_size": dim,
+        "vector_count": vectors.len(),
+    }]);
+    fs::write(
+        root.join("v0/datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+
+    // Write engine configs
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    root
+}
+
+/// Find the release binary path
+fn binary_path() -> PathBuf {
+    let mut path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    path.push("vector-db-benchmark");
+    if path.exists() {
+        return path;
+    }
+    // Fallback: look relative to manifest dir
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/vector-db-benchmark")
+}
+
+/// Parse the search result JSON and return mean_precisions
+fn read_search_precision(results_dir: &PathBuf, engine_name: &str) -> f64 {
+    let pattern = format!("{}-*-search-*.json", engine_name);
+    let mut found = Vec::new();
+    for entry in fs::read_dir(results_dir).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if glob::Pattern::new(&pattern).unwrap().matches(&name) {
+            found.push(entry.path());
+        }
+    }
+    assert!(
+        !found.is_empty(),
+        "No search result files found matching '{}'",
+        pattern
+    );
+
+    // Read the first matching result file
+    let content = fs::read_to_string(&found[0]).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&content).unwrap();
+    result["results"]["mean_precisions"]
+        .as_f64()
+        .expect("mean_precisions not found in result JSON")
+}
+
+#[test]
+fn test_binary_redis_end_to_end() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+
+    // Use a subset as queries and compute ground truth
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([{
+        "name": "test-redis-l2",
+        "engine": "redis",
+        "algorithm": "hnsw",
+        "collection_params": {
+            "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 }
+        },
+        "search_params": [{
+            "parallel": 1,
+            "search_params": { "ef": 256 },
+            "top": top,
+        }],
+        "upload_params": {
+            "data_type": "FLOAT32",
+            "parallel": 1,
+            "batch_size": 64
+        }
+    }]);
+
+    let project_root = create_test_project(
+        "test-l2",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+
+    let bin = binary_path();
+    assert!(
+        bin.exists(),
+        "Binary not found at {:?}. Run `cargo build --release` first.",
+        bin
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "--engines",
+            "test-redis-l2",
+            "--datasets",
+            "test-l2",
+            "--host",
+            "localhost",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .current_dir(&project_root)
+        .output()
+        .expect("Failed to run vector-db-benchmark");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "Binary failed.\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // Verify result file exists and precision is reasonable
+    let results_dir = project_root.join("results");
+    let precision = read_search_precision(&results_dir, "test-redis-l2");
+    assert!(
+        precision >= 0.8,
+        "Binary Redis L2 precision should be >= 0.8, got {}",
+        precision
+    );
+
+    // Cleanup temp dir
+    fs::remove_dir_all(&project_root).ok();
+}
+
+#[test]
+fn test_binary_vectorsets_end_to_end() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors_cosine(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([{
+        "name": "test-vectorsets",
+        "engine": "vectorsets",
+        "search_params": [{
+            "parallel": 1,
+            "search_params": { "ef": 64 },
+            "top": top,
+        }],
+        "upload_params": {
+            "hnsw_config": {
+                "quant": "NOQUANT",
+                "M": 16,
+                "EF_CONSTRUCTION": 200
+            },
+            "CAS": true,
+            "parallel": 1,
+            "batch_size": 64
+        }
+    }]);
+
+    let project_root = create_test_project(
+        "test-cosine",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "cosine",
+        dim,
+    );
+
+    let bin = binary_path();
+    assert!(bin.exists(), "Binary not found at {:?}", bin);
+
+    let output = Command::new(&bin)
+        .args([
+            "--engines",
+            "test-vectorsets",
+            "--datasets",
+            "test-cosine",
+            "--host",
+            "localhost",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .current_dir(&project_root)
+        .output()
+        .expect("Failed to run vector-db-benchmark");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "Binary failed.\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    let results_dir = project_root.join("results");
+    let precision = read_search_precision(&results_dir, "test-vectorsets");
+    assert!(
+        precision >= 0.8,
+        "Binary VectorSets precision should be >= 0.8, got {}",
+        precision
+    );
+
+    fs::remove_dir_all(&project_root).ok();
 }

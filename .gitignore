@@ -19,3 +19,6 @@ dist/
 memory-bank/*
 .specsmd/
 target/
+
+
+v0/results/

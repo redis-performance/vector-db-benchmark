@@ -249,9 +249,7 @@ if [ $# -eq 0 ] || [ "${1:-}" = "--all" ]; then
     COMBOS=(
         "redis-m-16-ef-128:h-and-m-2048-angular-filters"
         "redis-m-16-ef-128:glove-25-angular"
-        "redis-m-16-ef-128:random-100k"
-        "vectorsets-fp32-default:glove-25-angular"
-        "vectorsets-fp32-default:random-100k"
+        "redis-m-16-ef-128:random-100"
     )
 
     for combo in "${COMBOS[@]}"; do
