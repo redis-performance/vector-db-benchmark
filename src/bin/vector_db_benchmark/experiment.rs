@@ -46,6 +46,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "elasticsearch",
         "opensearch",
         "qdrant",
+        "weaviate",
     ];
     let engines: Vec<_> = engine_configs
         .iter()

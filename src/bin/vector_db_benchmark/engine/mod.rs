@@ -11,6 +11,7 @@ mod opensearch;
 mod qdrant;
 mod redis;
 mod vectorsets;
+mod weaviate;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
@@ -20,6 +21,7 @@ pub use opensearch::OpenSearchEngine;
 pub use qdrant::QdrantEngine;
 pub use redis::RedisEngine;
 pub use vectorsets::VectorSetsEngine;
+pub use weaviate::WeaviateEngine;
 
 /// Upload statistics
 #[derive(Debug, Clone, Default)]
@@ -100,8 +102,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "elasticsearch" => Ok(Box::new(ElasticsearchEngine::new(engine_config, host)?)),
         "opensearch" => Ok(Box::new(OpenSearchEngine::new(engine_config, host)?)),
         "qdrant" => Ok(Box::new(QdrantEngine::new(engine_config, host)?)),
+        "weaviate" => Ok(Box::new(WeaviateEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate'.",
             other
         )),
     }
