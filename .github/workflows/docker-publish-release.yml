@@ -14,12 +14,14 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Fetch full history for Git info
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -27,11 +29,11 @@ jobs:
       - name: Check Docker Hub credentials
         run: |
           if [[ -z "${{ secrets.DOCKER_USERNAME }}" || -z "${{ secrets.DOCKER_PASSWORD }}" ]]; then
-            echo "❌ Docker Hub credentials not configured!"
+            echo "Docker Hub credentials not configured!"
             echo "Please set DOCKER_USERNAME and DOCKER_PASSWORD secrets in repository settings."
             exit 1
           fi
-          echo "✅ Docker Hub credentials are configured"
+          echo "Docker Hub credentials are configured"
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -39,15 +41,6 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Extract Git metadata
-        id: meta
-        run: |
-          GIT_SHA=$(git rev-parse HEAD)
-          GIT_DIRTY=$(git diff --no-ext-diff 2>/dev/null | wc -l)
-          echo "git_sha=${GIT_SHA}" >> $GITHUB_OUTPUT
-          echo "git_dirty=${GIT_DIRTY}" >> $GITHUB_OUTPUT
-          echo "short_sha=${GIT_SHA:0:7}" >> $GITHUB_OUTPUT
 
       - name: Extract metadata for Docker
         id: docker_meta
@@ -66,28 +59,33 @@ jobs:
           push: true
           tags: ${{ steps.docker_meta.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
-          build-args: |
-            GIT_SHA=${{ steps.meta.outputs.git_sha }}
-            GIT_DIRTY=${{ steps.meta.outputs.git_dirty }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
           format: 'sarif'
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
 
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: redis/vector-db-benchmark
+          readme-filepath: ./DOCKER_README.md
+
       - name: Generate summary
         run: |
-          echo "## 🚀 Docker Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker Release Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Repository:** \`${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Release:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
@@ -96,16 +94,14 @@ jobs:
           echo "${{ steps.docker_meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Git SHA:** \`${{ steps.meta.outputs.git_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Usage:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "# Latest release" >> $GITHUB_STEP_SUMMARY
-          echo "docker run --rm ${{ env.IMAGE_NAME }}:${{ github.ref_name }} run.py --help" >> $GITHUB_STEP_SUMMARY
+          echo "docker run --rm ${{ env.IMAGE_NAME }}:${{ github.ref_name }} --help" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Specific version" >> $GITHUB_STEP_SUMMARY
-          echo "docker run --rm ${{ env.IMAGE_NAME }}:latest run.py --help" >> $GITHUB_STEP_SUMMARY
+          echo "docker run --rm ${{ env.IMAGE_NAME }}:latest --help" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [View on Docker Hub](https://hub.docker.com/r/redis/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
-          echo "🔒 [Security Scan Results](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
+          echo "[View on Docker Hub](https://hub.docker.com/r/redis/vector-db-benchmark)" >> $GITHUB_STEP_SUMMARY
+          echo "[Security Scan Results](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY

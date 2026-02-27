@@ -1,0 +1,40 @@
+# CI integration test compose file.
+# Uses the random-100 dataset (228KB) baked into the Docker image —
+# no volume mounts or large dataset downloads required.
+#
+# Usage:
+#   IMAGE_TAG=pr-42 docker compose -f tests/docker-compose.ci-test.yml up -d redis --wait
+#   docker compose -f tests/docker-compose.ci-test.yml exec redis redis-cli CONFIG SET search-workers 8
+#   docker compose -f tests/docker-compose.ci-test.yml run --rm benchmark
+#   docker compose -f tests/docker-compose.ci-test.yml down
+
+services:
+  redis:
+    image: redis:8.6.0
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1Gb
+
+  benchmark:
+    image: ${IMAGE_NAME:-vector-db-benchmark}:${IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ci-results:/code/results
+    command:
+      - "--engines"
+      - "redis-docker-test"
+      - "--datasets"
+      - "random-100"
+      - "--host"
+      - "redis"
+
+volumes:
+  ci-results:

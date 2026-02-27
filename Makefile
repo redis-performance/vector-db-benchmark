@@ -191,6 +191,19 @@ docker-integration: docker-build
 	docker compose -f tests/docker-compose.docker-test.yml down ; \
 	exit $$EXIT_CODE
 
+.PHONY: docker-integration-fast
+docker-integration-fast: docker-build
+	@echo "=== Running fast Docker integration test (random-100 + Redis) ==="
+	docker compose -f tests/docker-compose.ci-test.yml up -d redis --wait
+	@echo "=== Configuring Redis search-workers ==="
+	docker compose -f tests/docker-compose.ci-test.yml exec redis redis-cli CONFIG SET search-workers 8
+	@echo "=== Starting benchmark container ==="
+	docker compose -f tests/docker-compose.ci-test.yml run --rm benchmark; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping services ===" ; \
+	docker compose -f tests/docker-compose.ci-test.yml down ; \
+	exit $$EXIT_CODE
+
 # ============================================================
 # CLEAN
 # ============================================================
@@ -214,7 +227,8 @@ help:
 	@echo "  make check-strict      - Run linting with warnings as errors"
 	@echo "  make build             - Build Rust code in release mode"
 	@echo "  make docker-build      - Build Docker image (IMAGE_TAG=latest)"
-	@echo "  make docker-integration - Run benchmark in Docker against Redis"
+	@echo "  make docker-integration      - Run benchmark in Docker against Redis (h-and-m dataset)"
+	@echo "  make docker-integration-fast - Run fast benchmark in Docker (random-100 dataset)"
 	@echo "  make v0-check          - Compare Rust vs Python v0 (precision, QPS, latency)"
 	@echo "  make fmt               - Auto-format Rust code"
 	@echo "  make clean             - Clean build artifacts"

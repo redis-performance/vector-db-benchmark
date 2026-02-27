@@ -8,13 +8,12 @@
 # ============================================================
 FROM rust:bookworm AS builder
 
-# Install HDF5 development libraries and pkg-config
+# Install HDF5 development libraries, pkg-config, and dpkg-dev (for dpkg-architecture)
 RUN apt-get update && apt-get install -y \
     libhdf5-dev \
     pkg-config \
+    dpkg-dev \
     && rm -rf /var/lib/apt/lists/*
-
-ENV HDF5_DIR=/usr/lib/x86_64-linux-gnu/hdf5/serial
 
 WORKDIR /build
 
@@ -33,7 +32,9 @@ RUN mkdir -p src/bin/vector_db_benchmark/engine src/readers src/redisearch src/v
     && touch src/bin/vector_db_benchmark/engine/mod.rs
 
 # Build dependencies only (this layer is cached)
-RUN cargo build --release --bin vector-db-benchmark 2>/dev/null || true
+# HDF5_DIR is set dynamically to support both amd64 and arm64
+RUN HDF5_DIR=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hdf5/serial \
+    cargo build --release --bin vector-db-benchmark 2>/dev/null || true
 # Remove dummy source and binary fingerprints, keep compiled dependencies
 RUN rm -rf src target/release/vector-db-benchmark target/release/.fingerprint/vector_db_benchmark-*
 
@@ -42,7 +43,8 @@ RUN rm -rf src target/release/vector-db-benchmark target/release/.fingerprint/ve
 COPY src ./src
 
 # Build the actual binary (dependencies are cached, only project code recompiles)
-RUN cargo build --release --bin vector-db-benchmark
+RUN HDF5_DIR=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/hdf5/serial \
+    cargo build --release --bin vector-db-benchmark
 
 # ============================================================
 # Stage 2: Slim runtime image
@@ -64,6 +66,7 @@ COPY --from=builder /build/target/release/vector-db-benchmark /usr/local/bin/vec
 # Copy dataset definitions and experiment configurations into the image.
 # project_root() searches for datasets/datasets.json as its marker.
 COPY datasets/datasets.json /code/datasets/datasets.json
+COPY datasets/random-100 /code/datasets/random-100
 COPY experiments/configurations /code/experiments/configurations
 
 # Create mount point directories.
