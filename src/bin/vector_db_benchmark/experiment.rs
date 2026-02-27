@@ -40,7 +40,13 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
 
     // Filter engines by pattern
-    let supported_engines = ["redis", "vectorsets", "elasticsearch", "opensearch"];
+    let supported_engines = [
+        "redis",
+        "vectorsets",
+        "elasticsearch",
+        "opensearch",
+        "qdrant",
+    ];
     let engines: Vec<_> = engine_configs
         .iter()
         .filter(|(name, config)| {
