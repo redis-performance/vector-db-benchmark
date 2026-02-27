@@ -1,123 +1,74 @@
-# Multi-stage Dockerfile for vector-db-benchmark
-# Stage 1: Build environment
-FROM python:3.10-slim AS builder
+# Multi-stage Dockerfile for vector-db-benchmark (Rust)
+#
+# Build: docker build -t vector-db-benchmark .
+# Run:   docker run --rm vector-db-benchmark --help
 
-# Build arguments for Git metadata
-ARG GIT_SHA
-ARG GIT_DIRTY
+# ============================================================
+# Stage 1: Build the Rust binary
+# ============================================================
+FROM rust:bookworm AS builder
 
-# Environment variables for Python
-ENV PYTHONFAULTHANDLER=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONHASHSEED=random \
-    PIP_NO_CACHE_DIR=off \
-    PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PIP_DEFAULT_TIMEOUT=100 \
-    POETRY_VERSION=1.5.1
-
-# Install system dependencies (including Rust toolchain prerequisites)
+# Install HDF5 development libraries and pkg-config
 RUN apt-get update && apt-get install -y \
-    wget \
-    git \
-    build-essential \
-    curl \
+    libhdf5-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust toolchain
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
+ENV HDF5_DIR=/usr/lib/x86_64-linux-gnu/hdf5/serial
 
-# Install Poetry and maturin
-RUN pip install "poetry==$POETRY_VERSION" maturin
+WORKDIR /build
 
-# Set working directory
-WORKDIR /code
+# --- Dependency caching layer ---
+# Copy only Cargo manifests and lock file first, then build dependencies
+# with dummy source files. This layer is cached unless Cargo.toml/lock change.
+COPY Cargo.toml Cargo.lock ./
 
-# Copy dependency files first for better caching
-COPY poetry.lock pyproject.toml /code/
-COPY README.md /code/
+# Create dummy source structure matching all targets
+RUN mkdir -p src/bin/vector_db_benchmark/engine src/readers src/redisearch src/vectorsets \
+    && echo "fn main() {}" > src/bin/bench_hdf5.rs \
+    && echo "fn main() {}" > src/bin/bench_jsonl.rs \
+    && echo "fn main() {}" > src/bin/bench_npy.rs \
+    && echo "fn main() {}" > src/bin/vector_db_benchmark/main.rs \
+    && touch src/lib.rs \
+    && touch src/bin/vector_db_benchmark/engine/mod.rs
 
-# Copy package directories needed by Poetry
-COPY benchmark /code/benchmark
-COPY dataset_reader /code/dataset_reader
-COPY engine /code/engine
-COPY datasets /code/datasets
-COPY experiments /code/experiments
-COPY run.py /code/run.py
+# Build dependencies only (this layer is cached)
+RUN cargo build --release --bin vector-db-benchmark 2>/dev/null || true
+# Remove dummy source and binary fingerprints, keep compiled dependencies
+RUN rm -rf src target/release/vector-db-benchmark target/release/.fingerprint/vector_db_benchmark-*
 
-# Configure Poetry and install dependencies
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-dev --no-interaction --no-ansi
+# --- Source build layer ---
+# Copy real source code
+COPY src ./src
 
-# Install additional dependencies
-RUN pip install "boto3"
+# Build the actual binary (dependencies are cached, only project code recompiles)
+RUN cargo build --release --bin vector-db-benchmark
 
-# Copy Rust crate and build the PyO3 native extension (maturin reads root pyproject.toml)
-COPY rust /code/rust
-RUN maturin build --release --out /tmp/wheels \
-    && pip install /tmp/wheels/*.whl
+# ============================================================
+# Stage 2: Slim runtime image
+# ============================================================
+FROM debian:bookworm-slim
 
-# Copy remaining source code
-COPY . /code
-
-# Store Git information
-RUN if [ -z "$GIT_SHA" ]; then \
-        GIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown"); \
-    fi && \
-    if [ -z "$GIT_DIRTY" ]; then \
-        GIT_DIRTY=$(git diff --no-ext-diff 2>/dev/null | wc -l || echo "0"); \
-    fi && \
-    echo "Built with GIT_SHA=${GIT_SHA}, GIT_DIRTY=${GIT_DIRTY}" > /code/build_info.txt
-
-# Stage 2: Runtime environment
-FROM python:3.10-slim
-
-# Environment variables for Python
-ENV PYTHONFAULTHANDLER=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONHASHSEED=random
-
-# Install runtime dependencies
+# Install HDF5 runtime library
 RUN apt-get update && apt-get install -y \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+    libhdf5-103-1 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && ldconfig
 
-
-# Set working directory
 WORKDIR /code
 
-# Copy Python environment from builder
-COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copy the binary from builder
+COPY --from=builder /build/target/release/vector-db-benchmark /usr/local/bin/vector-db-benchmark
 
-# Copy application code
-COPY --from=builder /code /code
+# Copy dataset definitions and experiment configurations into the image.
+# project_root() searches for datasets/datasets.json as its marker.
+COPY datasets/datasets.json /code/datasets/datasets.json
+COPY experiments/configurations /code/experiments/configurations
 
-# Create directories with proper permissions
-RUN mkdir -p /code/results /code/datasets && \
-    chmod -R 777 /code/results /code/datasets && \
-    chmod -R 755 /code
+# Create mount point directories.
+# Downloaded datasets go to project_root/datasets/ (checked first by get_path).
+RUN mkdir -p /code/datasets /code/results
 
-# Create entrypoint script to handle user permissions
-RUN echo '#!/bin/bash\n\
-# Handle user permissions for volume mounts\n\
-# Ensure results directory is writable\n\
-mkdir -p /code/results\n\
-chmod 777 /code/results\n\
-exec "$@"' > /code/entrypoint.sh && \
-    chmod +x /code/entrypoint.sh
-
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)" || exit 1
-
-# Expose common ports (for documentation purposes)
-EXPOSE 6379 6380
-
-# Set entrypoint
-ENTRYPOINT ["/code/entrypoint.sh"]
-
-# Default command (show help)
-CMD ["vector-db-benchmark", "--help"]
-
+ENTRYPOINT ["vector-db-benchmark"]
+CMD ["--help"]

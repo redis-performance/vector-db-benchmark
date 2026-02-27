@@ -1,0 +1,28 @@
+services:
+  redis:
+    image: redis:8.6.0
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 4Gb
+
+  benchmark:
+    image: vector-db-benchmark:${IMAGE_TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../datasets:/code/datasets
+      - ../results:/code/results
+    command:
+      - "--engines"
+      - "redis-docker-test"
+      - "--datasets"
+      - "h-and-m-2048-angular-filters"
+      - "--host"
+      - "redis"

@@ -31,10 +31,18 @@ pub struct HnswConfig {
     pub ef_construction: Option<i64>,
 }
 
+/// Elasticsearch index_options (lowercase keys)
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IndexOptions {
+    pub m: Option<i64>,
+    pub ef_construction: Option<i64>,
+}
+
 /// Collection parameters
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct CollectionParams {
     pub hnsw_config: Option<HnswConfig>,
+    pub index_options: Option<IndexOptions>,
 }
 
 /// Search parameters for a single search configuration
@@ -43,6 +51,7 @@ pub struct SearchParams {
     pub parallel: Option<i64>,
     pub search_params: Option<InnerSearchParams>,
     pub top: Option<i64>,
+    pub num_candidates: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -66,8 +75,8 @@ pub struct EngineConfig {
 pub fn project_root() -> PathBuf {
     let current = std::env::current_dir().unwrap_or_default();
 
-    // Look for v0/datasets/datasets.json to verify we're in the right place
-    if current.join("v0/datasets/datasets.json").exists() {
+    // Look for datasets/datasets.json to verify we're in the right place
+    if current.join("datasets/datasets.json").exists() {
         return current;
     }
 
@@ -76,7 +85,7 @@ pub fn project_root() -> PathBuf {
     for _ in 0..5 {
         if let Some(parent) = search.parent() {
             search = parent.to_path_buf();
-            if search.join("v0/datasets/datasets.json").exists() {
+            if search.join("datasets/datasets.json").exists() {
                 return search;
             }
         }
@@ -85,23 +94,14 @@ pub fn project_root() -> PathBuf {
     current
 }
 
-/// Get datasets directory path (site-packages or local)
+/// Get datasets directory path
 pub fn datasets_dir() -> PathBuf {
-    // First try site-packages (for installed datasets like h-and-m)
-    if let Ok(home) = std::env::var("HOME") {
-        let site_packages =
-            PathBuf::from(&home).join(".local/lib/python3.12/site-packages/datasets");
-        if site_packages.exists() {
-            return site_packages;
-        }
-    }
-    // Fallback to v0/datasets directory
-    project_root().join("v0/datasets")
+    project_root().join("datasets")
 }
 
 /// Read all dataset configurations
 pub fn read_dataset_configs() -> Result<HashMap<String, DatasetConfig>, String> {
-    let datasets_json = project_root().join("v0/datasets/datasets.json");
+    let datasets_json = project_root().join("datasets/datasets.json");
     let content = fs::read_to_string(&datasets_json)
         .map_err(|e| format!("Failed to read datasets.json at {:?}: {}", datasets_json, e))?;
 

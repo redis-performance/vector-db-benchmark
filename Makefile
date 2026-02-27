@@ -7,6 +7,8 @@
 #   make benchmark           - Run Rust microbenchmarks
 #   make check               - Run linting (clippy) and formatting (rustfmt) checks
 #   make build               - Build Rust code in release mode
+#   make docker-build        - Build Docker image
+#   make docker-integration  - Run benchmark in Docker against Redis
 #   make clean               - Clean build artifacts
 
 # Environment variables
@@ -14,6 +16,9 @@ export HDF5_DIR ?= /usr/lib/x86_64-linux-gnu/hdf5/serial
 
 # Directories
 DATASETS_DIR := datasets
+
+# Docker
+IMAGE_TAG ?= latest
 
 # Default target
 .PHONY: all
@@ -72,6 +77,17 @@ integration-test:
 	cargo test --test integration_redis --release -- --nocapture --test-threads=1; \
 	EXIT_CODE=$$?; \
 	echo "=== Stopping redis ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
+.PHONY: integration-test-elasticsearch
+integration-test-elasticsearch:
+	@echo "=== Starting Elasticsearch 8.10.2 for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d elasticsearch --wait
+	@echo "=== Running Elasticsearch integration tests ==="
+	ELASTIC_PORT=9201 cargo test --test integration_elasticsearch --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping Elasticsearch ===" ; \
 	docker compose -f tests/docker-compose.test.yml down ; \
 	exit $$EXIT_CODE
 
@@ -146,7 +162,34 @@ fmt:
 .PHONY: v0-check
 v0-check: vector-db-benchmark
 	@echo "=== Running v0-check (Rust vs Python comparison) ==="
-	./scripts/v0_check.sh
+	./scripts/v0_check.sh $(ENGINE) $(DATASET)
+
+.PHONY: v0-check-all
+v0-check-all: vector-db-benchmark
+	@echo "=== Running v0-check (all combinations) ==="
+	./scripts/v0_check.sh --all
+
+# ============================================================
+# DOCKER - Build image and run Docker-based integration tests
+# ============================================================
+
+.PHONY: docker-build
+docker-build:
+	@echo "=== Building Docker image vector-db-benchmark:$(IMAGE_TAG) ==="
+	docker build -t vector-db-benchmark:$(IMAGE_TAG) .
+
+.PHONY: docker-integration
+docker-integration: docker-build
+	@echo "=== Running Docker integration test (h-and-m-2048-angular-filters + Redis) ==="
+	docker compose -f tests/docker-compose.docker-test.yml up -d redis --wait
+	@echo "=== Configuring Redis search-workers ==="
+	docker compose -f tests/docker-compose.docker-test.yml exec redis redis-cli CONFIG SET search-workers 8
+	@echo "=== Starting benchmark container ==="
+	docker compose -f tests/docker-compose.docker-test.yml run --rm benchmark; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping services ===" ; \
+	docker compose -f tests/docker-compose.docker-test.yml down ; \
+	exit $$EXIT_CODE
 
 # ============================================================
 # CLEAN
@@ -170,6 +213,8 @@ help:
 	@echo "  make check             - Run linting (clippy) and formatting checks"
 	@echo "  make check-strict      - Run linting with warnings as errors"
 	@echo "  make build             - Build Rust code in release mode"
+	@echo "  make docker-build      - Build Docker image (IMAGE_TAG=latest)"
+	@echo "  make docker-integration - Run benchmark in Docker against Redis"
 	@echo "  make v0-check          - Compare Rust vs Python v0 (precision, QPS, latency)"
 	@echo "  make fmt               - Auto-format Rust code"
 	@echo "  make clean             - Clean build artifacts"

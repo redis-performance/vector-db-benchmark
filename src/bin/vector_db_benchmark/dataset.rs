@@ -25,24 +25,14 @@ impl Dataset {
     /// Get the file path for this dataset
     pub fn get_path(&self) -> Result<PathBuf, String> {
         if let Some(path_str) = self.config.path.as_str() {
-            // Check in ./datasets/ (project root)
-            let datasets_path = project_root().join("datasets").join(path_str);
+            // Check in datasets/ directory
+            let datasets_path = datasets_dir().join(path_str);
             if datasets_path.exists() {
                 return Ok(datasets_path);
             }
-            // Check in site-packages (for installed datasets)
-            let site_path = datasets_dir().join(path_str);
-            if site_path.exists() {
-                return Ok(site_path);
-            }
-            // Check in v0/datasets directory
-            let local_path = project_root().join("v0/datasets").join(path_str);
-            if local_path.exists() {
-                return Ok(local_path);
-            }
             // Not found locally — try downloading if link is available
             if let Some(link) = &self.config.link {
-                let target_path = project_root().join("datasets").join(path_str);
+                let target_path = datasets_dir().join(path_str);
                 download::download_dataset(link, &target_path)?;
                 // Re-check after download
                 if target_path.exists() {
@@ -54,8 +44,8 @@ impl Dataset {
                 ))
             } else {
                 Err(format!(
-                    "Dataset path not found and no download link: {} (tried {:?}, {:?}, and {:?})",
-                    path_str, datasets_path, site_path, local_path
+                    "Dataset path not found and no download link: {} (tried {:?})",
+                    path_str, datasets_path
                 ))
             }
         } else if let Some(path_obj) = self.config.path.as_object() {
@@ -63,13 +53,9 @@ impl Dataset {
             if let Some(data_files) = path_obj.get("data").and_then(|d| d.as_array()) {
                 if let Some(first) = data_files.first() {
                     if let Some(p) = first.get("path").and_then(|p| p.as_str()) {
-                        let site_path = datasets_dir().join(p);
-                        if site_path.exists() {
-                            return Ok(site_path);
-                        }
-                        let local_path = project_root().join("v0/datasets").join(p);
-                        if local_path.exists() {
-                            return Ok(local_path);
+                        let datasets_path = datasets_dir().join(p);
+                        if datasets_path.exists() {
+                            return Ok(datasets_path);
                         }
                     }
                 }

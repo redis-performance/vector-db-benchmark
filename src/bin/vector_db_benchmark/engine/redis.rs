@@ -315,9 +315,7 @@ impl RedisEngine {
 
             fn extract_usize(val: &redis::Value) -> usize {
                 match val {
-                    redis::Value::BulkString(s) => {
-                        String::from_utf8_lossy(s).parse().unwrap_or(0)
-                    }
+                    redis::Value::BulkString(s) => String::from_utf8_lossy(s).parse().unwrap_or(0),
                     redis::Value::Int(n) => *n as usize,
                     redis::Value::Double(f) => *f as usize,
                     redis::Value::SimpleString(s) => s.parse().unwrap_or(0),
@@ -341,9 +339,7 @@ impl RedisEngine {
                     // RESP2: alternating key-value pairs (keys can be BulkString or SimpleString)
                     for i in (0..arr.len()).step_by(2) {
                         let key_str = match &arr[i] {
-                            redis::Value::BulkString(s) => {
-                                String::from_utf8_lossy(s).to_string()
-                            }
+                            redis::Value::BulkString(s) => String::from_utf8_lossy(s).to_string(),
                             redis::Value::SimpleString(s) => s.clone(),
                             _ => continue,
                         };
@@ -363,9 +359,7 @@ impl RedisEngine {
                     // RESP3: key-value map
                     for (k, v) in map {
                         let key_str = match k {
-                            redis::Value::BulkString(s) => {
-                                String::from_utf8_lossy(s).to_string()
-                            }
+                            redis::Value::BulkString(s) => String::from_utf8_lossy(s).to_string(),
                             redis::Value::SimpleString(s) => s.clone(),
                             _ => continue,
                         };
@@ -972,11 +966,10 @@ impl Engine for RedisEngine {
             .map(|c| c.as_ref().and_then(parse_conditions))
             .collect();
 
-        // Default top to neighbor count (matches Python v0 behavior)
-        let top = params
-            .top
-            .map(|t| t as usize)
-            .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
+        // When top is explicitly set, use it for all queries.
+        // When not set, use per-query ground truth count (matches Python v0 behavior
+        // where top defaults to len(query.expected_result) per query).
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let num_to_run = if num_queries > 0 {
             (num_queries as usize).min(queries.len())
         } else {
@@ -1027,6 +1020,17 @@ impl Engine for RedisEngine {
                         if idx >= num_to_run {
                             break;
                         }
+
+                        // Per-query top: use explicit top if set, otherwise
+                        // use ground truth count (matches Python v0 behavior)
+                        let top = explicit_top.unwrap_or_else(|| {
+                            let n = neighbors[idx].len();
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
+                        });
 
                         let query_start = Instant::now();
                         let results = ft_search_knn(
@@ -1110,7 +1114,7 @@ impl Engine for RedisEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top,
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
         })

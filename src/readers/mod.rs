@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_jsonl_reader_queries_random100() {
-        let path = project_root().join("v0/datasets/random-100");
+        let path = project_root().join("datasets/random-100");
         if !path.exists() {
             eprintln!("Skipping: dataset not found at {:?}", path);
             return;

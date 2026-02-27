@@ -6,12 +6,14 @@
 //! - `Uploader` trait = BaseUploader
 //! - `Searcher` trait = BaseSearcher
 
+mod elasticsearch;
 mod redis;
 mod vectorsets;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 
+pub use elasticsearch::ElasticsearchEngine;
 pub use redis::RedisEngine;
 pub use vectorsets::VectorSetsEngine;
 
@@ -84,8 +86,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
     match engine_type {
         "redis" => Ok(Box::new(RedisEngine::new(engine_config, host)?)),
         "vectorsets" => Ok(Box::new(VectorSetsEngine::new(engine_config, host)?)),
+        "elasticsearch" => Ok(Box::new(ElasticsearchEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Only 'redis' and 'vectorsets' are supported.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch'.",
             other
         )),
     }
