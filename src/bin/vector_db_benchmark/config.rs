@@ -43,6 +43,9 @@ pub struct IndexOptions {
 pub struct CollectionParams {
     pub hnsw_config: Option<HnswConfig>,
     pub index_options: Option<IndexOptions>,
+    /// Catch-all for engine-specific collection params (e.g., OpenSearch "method")
+    #[serde(flatten)]
+    pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Search parameters for a single search configuration
@@ -56,6 +59,9 @@ pub struct SearchParams {
     pub calibration_param: Option<String>,
     /// Calibration: target precision to achieve
     pub calibration_precision: Option<f64>,
+    /// Catch-all for engine-specific search params (e.g., OpenSearch "knn.algo_param.ef_search")
+    #[serde(flatten)]
+    pub extra: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
