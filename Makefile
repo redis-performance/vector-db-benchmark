@@ -80,6 +80,28 @@ integration-test:
 	docker compose -f tests/docker-compose.test.yml down ; \
 	exit $$EXIT_CODE
 
+.PHONY: integration-test-pgvector
+integration-test-pgvector:
+	@echo "=== Starting PgVector (pgvector/pgvector:pg16) for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d pgvector --wait
+	@echo "=== Running PgVector integration tests ==="
+	PGVECTOR_PORT=5433 cargo test --test integration_pgvector --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping PgVector ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
+.PHONY: integration-test-qdrant
+integration-test-qdrant:
+	@echo "=== Starting Qdrant v1.13.4 for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d qdrant --wait
+	@echo "=== Running Qdrant integration tests ==="
+	QDRANT_GRPC_PORT=6335 cargo test --test integration_qdrant --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping Qdrant ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
 .PHONY: integration-test-elasticsearch
 integration-test-elasticsearch:
 	@echo "=== Starting Elasticsearch 8.10.2 for integration tests ==="

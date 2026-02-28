@@ -74,6 +74,48 @@ jobs:
       if: always()
       run: docker compose -f tests/docker-compose.test.yml down
 
+  integration-pgvector:
+    name: Integration tests (PgVector)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start PgVector
+      run: docker compose -f tests/docker-compose.test.yml up -d pgvector --wait
+
+    - name: Run PgVector integration tests
+      run: PGVECTOR_PORT=5433 cargo test --test integration_pgvector --release -- --test-threads=1
+
+    - name: Stop PgVector
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-qdrant:
+    name: Integration tests (Qdrant)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Qdrant
+      run: docker compose -f tests/docker-compose.test.yml up -d qdrant --wait
+
+    - name: Run Qdrant integration tests
+      run: QDRANT_GRPC_PORT=6335 cargo test --test integration_qdrant --release -- --test-threads=1
+
+    - name: Stop Qdrant
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
   integration-elasticsearch:
     name: Integration tests (Elasticsearch)
     runs-on: ubuntu-latest
