@@ -388,23 +388,15 @@ impl Engine for PgVectorEngine {
                             if n > 0 { n } else { 10 }
                         });
 
-                        // Format vector as pgvector string [1.0,2.0,3.0]
-                        let vec_str: String = format!(
-                            "[{}]",
-                            queries[idx]
-                                .iter()
-                                .map(|v| v.to_string())
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        );
+                        let query_vec = pgvector::Vector::from(queries[idx].clone());
 
                         let query_sql = format!(
-                            "SELECT id, embedding {} '{}' AS _score FROM items ORDER BY _score LIMIT {}",
-                            distance_op, vec_str, top
+                            "SELECT id, embedding {} $1 AS _score FROM items ORDER BY _score LIMIT {}",
+                            distance_op, top
                         );
 
                         let query_start = Instant::now();
-                        let results = conn.query(&query_sql, &[]);
+                        let results = conn.query(&query_sql, &[&query_vec]);
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         search_times.lock().unwrap().push(query_time);
