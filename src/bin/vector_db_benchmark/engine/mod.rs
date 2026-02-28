@@ -8,6 +8,7 @@
 
 mod elasticsearch;
 mod milvus;
+mod mongodb_engine;
 mod opensearch;
 mod pgvector;
 mod qdrant;
@@ -20,6 +21,7 @@ use crate::dataset::Dataset;
 
 pub use elasticsearch::ElasticsearchEngine;
 pub use milvus::MilvusEngine;
+pub use mongodb_engine::MongoDBEngine;
 pub use opensearch::OpenSearchEngine;
 pub use pgvector::PgVectorEngine;
 pub use qdrant::QdrantEngine;
@@ -109,8 +111,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "weaviate" => Ok(Box::new(WeaviateEngine::new(engine_config, host)?)),
         "pgvector" => Ok(Box::new(PgVectorEngine::new(engine_config, host)?)),
         "milvus" => Ok(Box::new(MilvusEngine::new(engine_config, host)?)),
+        "mongodb" => Ok(Box::new(MongoDBEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb'.",
             other
         )),
     }

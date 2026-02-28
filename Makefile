@@ -146,6 +146,17 @@ integration-test-opensearch:
 	docker compose -f tests/docker-compose.test.yml down ; \
 	exit $$EXIT_CODE
 
+.PHONY: integration-test-mongodb
+integration-test-mongodb:
+	@echo "=== Starting MongoDB Atlas Local 8.0.4 for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d mongodb-search --wait
+	@echo "=== Running MongoDB integration tests ==="
+	MONGODB_PORT=27018 cargo test --test integration_mongodb --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping MongoDB ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
 .PHONY: integration-test-no-docker
 integration-test-no-docker:
 	@echo "=== Running integration tests (assumes redis on port 6399) ==="

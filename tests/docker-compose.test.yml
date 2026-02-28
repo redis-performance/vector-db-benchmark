@@ -132,3 +132,13 @@ services:
       resources:
         limits:
           memory: 2Gb
+
+  mongodb-search:
+    image: mongodb/mongodb-atlas-local:8.0.4
+    ports:
+      - "27018:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
