@@ -1,12 +1,16 @@
 //! Elasticsearch engine implementation.
 //!
-//! Implements the Engine trait for Elasticsearch dense vector search.
-//! Uses reqwest::blocking for HTTP calls against the ES REST API.
+//! Uses the official `elasticsearch` crate (async, wrapped with tokio block_on).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use elasticsearch::http::request::JsonBody;
+use elasticsearch::http::transport::{SingleNodeConnectionPool, TransportBuilder};
+use elasticsearch::indices::{IndicesCreateParts, IndicesDeleteParts, IndicesForcemergeParts};
+use elasticsearch::params::WaitForStatus;
+use elasticsearch::{BulkParts, Elasticsearch, SearchParts};
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use uuid::Uuid;
 
@@ -27,11 +31,16 @@ struct ElasticsearchConfig {
 pub struct ElasticsearchEngine {
     name: String,
     index_name: String,
+    #[allow(dead_code)]
     timeout: u64,
     config: ElasticsearchConfig,
     search_params: Vec<SearchParams>,
-    /// Base URL including auth if needed, e.g. "http://elastic:passwd@host:9200"
+    /// Base URL for constructing per-thread clients
     base_url: String,
+    /// Tokio runtime for async operations
+    rt: tokio::runtime::Runtime,
+    /// Shared Elasticsearch client
+    client: Arc<Elasticsearch>,
 }
 
 impl ElasticsearchEngine {
@@ -69,8 +78,12 @@ impl ElasticsearchEngine {
             .and_then(|v| v.as_i64())
             .unwrap_or(500) as usize;
 
-        // Build base URL with auth
         let base_url = build_base_url(host, port);
+
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+
+        let client = create_es_client(&base_url, timeout)?;
 
         Ok(Self {
             name: engine_config.name.clone(),
@@ -84,15 +97,9 @@ impl ElasticsearchEngine {
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             base_url,
+            rt,
+            client: Arc::new(client),
         })
-    }
-
-    fn create_client(&self) -> Result<reqwest::blocking::Client, String> {
-        reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(self.timeout))
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))
     }
 
     fn create_progress_bar(&self, total: usize) -> ProgressBar {
@@ -109,30 +116,29 @@ impl ElasticsearchEngine {
         pb
     }
 
-    fn delete_index(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
-        let url = format!("{}/{}", self.base_url, self.index_name);
-        let resp = client.delete(&url).send().map_err(|e| e.to_string())?;
-        // Ignore 404 (index doesn't exist)
-        if resp.status().is_success() || resp.status().as_u16() == 404 {
+    fn delete_index(&self) -> Result<(), String> {
+        let resp = self
+            .rt
+            .block_on(
+                self.client
+                    .indices()
+                    .delete(IndicesDeleteParts::Index(&[&self.index_name]))
+                    .send(),
+            )
+            .map_err(|e| format!("Failed to delete index: {}", e))?;
+
+        let status = resp.status_code().as_u16();
+        if status == 200 || status == 404 {
             Ok(())
         } else {
-            Err(format!(
-                "Failed to delete index: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ))
+            Err(format!("Failed to delete index: status {}", status))
         }
     }
 
-    fn create_index(
-        &self,
-        client: &reqwest::blocking::Client,
-        dataset: &Dataset,
-    ) -> Result<(), String> {
+    fn create_index(&self, dataset: &Dataset) -> Result<(), String> {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
-        // Validate constraints
         let dist_lower = distance.to_lowercase();
         if dist_lower == "dot" || dist_lower == "ip" {
             return Err(
@@ -146,7 +152,6 @@ impl ElasticsearchEngine {
             ));
         }
 
-        // Map distance metric
         let similarity = match dist_lower.as_str() {
             "l2" | "euclidean" => "l2_norm",
             "cosine" | "angular" => "cosine",
@@ -158,7 +163,6 @@ impl ElasticsearchEngine {
             }
         };
 
-        // Build schema field mappings
         let mut properties = serde_json::json!({
             "vector": {
                 "type": "dense_vector",
@@ -173,7 +177,6 @@ impl ElasticsearchEngine {
             }
         });
 
-        // Add schema fields from dataset config
         if let Some(schema) = &dataset.config.schema {
             if let Some(schema_obj) = schema.as_object() {
                 let props = properties.as_object_mut().unwrap();
@@ -209,20 +212,23 @@ impl ElasticsearchEngine {
             }
         });
 
-        let url = format!("{}/{}", self.base_url, self.index_name);
-        let resp = client
-            .put(&url)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
+        let resp = self
+            .rt
+            .block_on(
+                self.client
+                    .indices()
+                    .create(IndicesCreateParts::Index(&self.index_name))
+                    .body(body)
+                    .send(),
+            )
             .map_err(|e| format!("Failed to create index: {}", e))?;
 
-        if !resp.status().is_success() {
-            return Err(format!(
-                "Failed to create index: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ));
+        if !resp.status_code().is_success() {
+            let body = self
+                .rt
+                .block_on(resp.text())
+                .unwrap_or_default();
+            return Err(format!("Failed to create index: {}", body));
         }
 
         Ok(())
@@ -243,26 +249,32 @@ impl ElasticsearchEngine {
         let total_batches = batches.len();
         let batch_idx = Arc::new(AtomicUsize::new(0));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let base_url = self.base_url.clone();
+        let timeout = self.timeout;
+        let index_name = self.index_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..self.config.parallel {
-                let base_url = self.base_url.clone();
-                let index_name = self.index_name.clone();
-                let timeout = self.timeout;
+                let base_url = base_url.clone();
+                let index_name = index_name.clone();
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .danger_accept_invalid_certs(true)
-                        .build()
-                    {
-                        Ok(c) => c,
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
+                            return;
+                        }
+                    };
+
+                    let client = match create_es_client(&base_url, timeout) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            *error.lock().unwrap() = Some(e);
                             return;
                         }
                     };
@@ -272,16 +284,14 @@ impl ElasticsearchEngine {
                         if idx >= total_batches {
                             break;
                         }
-
-                        // Check if another thread errored
                         if error.lock().unwrap().is_some() {
                             break;
                         }
 
                         let (batch_start, batch_end) = batches[idx];
                         if let Err(e) = upload_bulk_batch(
+                            &rt,
                             &client,
-                            &base_url,
                             &index_name,
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
@@ -304,36 +314,35 @@ impl ElasticsearchEngine {
         Ok(())
     }
 
-    fn force_merge(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
+    fn force_merge(&self) -> Result<(), String> {
         println!("Forcing merge into 1 segment...");
-        let url = format!(
-            "/{}/_forcemerge?wait_for_completion=true&max_num_segments=1",
-            self.index_name
-        );
-        let full_url = format!("{}{}", self.base_url, url);
 
         let max_retries = 30;
         for attempt in 0..=max_retries {
-            match client.post(&full_url).send() {
-                Ok(resp) if resp.status().is_success() => {
-                    self.wait_for_cluster_health(client)?;
+            let result = self.rt.block_on(
+                self.client
+                    .indices()
+                    .forcemerge(IndicesForcemergeParts::Index(&[&self.index_name]))
+                    .max_num_segments(1)
+                    .send(),
+            );
+
+            match result {
+                Ok(resp) if resp.status_code().is_success() => {
+                    self.wait_for_cluster_health()?;
                     return Ok(());
                 }
                 Ok(resp) => {
                     if attempt < max_retries {
                         println!(
-                            "Force merge retry {}/{}: {} {}",
-                            attempt,
-                            max_retries,
-                            resp.status(),
-                            resp.text().unwrap_or_default()
+                            "Force merge retry {}/{}: status {}",
+                            attempt, max_retries, resp.status_code()
                         );
                         continue;
                     }
                     return Err(format!(
                         "Force merge failed after {} retries: {}",
-                        max_retries,
-                        resp.status()
+                        max_retries, resp.status_code()
                     ));
                 }
                 Err(e) => {
@@ -351,16 +360,21 @@ impl ElasticsearchEngine {
         Ok(())
     }
 
-    fn wait_for_cluster_health(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
+    fn wait_for_cluster_health(&self) -> Result<(), String> {
         println!("Waiting for ES yellow status...");
-        let url = format!(
-            "{}/_cluster/health?wait_for_status=yellow&timeout=10s",
-            self.base_url
-        );
 
         for _ in 0..100 {
-            match client.get(&url).send() {
-                Ok(resp) if resp.status().is_success() => return Ok(()),
+            let result = self.rt.block_on(
+                self.client
+                    .cluster()
+                    .health(elasticsearch::cluster::ClusterHealthParts::None)
+                    .wait_for_status(WaitForStatus::Yellow)
+                    .timeout("10s")
+                    .send(),
+            );
+
+            match result {
+                Ok(resp) if resp.status_code().is_success() => return Ok(()),
                 _ => std::thread::sleep(std::time::Duration::from_millis(100)),
             }
         }
@@ -381,19 +395,28 @@ fn build_base_url(host: &str, port: u16) -> String {
     };
 
     if api_key.is_some() {
-        // API key auth is handled via headers, not URL
         format!("{}:{}", scheme_host, port)
+    } else if let Some(rest) = scheme_host.strip_prefix("http://") {
+        format!("http://{}:{}@{}:{}", user, password, rest, port)
+    } else if let Some(rest) = scheme_host.strip_prefix("https://") {
+        format!("https://{}:{}@{}:{}", user, password, rest, port)
     } else {
-        // Basic auth embedded in URL
-        // Insert user:pass@ after scheme://
-        if let Some(rest) = scheme_host.strip_prefix("http://") {
-            format!("http://{}:{}@{}:{}", user, password, rest, port)
-        } else if let Some(rest) = scheme_host.strip_prefix("https://") {
-            format!("https://{}:{}@{}:{}", user, password, rest, port)
-        } else {
-            format!("http://{}:{}@{}:{}", user, password, scheme_host, port)
-        }
+        format!("http://{}:{}@{}:{}", user, password, scheme_host, port)
     }
+}
+
+/// Create an Elasticsearch client from a base URL.
+fn create_es_client(base_url: &str, timeout: u64) -> Result<Elasticsearch, String> {
+    let url = elasticsearch::http::Url::parse(base_url)
+        .map_err(|e| format!("Invalid base URL '{}': {}", base_url, e))?;
+    let pool = SingleNodeConnectionPool::new(url);
+    let transport = TransportBuilder::new(pool)
+        .timeout(std::time::Duration::from_secs(timeout))
+        .disable_proxy()
+        .cert_validation(elasticsearch::cert::CertificateValidation::None)
+        .build()
+        .map_err(|e| format!("Failed to build transport: {}", e))?;
+    Ok(Elasticsearch::new(transport))
 }
 
 /// Convert integer ID to UUID hex string (matches Python uuid.UUID(int=idx).hex)
@@ -401,7 +424,7 @@ fn id_to_uuid_hex(id: i64) -> String {
     Uuid::from_u128(id as u128).as_simple().to_string()
 }
 
-/// Convert UUID hex string back to integer ID (matches Python uuid.UUID(hex=s).int)
+/// Convert UUID hex string back to integer ID
 fn uuid_hex_to_int(hex: &str) -> Result<i64, String> {
     let uuid = Uuid::parse_str(hex).map_err(|e| format!("Invalid UUID hex '{}': {}", hex, e))?;
     Ok(uuid.as_u128() as i64)
@@ -409,20 +432,6 @@ fn uuid_hex_to_int(hex: &str) -> Result<i64, String> {
 
 // ── Elasticsearch condition parser ─────────────────────────────────────
 
-/// Parse internal benchmark filter format into Elasticsearch bool query.
-///
-/// Input format (from dataset conditions):
-/// ```json
-/// {
-///   "and": [{"field": {"match": {"value": 42}}}],
-///   "or":  [{"field": {"range": {"gt": 10, "lt": 100}}}]
-/// }
-/// ```
-///
-/// Output format (ES bool query):
-/// ```json
-/// {"bool": {"must": [...], "should": [...]}}
-/// ```
 fn parse_es_conditions(conditions: &serde_json::Value) -> Option<serde_json::Value> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
@@ -450,8 +459,6 @@ fn parse_es_conditions(conditions: &serde_json::Value) -> Option<serde_json::Val
     }))
 }
 
-/// Build subfilter list from condition entries.
-/// Each entry is `{"field_name": {"filter_type": {criteria}}}`.
 fn build_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let mut filters = Vec::new();
     for entry in entries {
@@ -470,7 +477,6 @@ fn build_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
     filters
 }
 
-/// Build a single ES filter from field name, condition type, and criteria.
 fn build_filter(
     field_name: &str,
     condition_type: &str,
@@ -511,10 +517,10 @@ fn build_filter(
     }
 }
 
-/// Upload a batch of vectors using the Elasticsearch Bulk API.
+/// Upload a batch using the official Elasticsearch bulk API.
 fn upload_bulk_batch(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
+    rt: &tokio::runtime::Runtime,
+    client: &Elasticsearch,
     index_name: &str,
     ids: &[i64],
     vectors: &[Vec<f32>],
@@ -522,13 +528,13 @@ fn upload_bulk_batch(
 ) -> Result<(), String> {
     use vector_db_benchmark::readers::metadata::MetadataValue;
 
-    let mut body = String::new();
+    let mut body: Vec<JsonBody<serde_json::Value>> = Vec::with_capacity(ids.len() * 2);
 
     for i in 0..ids.len() {
         let uuid_hex = id_to_uuid_hex(ids[i]);
 
         // Action line
-        body.push_str(&format!("{{\"index\":{{\"_id\":\"{}\"}}}}\n", uuid_hex));
+        body.push(JsonBody::new(serde_json::json!({"index": {"_id": uuid_hex}})));
 
         // Document line
         let mut doc = serde_json::Map::new();
@@ -538,7 +544,6 @@ fn upload_bulk_batch(
             .collect();
         doc.insert("vector".to_string(), serde_json::Value::Array(vec_json));
 
-        // Add metadata fields
         if let Some(meta) = &metadata[i] {
             for (k, v) in &meta.fields {
                 let val = match v {
@@ -557,30 +562,27 @@ fn upload_bulk_batch(
             }
         }
 
-        body.push_str(&serde_json::to_string(&doc).map_err(|e| e.to_string())?);
-        body.push('\n');
+        body.push(JsonBody::new(serde_json::Value::Object(doc)));
     }
 
-    let url = format!("{}/{}/_bulk", base_url, index_name);
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/x-ndjson")
-        .body(body)
-        .send()
+    let resp = rt
+        .block_on(
+            client
+                .bulk(BulkParts::Index(index_name))
+                .body(body)
+                .send(),
+        )
         .map_err(|e| format!("Bulk upload failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Bulk upload error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
+    if !resp.status_code().is_success() {
+        let text = rt.block_on(resp.text()).unwrap_or_default();
+        return Err(format!("Bulk upload error: {}", text));
     }
 
-    // Check for per-item errors in response
-    let resp_body: serde_json::Value = resp
-        .json()
+    let resp_body: serde_json::Value = rt
+        .block_on(resp.json())
         .map_err(|e| format!("Failed to parse bulk response: {}", e))?;
+
     if resp_body
         .get("errors")
         .and_then(|v| v.as_bool())
@@ -604,11 +606,10 @@ fn upload_bulk_batch(
     Ok(())
 }
 
-/// Execute a single KNN search against Elasticsearch.
-/// Returns a list of (id, score) tuples.
+/// Execute a KNN search using the official client.
 fn knn_search(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
+    rt: &tokio::runtime::Runtime,
+    client: &Elasticsearch,
     index_name: &str,
     query_vector: &[f32],
     top: usize,
@@ -632,24 +633,22 @@ fn knn_search(
         "size": top,
     });
 
-    let url = format!("{}/{}/_search", base_url, index_name);
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
+    let resp = rt
+        .block_on(
+            client
+                .search(SearchParts::Index(&[index_name]))
+                .body(body)
+                .send(),
+        )
         .map_err(|e| format!("KNN search failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!(
-            "KNN search error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
+    if !resp.status_code().is_success() {
+        let text = rt.block_on(resp.text()).unwrap_or_default();
+        return Err(format!("KNN search error: {}", text));
     }
 
-    let resp_body: serde_json::Value = resp
-        .json()
+    let resp_body: serde_json::Value = rt
+        .block_on(resp.json())
         .map_err(|e| format!("Failed to parse search response: {}", e))?;
 
     let hits = resp_body
@@ -684,20 +683,16 @@ impl Engine for ElasticsearchEngine {
     }
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
-        let client = self.create_client()?;
-
         println!(
             "Elasticsearch: index_options {{ m: {}, ef_construction: {} }}",
             self.config.m, self.config.ef_construction
         );
 
-        // Delete existing index
         println!("Ensuring index does not exist...");
-        self.delete_index(&client)?;
+        self.delete_index()?;
 
-        // Create index with mappings
         println!("Creating index '{}'...", self.index_name);
-        self.create_index(&client, dataset)?;
+        self.create_index(dataset)?;
         println!("Index '{}' created successfully.", self.index_name);
 
         Ok(())
@@ -737,8 +732,7 @@ impl Engine for ElasticsearchEngine {
         );
 
         // Force merge post-upload
-        let client = self.create_client()?;
-        self.force_merge(&client)?;
+        self.force_merge()?;
 
         let total_time = read_time + upload_time;
         println!("Total time: {:.3}s", total_time);
@@ -762,20 +756,15 @@ impl Engine for ElasticsearchEngine {
         let parallel = params.parallel.unwrap_or(1) as usize;
         let num_candidates = params.num_candidates.unwrap_or(100);
 
-        // Read queries, ground truth, and filter conditions
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
 
-        // Parse all conditions up front (before timing begins)
         let parsed_filters: Vec<Option<serde_json::Value>> = conditions
             .iter()
             .map(|c| c.as_ref().and_then(parse_es_conditions))
             .collect();
 
-        // When top is explicitly set, use it for all queries.
-        // When not set, use per-query ground truth count (matches Python v0 behavior
-        // where top defaults to len(query.expected_result) per query).
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let num_to_run = if num_queries > 0 {
             (num_queries as usize).min(queries.len())
@@ -783,19 +772,21 @@ impl Engine for ElasticsearchEngine {
             queries.len()
         };
 
-        // Search execution
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let start_time = Instant::now();
+        let base_url = self.base_url.clone();
+        let timeout = self.timeout;
+        let index_name = self.index_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
-                let base_url = self.base_url.clone();
-                let index_name = self.index_name.clone();
-                let timeout = self.timeout;
+                let base_url = base_url.clone();
+                let index_name = index_name.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
@@ -804,11 +795,11 @@ impl Engine for ElasticsearchEngine {
                 let query_idx = Arc::clone(&query_idx);
 
                 s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .danger_accept_invalid_certs(true)
-                        .build()
-                    {
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(_) => return,
+                    };
+                    let client = match create_es_client(&base_url, timeout) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -819,21 +810,15 @@ impl Engine for ElasticsearchEngine {
                             break;
                         }
 
-                        // Per-query top: use explicit top if set, otherwise
-                        // use ground truth count (matches Python v0 behavior)
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
-                            }
+                            if n > 0 { n } else { 10 }
                         });
 
                         let query_start = Instant::now();
                         let results = knn_search(
+                            &rt,
                             &client,
-                            &base_url,
                             &index_name,
                             &queries[idx],
                             top,
@@ -844,7 +829,6 @@ impl Engine for ElasticsearchEngine {
 
                         search_times.lock().unwrap().push(query_time);
 
-                        // Calculate precision
                         if let Ok(result_ids) = results {
                             let ground_truth: std::collections::HashSet<i64> =
                                 neighbors[idx].iter().take(top).copied().collect();
@@ -863,7 +847,6 @@ impl Engine for ElasticsearchEngine {
 
         let total_time = start_time.elapsed().as_secs_f64();
 
-        // Calculate statistics
         let times = search_times.lock().unwrap();
         let precs = precisions.lock().unwrap();
 
@@ -880,7 +863,6 @@ impl Engine for ElasticsearchEngine {
         let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
         let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
-        // Sort times for percentiles
         let mut sorted_times: Vec<f64> = times.clone();
         sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
@@ -911,15 +893,15 @@ impl Engine for ElasticsearchEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top
+                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
         })
     }
 
     fn delete(&mut self) -> Result<(), String> {
-        let client = self.create_client()?;
-        self.delete_index(&client)
+        self.delete_index()
     }
 }
 
@@ -929,32 +911,26 @@ mod tests {
 
     #[test]
     fn test_id_to_uuid_hex_zero() {
-        // Python: uuid.UUID(int=0).hex == "00000000000000000000000000000000"
         assert_eq!(id_to_uuid_hex(0), "00000000000000000000000000000000");
     }
 
     #[test]
     fn test_id_to_uuid_hex_one() {
-        // Python: uuid.UUID(int=1).hex == "00000000000000000000000000000001"
         assert_eq!(id_to_uuid_hex(1), "00000000000000000000000000000001");
     }
 
     #[test]
     fn test_id_to_uuid_hex_large() {
-        // Python: uuid.UUID(int=255).hex == "000000000000000000000000000000ff"
         assert_eq!(id_to_uuid_hex(255), "000000000000000000000000000000ff");
     }
 
     #[test]
     fn test_id_to_uuid_hex_typical_id() {
-        // Python: uuid.UUID(int=12345).hex == "00000000000000000000000000003039"
         assert_eq!(id_to_uuid_hex(12345), "00000000000000000000000000003039");
     }
 
     #[test]
     fn test_build_base_url_includes_credentials() {
-        // build_base_url reads ELASTIC_USER/ELASTIC_PASSWORD from env.
-        // We test the structural result: it should contain user:pass@host:port
         std::env::remove_var("ELASTIC_API_KEY");
         let url = build_base_url("myhost", 9200);
         assert!(
@@ -968,7 +944,6 @@ mod tests {
     fn test_build_base_url_with_http_scheme() {
         std::env::remove_var("ELASTIC_API_KEY");
         let url = build_base_url("http://myhost", 9200);
-        // Should not double the scheme
         assert!(!url.contains("http://http://"));
         assert!(url.contains("@myhost:9200"));
     }
