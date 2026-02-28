@@ -1,14 +1,21 @@
 //! Qdrant engine implementation.
 //!
-//! Uses Qdrant's REST API via reqwest::blocking.
-//! Supports HNSW index with configurable M/ef_construct, payload indexing,
-//! and filter conditions.
+//! Uses the official `qdrant-client` crate with gRPC transport.
+//! Wraps async calls with a tokio runtime (block_on) since the
+//! benchmark Engine trait is synchronous.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
+use qdrant_client::qdrant::vectors_config::Config;
+use qdrant_client::qdrant::{
+    Condition, CreateCollectionBuilder, DeleteCollectionBuilder, Distance, FieldType, Filter,
+    HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct,
+    SearchPointsBuilder, VectorParamsBuilder, VectorsConfig,
+};
+use qdrant_client::{Payload, Qdrant};
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
@@ -20,22 +27,29 @@ const DEFAULT_COLLECTION: &str = "benchmark";
 pub struct QdrantEngine {
     name: String,
     collection_name: String,
+    #[allow(dead_code)]
     timeout: u64,
     batch_size: usize,
     parallel: usize,
-    base_url: String,
+    #[allow(dead_code)]
+    grpc_url: String,
+    #[allow(dead_code)]
     api_key: Option<String>,
     search_params: Vec<SearchParams>,
     /// Raw collection_params JSON to pass through to Qdrant
     collection_params_extra: serde_json::Value,
+    /// Tokio runtime for async operations
+    rt: tokio::runtime::Runtime,
+    /// Shared Qdrant client (wrapped in Arc for thread-safe sharing)
+    client: Arc<Qdrant>,
 }
 
 impl QdrantEngine {
     pub fn new(engine_config: &EngineConfig, host: &str) -> Result<Self, String> {
-        let port: u16 = std::env::var("QDRANT_PORT")
+        let grpc_port: u16 = std::env::var("QDRANT_GRPC_PORT")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(6333);
+            .unwrap_or(6334);
 
         let collection_name = std::env::var("QDRANT_COLLECTION_NAME")
             .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string());
@@ -63,16 +77,17 @@ impl QdrantEngine {
             .and_then(|v| v.as_i64())
             .unwrap_or(1024) as usize;
 
-        let base_url = if let Some(url) = std::env::var("QDRANT_URL").ok() {
+        // Determine the host without scheme
+        let clean_host = host
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+
+        let grpc_url = if let Some(url) = std::env::var("QDRANT_URL").ok() {
             url
-        } else if host.starts_with("http") {
-            format!("{}:{}", host, port)
         } else {
-            format!("http://{}:{}", host, port)
+            format!("http://{}:{}", clean_host, grpc_port)
         };
 
-        // Extract collection params extra (optimizers_config, hnsw_config, quantization_config, etc.)
-        // These are passed through to Qdrant's create collection API
         let collection_params_extra = engine_config
             .collection_params
             .as_ref()
@@ -80,35 +95,32 @@ impl QdrantEngine {
             .map(|e| serde_json::to_value(e).unwrap_or_default())
             .unwrap_or(serde_json::json!({}));
 
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+
+        let client = rt.block_on(async {
+            let mut builder = Qdrant::from_url(&grpc_url)
+                .timeout(std::time::Duration::from_secs(timeout));
+            if let Some(key) = &api_key {
+                builder = builder.api_key(key.clone());
+            }
+            builder.build()
+        })
+        .map_err(|e| format!("Failed to create Qdrant client: {}", e))?;
+
         Ok(Self {
             name: engine_config.name.clone(),
             collection_name,
             timeout,
             batch_size,
             parallel,
-            base_url,
+            grpc_url,
             api_key,
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             collection_params_extra,
+            rt,
+            client: Arc::new(client),
         })
-    }
-
-    fn create_client(&self) -> Result<reqwest::blocking::Client, String> {
-        reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(self.timeout))
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))
-    }
-
-    fn add_auth(
-        &self,
-        req: reqwest::blocking::RequestBuilder,
-    ) -> reqwest::blocking::RequestBuilder {
-        if let Some(key) = &self.api_key {
-            req.header("api-key", key)
-        } else {
-            req
-        }
     }
 
     fn create_progress_bar(&self, total: usize) -> ProgressBar {
@@ -125,86 +137,74 @@ impl QdrantEngine {
         pb
     }
 
-    fn delete_collection(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
-        let url = format!("{}/collections/{}", self.base_url, self.collection_name);
-        let req = client.delete(&url);
-        let resp = self.add_auth(req).send().map_err(|e| e.to_string())?;
-        // Ignore 404 (collection doesn't exist)
-        if resp.status().is_success() || resp.status().as_u16() == 404 {
-            Ok(())
-        } else {
-            Err(format!(
-                "Failed to delete collection: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ))
-        }
+    fn delete_collection(&self) -> Result<(), String> {
+        let _ = self.rt.block_on(
+            self.client
+                .delete_collection(DeleteCollectionBuilder::new(&self.collection_name)),
+        );
+        Ok(())
     }
 
-    fn create_collection(
-        &self,
-        client: &reqwest::blocking::Client,
-        dataset: &Dataset,
-    ) -> Result<(), String> {
+    fn create_collection(&self, dataset: &Dataset) -> Result<(), String> {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
         let qdrant_distance = match distance.to_lowercase().as_str() {
-            "l2" | "euclidean" => "Euclid",
-            "cosine" | "angular" => "Cosine",
-            "dot" | "ip" => "Dot",
+            "l2" | "euclidean" => Distance::Euclid,
+            "cosine" | "angular" => Distance::Cosine,
+            "dot" | "ip" => Distance::Dot,
             other => {
                 return Err(format!("Unsupported distance metric for Qdrant: {}", other))
             }
         };
 
-        // Build create collection body
-        let mut body = serde_json::json!({
-            "vectors": {
-                "size": vector_size,
-                "distance": qdrant_distance,
-            }
-        });
+        // Extract HNSW params from extra config
+        let hnsw_m = self
+            .collection_params_extra
+            .get("hnsw_config")
+            .and_then(|h| h.get("m"))
+            .and_then(|v| v.as_u64());
+        let hnsw_ef = self
+            .collection_params_extra
+            .get("hnsw_config")
+            .and_then(|h| h.get("ef_construct"))
+            .and_then(|v| v.as_u64());
 
-        // Merge extra collection params (hnsw_config, optimizers_config, etc.)
-        if let Some(extra_obj) = self.collection_params_extra.as_object() {
-            let body_obj = body.as_object_mut().unwrap();
-            for (k, v) in extra_obj {
-                // Skip "timeout" as it's a connection param, not collection config
-                if k == "timeout" {
-                    continue;
-                }
-                body_obj.insert(k.clone(), v.clone());
+        let vector_params = VectorParamsBuilder::new(vector_size as u64, qdrant_distance);
+
+        let mut create_builder = CreateCollectionBuilder::new(&self.collection_name)
+            .vectors_config(VectorsConfig {
+                config: Some(Config::Params(vector_params.build())),
+            });
+
+        // Apply HNSW config if specified
+        if hnsw_m.is_some() || hnsw_ef.is_some() {
+            let mut hnsw_config = HnswConfigDiff::default();
+            if let Some(m) = hnsw_m {
+                hnsw_config.m = Some(m as u64);
             }
+            if let Some(ef) = hnsw_ef {
+                hnsw_config.ef_construct = Some(ef as u64);
+            }
+            create_builder = create_builder.hnsw_config(hnsw_config);
         }
 
-        let url = format!("{}/collections/{}", self.base_url, self.collection_name);
-        let req = client
-            .put(&url)
-            .header("Content-Type", "application/json")
-            .json(&body);
-        let resp = self.add_auth(req).send().map_err(|e| e.to_string())?;
-
-        if !resp.status().is_success() {
-            return Err(format!(
-                "Failed to create collection: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ));
-        }
+        self.rt
+            .block_on(self.client.create_collection(create_builder))
+            .map_err(|e| format!("Failed to create collection: {}", e))?;
 
         // Disable optimization during indexing
-        let update_body = serde_json::json!({
-            "optimizers_config": {
-                "max_optimization_threads": 0,
-            }
-        });
-        let url = format!("{}/collections/{}", self.base_url, self.collection_name);
-        let req = client
-            .patch(&url)
-            .header("Content-Type", "application/json")
-            .json(&update_body);
-        let _ = self.add_auth(req).send();
+        let _ = self.rt.block_on(self.client.update_collection(
+            qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
+                .optimizers_config(OptimizersConfigDiff {
+                    max_optimization_threads: Some(MaxOptimizationThreads {
+                        variant: Some(
+                            qdrant_client::qdrant::max_optimization_threads::Variant::Value(0),
+                        ),
+                    }),
+                    ..Default::default()
+                }),
+        ));
 
         // Create payload indexes for schema fields
         if let Some(schema) = &dataset.config.schema {
@@ -212,26 +212,20 @@ impl QdrantEngine {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
                     let qdrant_type = match ft {
-                        "int" => "integer",
-                        "keyword" => "keyword",
-                        "text" => "text",
-                        "float" => "float",
-                        "geo" => "geo",
+                        "int" => FieldType::Integer,
+                        "keyword" => FieldType::Keyword,
+                        "text" => FieldType::Text,
+                        "float" => FieldType::Float,
+                        "geo" => FieldType::Geo,
                         _ => continue,
                     };
-                    let index_body = serde_json::json!({
-                        "field_name": field_name,
-                        "field_schema": qdrant_type,
-                    });
-                    let url = format!(
-                        "{}/collections/{}/index",
-                        self.base_url, self.collection_name
-                    );
-                    let req = client
-                        .put(&url)
-                        .header("Content-Type", "application/json")
-                        .json(&index_body);
-                    let _ = self.add_auth(req).send();
+                    let _ = self.rt.block_on(self.client.create_field_index(
+                        qdrant_client::qdrant::CreateFieldIndexCollectionBuilder::new(
+                            &self.collection_name,
+                            field_name.clone(),
+                            qdrant_type,
+                        ),
+                    ));
                 }
             }
         }
@@ -245,6 +239,8 @@ impl QdrantEngine {
         vectors: &[Vec<f32>],
         metadata: &[Option<MetadataItem>],
     ) -> Result<(), String> {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+
         let pb = self.create_progress_bar(ids.len());
         let batches: Vec<(usize, usize)> = (0..ids.len())
             .step_by(self.batch_size)
@@ -254,24 +250,21 @@ impl QdrantEngine {
         let total_batches = batches.len();
         let batch_idx = Arc::new(AtomicUsize::new(0));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let client = Arc::clone(&self.client);
+        let collection_name = self.collection_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..self.parallel {
-                let base_url = self.base_url.clone();
-                let collection_name = self.collection_name.clone();
-                let api_key = self.api_key.clone();
-                let timeout = self.timeout;
+                let client = Arc::clone(&client);
+                let collection_name = collection_name.clone();
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .build()
-                    {
-                        Ok(c) => c,
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
                             return;
@@ -288,16 +281,64 @@ impl QdrantEngine {
                         }
 
                         let (batch_start, batch_end) = batches[idx];
-                        if let Err(e) = upsert_points(
-                            &client,
-                            &base_url,
-                            &collection_name,
-                            api_key.as_deref(),
-                            &ids[batch_start..batch_end],
-                            &vectors[batch_start..batch_end],
-                            &metadata[batch_start..batch_end],
-                        ) {
-                            *error.lock().unwrap() = Some(e);
+                        let mut points = Vec::with_capacity(batch_end - batch_start);
+
+                        for i in batch_start..batch_end {
+                            let mut payload = Payload::new();
+                            if let Some(meta) = &metadata[i] {
+                                for (k, v) in &meta.fields {
+                                    match v {
+                                        MetadataValue::String(s) => {
+                                            payload.insert(k.clone(), s.clone());
+                                        }
+                                        MetadataValue::Labels(labels) => {
+                                            let arr: Vec<qdrant_client::qdrant::Value> =
+                                                labels.iter().map(|l| l.clone().into()).collect();
+                                            payload.insert(
+                                                k.clone(),
+                                                qdrant_client::qdrant::Value {
+                                                    kind: Some(
+                                                        qdrant_client::qdrant::value::Kind::ListValue(
+                                                            qdrant_client::qdrant::ListValue {
+                                                                values: arr,
+                                                            },
+                                                        ),
+                                                    ),
+                                                },
+                                            );
+                                        }
+                                        MetadataValue::Geo { lon, lat } => {
+                                            let mut geo_payload = Payload::new();
+                                            geo_payload.insert("lon", *lon);
+                                            geo_payload.insert("lat", *lat);
+                                            payload.insert(
+                                                k.clone(),
+                                                qdrant_client::qdrant::Value::from(
+                                                    serde_json::json!({"lon": lon, "lat": lat}),
+                                                ),
+                                            );
+                                        }
+                                    };
+                                }
+                            }
+
+                            points.push(PointStruct::new(
+                                ids[i] as u64,
+                                vectors[i].clone(),
+                                payload,
+                            ));
+                        }
+
+                        let result = rt.block_on(client.upsert_points(
+                            qdrant_client::qdrant::UpsertPointsBuilder::new(
+                                &collection_name,
+                                points,
+                            )
+                            .wait(false),
+                        ));
+
+                        if let Err(e) = result {
+                            *error.lock().unwrap() = Some(format!("Upsert failed: {}", e));
                             break;
                         }
                         pb.inc((batch_end - batch_start) as u64);
@@ -314,49 +355,45 @@ impl QdrantEngine {
         Ok(())
     }
 
-    fn wait_collection_green(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
+    fn wait_collection_green(&self) -> Result<(), String> {
         println!("Waiting for collection to be GREEN...");
-        let url = format!("{}/collections/{}", self.base_url, self.collection_name);
 
-        // Re-enable optimization
-        let update_body = serde_json::json!({
-            "optimizers_config": {
-                "max_optimization_threads": null,
-            }
-        });
-        let patch_url = format!("{}/collections/{}", self.base_url, self.collection_name);
-        let req = client
-            .patch(&patch_url)
-            .header("Content-Type", "application/json")
-            .json(&update_body);
-        let _ = self.add_auth(req).send();
+        // Re-enable optimization (auto mode)
+        let _ = self.rt.block_on(self.client.update_collection(
+            qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
+                .optimizers_config(OptimizersConfigDiff {
+                    max_optimization_threads: Some(MaxOptimizationThreads {
+                        variant: Some(
+                            qdrant_client::qdrant::max_optimization_threads::Variant::Setting(
+                                qdrant_client::qdrant::max_optimization_threads::Setting::Auto
+                                    as i32,
+                            ),
+                        ),
+                    }),
+                    ..Default::default()
+                }),
+        ));
 
         for _ in 0..600 {
             std::thread::sleep(std::time::Duration::from_secs(5));
 
-            let req = client.get(&url);
-            if let Ok(resp) = self.add_auth(req).send() {
-                if let Ok(body) = resp.json::<serde_json::Value>() {
-                    if let Some(status) = body
-                        .get("result")
-                        .and_then(|r| r.get("status"))
-                        .and_then(|s| s.as_str())
-                    {
-                        if status == "green" {
-                            // Double-check
-                            std::thread::sleep(std::time::Duration::from_secs(5));
-                            let req2 = client.get(&url);
-                            if let Ok(resp2) = self.add_auth(req2).send() {
-                                if let Ok(body2) = resp2.json::<serde_json::Value>() {
-                                    if body2
-                                        .get("result")
-                                        .and_then(|r| r.get("status"))
-                                        .and_then(|s| s.as_str())
-                                        == Some("green")
-                                    {
-                                        println!("Collection is GREEN.");
-                                        return Ok(());
-                                    }
+            if let Ok(info) = self
+                .rt
+                .block_on(self.client.collection_info(&self.collection_name))
+            {
+                // status: 1 = Green, 2 = Yellow, 3 = Red (from protobuf enum)
+                if let Some(result) = info.result {
+                    if result.status == 1 {
+                        // Double-check
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        if let Ok(info2) = self
+                            .rt
+                            .block_on(self.client.collection_info(&self.collection_name))
+                        {
+                            if let Some(result2) = info2.result {
+                                if result2.status == 1 {
+                                    println!("Collection is GREEN.");
+                                    return Ok(());
                                 }
                             }
                         }
@@ -368,151 +405,8 @@ impl QdrantEngine {
     }
 }
 
-/// Upsert a batch of points to Qdrant.
-fn upsert_points(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
-    collection_name: &str,
-    api_key: Option<&str>,
-    ids: &[i64],
-    vectors: &[Vec<f32>],
-    metadata: &[Option<MetadataItem>],
-) -> Result<(), String> {
-    use vector_db_benchmark::readers::metadata::MetadataValue;
-
-    let mut points = Vec::with_capacity(ids.len());
-    for i in 0..ids.len() {
-        let mut payload = serde_json::Map::new();
-        if let Some(meta) = &metadata[i] {
-            for (k, v) in &meta.fields {
-                let val = match v {
-                    MetadataValue::String(s) => serde_json::Value::String(s.clone()),
-                    MetadataValue::Labels(labels) => serde_json::Value::Array(
-                        labels
-                            .iter()
-                            .map(|l| serde_json::Value::String(l.clone()))
-                            .collect(),
-                    ),
-                    MetadataValue::Geo { lon, lat } => {
-                        serde_json::json!({"lon": lon, "lat": lat})
-                    }
-                };
-                payload.insert(k.clone(), val);
-            }
-        }
-
-        points.push(serde_json::json!({
-            "id": ids[i],
-            "vector": vectors[i],
-            "payload": payload,
-        }));
-    }
-
-    let body = serde_json::json!({
-        "points": points,
-    });
-
-    let url = format!(
-        "{}/collections/{}/points?wait=false",
-        base_url, collection_name
-    );
-    let mut req = client
-        .put(&url)
-        .header("Content-Type", "application/json")
-        .json(&body);
-
-    if let Some(key) = api_key {
-        req = req.header("api-key", key);
-    }
-
-    let resp = req.send().map_err(|e| format!("Upsert failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Upsert error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-
-    Ok(())
-}
-
-/// Search Qdrant via REST API.
-fn search_points(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
-    collection_name: &str,
-    api_key: Option<&str>,
-    query_vector: &[f32],
-    top: usize,
-    search_params: Option<&serde_json::Value>,
-    filter: Option<&serde_json::Value>,
-) -> Result<Vec<(i64, f64)>, String> {
-    let mut body = serde_json::json!({
-        "vector": query_vector,
-        "limit": top,
-        "with_payload": false,
-    });
-
-    if let Some(params) = search_params {
-        body.as_object_mut()
-            .unwrap()
-            .insert("params".to_string(), params.clone());
-    }
-
-    if let Some(f) = filter {
-        body.as_object_mut()
-            .unwrap()
-            .insert("filter".to_string(), f.clone());
-    }
-
-    let url = format!(
-        "{}/collections/{}/points/search",
-        base_url, collection_name
-    );
-    let mut req = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&body);
-
-    if let Some(key) = api_key {
-        req = req.header("api-key", key);
-    }
-
-    let resp = req
-        .send()
-        .map_err(|e| format!("Search failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Search error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-
-    let resp_body: serde_json::Value = resp
-        .json()
-        .map_err(|e| format!("Failed to parse search response: {}", e))?;
-
-    let results = resp_body
-        .get("result")
-        .and_then(|r| r.as_array())
-        .ok_or_else(|| "Missing result array in search response".to_string())?;
-
-    let mut hits = Vec::with_capacity(results.len());
-    for hit in results {
-        let id = hit.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-        let score = hit.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        hits.push((id, score));
-    }
-
-    Ok(hits)
-}
-
 /// Parse conditions into Qdrant filter format.
-fn parse_qdrant_conditions(conditions: &serde_json::Value) -> Option<serde_json::Value> {
+fn parse_qdrant_conditions(conditions: &serde_json::Value) -> Option<Filter> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
         return None;
@@ -531,18 +425,18 @@ fn parse_qdrant_conditions(conditions: &serde_json::Value) -> Option<serde_json:
         return None;
     }
 
-    let mut filter = serde_json::Map::new();
+    let mut filter = Filter::default();
     if let Some(m) = must {
-        filter.insert("must".to_string(), serde_json::Value::Array(m));
+        filter.must = m;
     }
     if let Some(s) = should {
-        filter.insert("should".to_string(), serde_json::Value::Array(s));
+        filter.should = s;
     }
 
-    Some(serde_json::Value::Object(filter))
+    Some(filter)
 }
 
-fn build_qdrant_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
+fn build_qdrant_subfilters(entries: &[serde_json::Value]) -> Vec<Condition> {
     let mut filters = Vec::new();
     for entry in entries {
         if let Some(entry_obj) = entry.as_object() {
@@ -564,29 +458,34 @@ fn build_qdrant_filter(
     field_name: &str,
     condition_type: &str,
     criteria: &serde_json::Value,
-) -> Option<serde_json::Value> {
+) -> Option<Condition> {
     match condition_type {
         "match" => {
             let value = criteria.get("value")?;
-            Some(serde_json::json!({
-                "key": field_name,
-                "match": {"value": value},
-            }))
+            if let Some(s) = value.as_str() {
+                Some(Condition::matches(field_name.to_string(), s.to_string()))
+            } else if let Some(n) = value.as_i64() {
+                Some(Condition::matches(field_name.to_string(), n))
+            } else {
+                None
+            }
         }
         "range" => {
             let criteria_obj = criteria.as_object()?;
-            let mut range = serde_json::Map::new();
-            for key in &["lt", "gt", "lte", "gte"] {
-                if let Some(val) = criteria_obj.get(*key) {
-                    if !val.is_null() {
-                        range.insert(key.to_string(), val.clone());
-                    }
-                }
+            let mut range = qdrant_client::qdrant::Range::default();
+            if let Some(lt) = criteria_obj.get("lt").and_then(|v| v.as_f64()) {
+                range.lt = Some(lt);
             }
-            Some(serde_json::json!({
-                "key": field_name,
-                "range": range,
-            }))
+            if let Some(gt) = criteria_obj.get("gt").and_then(|v| v.as_f64()) {
+                range.gt = Some(gt);
+            }
+            if let Some(lte) = criteria_obj.get("lte").and_then(|v| v.as_f64()) {
+                range.lte = Some(lte);
+            }
+            if let Some(gte) = criteria_obj.get("gte").and_then(|v| v.as_f64()) {
+                range.gte = Some(gte);
+            }
+            Some(Condition::range(field_name.to_string(), range))
         }
         "geo" => {
             let lat = criteria.get("lat")?.as_f64()?;
@@ -595,13 +494,13 @@ fn build_qdrant_filter(
                 .get("radius")
                 .and_then(|r| r.as_f64())
                 .unwrap_or(1000.0);
-            Some(serde_json::json!({
-                "key": field_name,
-                "geo_radius": {
-                    "center": {"lon": lon, "lat": lat},
-                    "radius": radius,
+            Some(Condition::geo_radius(
+                field_name.to_string(),
+                qdrant_client::qdrant::GeoRadius {
+                    center: Some(qdrant_client::qdrant::GeoPoint { lon, lat }),
+                    radius: radius as f32,
                 },
-            }))
+            ))
         }
         _ => None,
     }
@@ -617,13 +516,11 @@ impl Engine for QdrantEngine {
     }
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
-        let client = self.create_client()?;
-
         println!("Deleting existing collection...");
-        self.delete_collection(&client)?;
+        self.delete_collection()?;
 
         println!("Creating collection '{}'...", self.collection_name);
-        self.create_collection(&client, dataset)?;
+        self.create_collection(dataset)?;
         println!("Collection '{}' created.", self.collection_name);
 
         Ok(())
@@ -659,8 +556,7 @@ impl Engine for QdrantEngine {
         );
 
         // Wait for indexing to complete
-        let client = self.create_client()?;
-        self.wait_collection_green(&client)?;
+        self.wait_collection_green()?;
 
         let total_time = read_time + upload_time;
 
@@ -682,35 +578,24 @@ impl Engine for QdrantEngine {
     ) -> Result<SearchResults, String> {
         let parallel = params.parallel.unwrap_or(1) as usize;
 
-        // Build Qdrant search params from config
-        // Qdrant uses search_params.hnsw_ef or search_params.search_params
-        let qdrant_search_params: Option<serde_json::Value> = params
+        // Build Qdrant search params
+        let hnsw_ef: Option<u64> = params
             .search_params
             .as_ref()
-            .map(|sp| {
-                let mut p = serde_json::Map::new();
-                if let Some(ef) = sp.ef {
-                    // Qdrant uses "hnsw_ef" in search params
-                    p.insert("hnsw_ef".to_string(), serde_json::json!(ef));
-                }
-                // Also check for hnsw_ef in the inner search_params extra
-                if let Some(extra) = &sp.extra {
-                    if let Some(hnsw_ef) = extra.get("hnsw_ef") {
-                        p.insert("hnsw_ef".to_string(), hnsw_ef.clone());
-                    }
-                    // Pass through quantization params etc.
-                    if let Some(q) = extra.get("quantization") {
-                        p.insert("quantization".to_string(), q.clone());
-                    }
-                }
-                serde_json::Value::Object(p)
+            .and_then(|sp| {
+                sp.ef.map(|e| e as u64).or_else(|| {
+                    sp.extra
+                        .as_ref()
+                        .and_then(|e| e.get("hnsw_ef"))
+                        .and_then(|v| v.as_u64())
+                })
             });
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
 
-        let parsed_filters: Vec<Option<serde_json::Value>> = conditions
+        let parsed_filters: Vec<Option<Filter>> = conditions
             .iter()
             .map(|c| c.as_ref().and_then(parse_qdrant_conditions))
             .collect();
@@ -724,18 +609,18 @@ impl Engine for QdrantEngine {
 
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let start_time = Instant::now();
+        let client = Arc::clone(&self.client);
+        let collection_name = self.collection_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
-                let base_url = self.base_url.clone();
-                let collection_name = self.collection_name.clone();
-                let api_key = self.api_key.clone();
-                let timeout = self.timeout;
-                let qdrant_search_params = &qdrant_search_params;
+                let client = Arc::clone(&client);
+                let collection_name = collection_name.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
@@ -744,11 +629,8 @@ impl Engine for QdrantEngine {
                 let query_idx = Arc::clone(&query_idx);
 
                 s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .build()
-                    {
-                        Ok(c) => c,
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
                         Err(_) => return,
                     };
 
@@ -763,26 +645,45 @@ impl Engine for QdrantEngine {
                             if n > 0 { n } else { 10 }
                         });
 
-                        let query_start = Instant::now();
-                        let results = search_points(
-                            &client,
-                            &base_url,
+                        let mut search_builder = SearchPointsBuilder::new(
                             &collection_name,
-                            api_key.as_deref(),
-                            &queries[idx],
-                            top,
-                            qdrant_search_params.as_ref(),
-                            parsed_filters[idx].as_ref(),
-                        );
+                            queries[idx].clone(),
+                            top as u64,
+                        )
+                        .with_payload(false);
+
+                        if let Some(ef) = hnsw_ef {
+                            let search_params = qdrant_client::qdrant::SearchParams {
+                                hnsw_ef: Some(ef),
+                                ..Default::default()
+                            };
+                            search_builder = search_builder.params(search_params);
+                        }
+
+                        if let Some(filter) = &parsed_filters[idx] {
+                            search_builder = search_builder.filter(filter.clone());
+                        }
+
+                        let query_start = Instant::now();
+                        let result = rt.block_on(client.search_points(search_builder));
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         search_times.lock().unwrap().push(query_time);
 
-                        if let Ok(result_ids) = results {
+                        if let Ok(response) = result {
                             let ground_truth: std::collections::HashSet<i64> =
                                 neighbors[idx].iter().take(top).copied().collect();
-                            let found: std::collections::HashSet<i64> =
-                                result_ids.iter().map(|(id, _)| *id).collect();
+                            let found: std::collections::HashSet<i64> = response
+                                .result
+                                .iter()
+                                .filter_map(|p| {
+                                    if let Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) = &p.id.as_ref().and_then(|id| id.point_id_options.as_ref()) {
+                                        Some(*n as i64)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
                             let hits = ground_truth.intersection(&found).count();
                             let precision = hits as f64 / top as f64;
                             precisions.lock().unwrap().push(precision);
@@ -842,25 +743,24 @@ impl Engine for QdrantEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top
+                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
         })
     }
 
     fn delete(&mut self) -> Result<(), String> {
-        let client = self.create_client()?;
-        self.delete_collection(&client)
+        self.delete_collection()
     }
 
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
-        let client = self.create_client().ok()?;
-        let url = format!("{}/collections/{}", self.base_url, self.collection_name);
-        let req = client.get(&url);
-        let resp = self.add_auth(req).send().ok()?;
-        let body: serde_json::Value = resp.json().ok()?;
+        let info = self
+            .rt
+            .block_on(self.client.collection_info(&self.collection_name))
+            .ok()?;
         Some(serde_json::json!({
-            "collection_info": body.get("result"),
+            "collection_info": format!("{:?}", info.result),
         }))
     }
 }
