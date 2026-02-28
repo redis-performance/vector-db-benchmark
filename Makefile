@@ -113,6 +113,17 @@ integration-test-elasticsearch:
 	docker compose -f tests/docker-compose.test.yml down ; \
 	exit $$EXIT_CODE
 
+.PHONY: integration-test-weaviate
+integration-test-weaviate:
+	@echo "=== Starting Weaviate 1.28.9 for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d weaviate --wait
+	@echo "=== Running Weaviate integration tests ==="
+	WEAVIATE_HTTP_PORT=8081 cargo test --test integration_weaviate --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping Weaviate ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
 .PHONY: integration-test-opensearch
 integration-test-opensearch:
 	@echo "=== Starting OpenSearch 2.19.2 for integration tests ==="
