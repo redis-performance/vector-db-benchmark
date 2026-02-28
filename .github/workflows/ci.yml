@@ -137,6 +137,27 @@ jobs:
       if: always()
       run: docker compose -f tests/docker-compose.test.yml down
 
+  integration-milvus:
+    name: Integration tests (Milvus)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Milvus
+      run: docker compose -f tests/docker-compose.test.yml up -d milvus --wait
+
+    - name: Run Milvus integration tests
+      run: MILVUS_PORT=19531 cargo test --test integration_milvus --release -- --test-threads=1
+
+    - name: Stop Milvus
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
   integration-weaviate:
     name: Integration tests (Weaviate)
     runs-on: ubuntu-latest

@@ -113,6 +113,17 @@ integration-test-elasticsearch:
 	docker compose -f tests/docker-compose.test.yml down ; \
 	exit $$EXIT_CODE
 
+.PHONY: integration-test-milvus
+integration-test-milvus:
+	@echo "=== Starting Milvus 2.5.6 (+ etcd + minio) for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d milvus --wait
+	@echo "=== Running Milvus integration tests ==="
+	MILVUS_PORT=19531 cargo test --test integration_milvus --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping Milvus ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
 .PHONY: integration-test-weaviate
 integration-test-weaviate:
 	@echo "=== Starting Weaviate 1.28.9 for integration tests ==="
