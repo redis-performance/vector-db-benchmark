@@ -1,13 +1,19 @@
 //! OpenSearch engine implementation.
 //!
+//! Uses the official `opensearch` crate (async, wrapped with tokio block_on).
 //! Very similar to Elasticsearch but uses knn_vector type and different query format.
-//! Uses reqwest::blocking for HTTP calls against the OpenSearch REST API.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
+use opensearch::http::request::JsonBody;
+use opensearch::http::transport::{SingleNodeConnectionPool, TransportBuilder};
+use opensearch::indices::{
+    IndicesCreateParts, IndicesDeleteParts, IndicesForcemergeParts, IndicesPutSettingsParts,
+};
+use opensearch::{BulkParts, OpenSearch, SearchParts};
 use uuid::Uuid;
 
 use crate::config::{EngineConfig, SearchParams};
@@ -26,10 +32,16 @@ struct OpenSearchConfig {
 pub struct OpenSearchEngine {
     name: String,
     index_name: String,
+    #[allow(dead_code)]
     timeout: u64,
     config: OpenSearchConfig,
     search_params: Vec<SearchParams>,
+    /// Base URL for constructing per-thread clients
     base_url: String,
+    /// Tokio runtime for async operations
+    rt: tokio::runtime::Runtime,
+    /// Shared OpenSearch client
+    client: Arc<OpenSearch>,
 }
 
 impl OpenSearchEngine {
@@ -66,6 +78,11 @@ impl OpenSearchEngine {
 
         let base_url = build_base_url(host, port);
 
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+
+        let client = create_os_client(&base_url, timeout)?;
+
         Ok(Self {
             name: engine_config.name.clone(),
             index_name,
@@ -78,15 +95,9 @@ impl OpenSearchEngine {
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             base_url,
+            rt,
+            client: Arc::new(client),
         })
-    }
-
-    fn create_client(&self) -> Result<reqwest::blocking::Client, String> {
-        reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(self.timeout))
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))
     }
 
     fn create_progress_bar(&self, total: usize) -> ProgressBar {
@@ -103,25 +114,26 @@ impl OpenSearchEngine {
         pb
     }
 
-    fn delete_index(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
-        let url = format!("{}/{}", self.base_url, self.index_name);
-        let resp = client.delete(&url).send().map_err(|e| e.to_string())?;
-        if resp.status().is_success() || resp.status().as_u16() == 404 {
+    fn delete_index(&self) -> Result<(), String> {
+        let resp = self
+            .rt
+            .block_on(
+                self.client
+                    .indices()
+                    .delete(IndicesDeleteParts::Index(&[&self.index_name]))
+                    .send(),
+            )
+            .map_err(|e| format!("Failed to delete index: {}", e))?;
+
+        let status = resp.status_code().as_u16();
+        if status == 200 || status == 404 {
             Ok(())
         } else {
-            Err(format!(
-                "Failed to delete index: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ))
+            Err(format!("Failed to delete index: status {}", status))
         }
     }
 
-    fn create_index(
-        &self,
-        client: &reqwest::blocking::Client,
-        dataset: &Dataset,
-    ) -> Result<(), String> {
+    fn create_index(&self, dataset: &Dataset) -> Result<(), String> {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
@@ -198,20 +210,20 @@ impl OpenSearchEngine {
             }
         });
 
-        let url = format!("{}/{}", self.base_url, self.index_name);
-        let resp = client
-            .put(&url)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
+        let resp = self
+            .rt
+            .block_on(
+                self.client
+                    .indices()
+                    .create(IndicesCreateParts::Index(&self.index_name))
+                    .body(body)
+                    .send(),
+            )
             .map_err(|e| format!("Failed to create index: {}", e))?;
 
-        if !resp.status().is_success() {
-            return Err(format!(
-                "Failed to create index: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ));
+        if !resp.status_code().is_success() {
+            let body = self.rt.block_on(resp.text()).unwrap_or_default();
+            return Err(format!("Failed to create index: {}", body));
         }
 
         Ok(())
@@ -232,26 +244,32 @@ impl OpenSearchEngine {
         let total_batches = batches.len();
         let batch_idx = Arc::new(AtomicUsize::new(0));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let base_url = self.base_url.clone();
+        let timeout = self.timeout;
+        let index_name = self.index_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..self.config.parallel {
-                let base_url = self.base_url.clone();
-                let index_name = self.index_name.clone();
-                let timeout = self.timeout;
+                let base_url = base_url.clone();
+                let index_name = index_name.clone();
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .danger_accept_invalid_certs(true)
-                        .build()
-                    {
-                        Ok(c) => c,
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
+                            return;
+                        }
+                    };
+
+                    let client = match create_os_client(&base_url, timeout) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            *error.lock().unwrap() = Some(e);
                             return;
                         }
                     };
@@ -267,8 +285,8 @@ impl OpenSearchEngine {
 
                         let (batch_start, batch_end) = batches[idx];
                         if let Err(e) = upload_bulk_batch(
+                            &rt,
                             &client,
-                            &base_url,
                             &index_name,
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
@@ -291,35 +309,28 @@ impl OpenSearchEngine {
         Ok(())
     }
 
-    fn force_merge(&self, client: &reqwest::blocking::Client) -> Result<(), String> {
+    fn force_merge(&self) -> Result<(), String> {
         println!("Forcing merge...");
-        let url = format!(
-            "{}/{}/_forcemerge?wait_for_completion=true",
-            self.base_url, self.index_name
-        );
 
-        let resp = client
-            .post(&url)
-            .send()
+        let resp = self
+            .rt
+            .block_on(
+                self.client
+                    .indices()
+                    .forcemerge(IndicesForcemergeParts::Index(&[&self.index_name]))
+                    .send(),
+            )
             .map_err(|e| format!("Force merge failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            return Err(format!(
-                "Force merge error: {} {}",
-                resp.status(),
-                resp.text().unwrap_or_default()
-            ));
+        if !resp.status_code().is_success() {
+            let text = self.rt.block_on(resp.text()).unwrap_or_default();
+            return Err(format!("Force merge error: {}", text));
         }
         Ok(())
     }
 
     /// Apply search-time settings (e.g., knn.algo_param.ef_search)
-    fn setup_search(
-        &self,
-        client: &reqwest::blocking::Client,
-        params: &SearchParams,
-    ) -> Result<(), String> {
-        // Extract knn.algo_param.ef_search from the extra params
+    fn setup_search(&self, params: &SearchParams) -> Result<(), String> {
         let ef_search = params
             .extra
             .as_ref()
@@ -333,21 +344,20 @@ impl OpenSearchEngine {
                 }
             });
 
-            let url = format!("{}/{}/_settings", self.base_url, self.index_name);
-            let resp = client
-                .put(&url)
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
+            let resp = self
+                .rt
+                .block_on(
+                    self.client
+                        .indices()
+                        .put_settings(IndicesPutSettingsParts::Index(&[&self.index_name]))
+                        .body(body)
+                        .send(),
+                )
                 .map_err(|e| format!("Failed to apply search settings: {}", e))?;
 
-            if !resp.status().is_success() {
-                eprintln!(
-                    "Warning: failed to set ef_search={}: {} {}",
-                    ef,
-                    resp.status(),
-                    resp.text().unwrap_or_default()
-                );
+            if !resp.status_code().is_success() {
+                let text = self.rt.block_on(resp.text()).unwrap_or_default();
+                eprintln!("Warning: failed to set ef_search={}: {}", ef, text);
             }
         }
         Ok(())
@@ -381,10 +391,8 @@ fn extract_hnsw_params(engine_config: &EngineConfig) -> (i64, i64) {
 }
 
 fn build_base_url(host: &str, port: u16) -> String {
-    let user =
-        std::env::var("OPENSEARCH_USER").unwrap_or_else(|_| "admin".to_string());
-    let password =
-        std::env::var("OPENSEARCH_PASSWORD").unwrap_or_else(|_| "admin".to_string());
+    let user = std::env::var("OPENSEARCH_USER").unwrap_or_else(|_| "admin".to_string());
+    let password = std::env::var("OPENSEARCH_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
     let scheme_host = if host.starts_with("http") {
         host.to_string()
@@ -399,6 +407,20 @@ fn build_base_url(host: &str, port: u16) -> String {
     } else {
         format!("https://{}:{}@{}:{}", user, password, scheme_host, port)
     }
+}
+
+/// Create an OpenSearch client from a base URL.
+fn create_os_client(base_url: &str, timeout: u64) -> Result<OpenSearch, String> {
+    let url = opensearch::http::Url::parse(base_url)
+        .map_err(|e| format!("Invalid base URL '{}': {}", base_url, e))?;
+    let pool = SingleNodeConnectionPool::new(url);
+    let transport = TransportBuilder::new(pool)
+        .timeout(std::time::Duration::from_secs(timeout))
+        .disable_proxy()
+        .cert_validation(opensearch::cert::CertificateValidation::None)
+        .build()
+        .map_err(|e| format!("Failed to build transport: {}", e))?;
+    Ok(OpenSearch::new(transport))
 }
 
 fn id_to_uuid_hex(id: i64) -> String {
@@ -496,9 +518,10 @@ fn build_filter(
     }
 }
 
+/// Upload a batch using the official OpenSearch bulk API.
 fn upload_bulk_batch(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
+    rt: &tokio::runtime::Runtime,
+    client: &OpenSearch,
     index_name: &str,
     ids: &[i64],
     vectors: &[Vec<f32>],
@@ -506,12 +529,17 @@ fn upload_bulk_batch(
 ) -> Result<(), String> {
     use vector_db_benchmark::readers::metadata::MetadataValue;
 
-    let mut body = String::new();
+    let mut body: Vec<JsonBody<serde_json::Value>> = Vec::with_capacity(ids.len() * 2);
 
     for i in 0..ids.len() {
         let uuid_hex = id_to_uuid_hex(ids[i]);
-        body.push_str(&format!("{{\"index\":{{\"_id\":\"{}\"}}}}\n", uuid_hex));
 
+        // Action line
+        body.push(JsonBody::new(
+            serde_json::json!({"index": {"_id": uuid_hex}}),
+        ));
+
+        // Document line
         let mut doc = serde_json::Map::new();
         let vec_json: Vec<serde_json::Value> = vectors[i]
             .iter()
@@ -537,29 +565,27 @@ fn upload_bulk_batch(
             }
         }
 
-        body.push_str(&serde_json::to_string(&doc).map_err(|e| e.to_string())?);
-        body.push('\n');
+        body.push(JsonBody::new(serde_json::Value::Object(doc)));
     }
 
-    let url = format!("{}/{}/_bulk", base_url, index_name);
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/x-ndjson")
-        .body(body)
-        .send()
+    let resp = rt
+        .block_on(
+            client
+                .bulk(BulkParts::Index(index_name))
+                .body(body)
+                .send(),
+        )
         .map_err(|e| format!("Bulk upload failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Bulk upload error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
+    if !resp.status_code().is_success() {
+        let text = rt.block_on(resp.text()).unwrap_or_default();
+        return Err(format!("Bulk upload error: {}", text));
     }
 
-    let resp_body: serde_json::Value = resp
-        .json()
+    let resp_body: serde_json::Value = rt
+        .block_on(resp.json())
         .map_err(|e| format!("Failed to parse bulk response: {}", e))?;
+
     if resp_body
         .get("errors")
         .and_then(|v| v.as_bool())
@@ -584,10 +610,10 @@ fn upload_bulk_batch(
 }
 
 /// OpenSearch KNN search (different format from Elasticsearch).
-/// Uses {"knn": {"vector": {"vector": [...], "k": top}}} format.
+/// Uses {"query": {"knn": {"vector": {"vector": [...], "k": top}}}} format.
 fn knn_search(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
+    rt: &tokio::runtime::Runtime,
+    client: &OpenSearch,
     index_name: &str,
     query_vector: &[f32],
     top: usize,
@@ -616,24 +642,22 @@ fn knn_search(
         "size": top,
     });
 
-    let url = format!("{}/{}/_search", base_url, index_name);
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
+    let resp = rt
+        .block_on(
+            client
+                .search(SearchParts::Index(&[index_name]))
+                .body(body)
+                .send(),
+        )
         .map_err(|e| format!("KNN search failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!(
-            "KNN search error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
+    if !resp.status_code().is_success() {
+        let text = rt.block_on(resp.text()).unwrap_or_default();
+        return Err(format!("KNN search error: {}", text));
     }
 
-    let resp_body: serde_json::Value = resp
-        .json()
+    let resp_body: serde_json::Value = rt
+        .block_on(resp.json())
         .map_err(|e| format!("Failed to parse search response: {}", e))?;
 
     let hits = resp_body
@@ -656,6 +680,8 @@ fn knn_search(
     Ok(results)
 }
 
+// ── Engine trait implementation ──────────────────────────────────────────
+
 impl Engine for OpenSearchEngine {
     fn name(&self) -> &str {
         &self.name
@@ -666,18 +692,16 @@ impl Engine for OpenSearchEngine {
     }
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
-        let client = self.create_client()?;
-
         println!(
             "OpenSearch: HNSW {{ m: {}, ef_construction: {} }}",
             self.config.m, self.config.ef_construction
         );
 
         println!("Ensuring index does not exist...");
-        self.delete_index(&client)?;
+        self.delete_index()?;
 
         println!("Creating index '{}'...", self.index_name);
-        self.create_index(&client, dataset)?;
+        self.create_index(dataset)?;
         println!("Index '{}' created successfully.", self.index_name);
 
         Ok(())
@@ -712,8 +736,7 @@ impl Engine for OpenSearchEngine {
             vectors.len() as f64 / upload_time
         );
 
-        let client = self.create_client()?;
-        self.force_merge(&client)?;
+        self.force_merge()?;
 
         let total_time = read_time + upload_time;
 
@@ -736,8 +759,7 @@ impl Engine for OpenSearchEngine {
         let parallel = params.parallel.unwrap_or(1) as usize;
 
         // Apply search-time settings (ef_search)
-        let client = self.create_client()?;
-        self.setup_search(&client, params)?;
+        self.setup_search(params)?;
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
@@ -757,16 +779,19 @@ impl Engine for OpenSearchEngine {
 
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let start_time = Instant::now();
+        let base_url = self.base_url.clone();
+        let timeout = self.timeout;
+        let index_name = self.index_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
-                let base_url = self.base_url.clone();
-                let index_name = self.index_name.clone();
-                let timeout = self.timeout;
+                let base_url = base_url.clone();
+                let index_name = index_name.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
@@ -775,11 +800,11 @@ impl Engine for OpenSearchEngine {
                 let query_idx = Arc::clone(&query_idx);
 
                 s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .danger_accept_invalid_certs(true)
-                        .build()
-                    {
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(_) => return,
+                    };
+                    let client = match create_os_client(&base_url, timeout) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -797,8 +822,8 @@ impl Engine for OpenSearchEngine {
 
                         let query_start = Instant::now();
                         let results = knn_search(
+                            &rt,
                             &client,
-                            &base_url,
                             &index_name,
                             &queries[idx],
                             top,
@@ -872,14 +897,14 @@ impl Engine for OpenSearchEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top
+                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
         })
     }
 
     fn delete(&mut self) -> Result<(), String> {
-        let client = self.create_client()?;
-        self.delete_index(&client)
+        self.delete_index()
     }
 }
