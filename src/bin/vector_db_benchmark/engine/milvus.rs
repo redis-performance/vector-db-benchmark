@@ -290,10 +290,13 @@ impl MilvusEngine {
             );
         }
 
-        // Wait for loading to complete
+        // Wait for loading to complete (exponential backoff: 1s, 2s, 4s, ... capped at 16s)
         println!("Waiting for collection to be loaded...");
-        for _ in 0..120 {
-            std::thread::sleep(std::time::Duration::from_secs(2));
+        let mut backoff_secs = 1u64;
+        let max_backoff = 16u64;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(240);
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
             let body = serde_json::json!({
                 "collectionName": self.collection_name,
             });
@@ -315,9 +318,11 @@ impl MilvusEngine {
                     }
                 }
             }
+            if std::time::Instant::now() > deadline {
+                return Err("Timed out waiting for collection to load".to_string());
+            }
+            backoff_secs = (backoff_secs * 2).min(max_backoff);
         }
-
-        Err("Timed out waiting for collection to load".to_string())
     }
 
     fn upload_parallel(

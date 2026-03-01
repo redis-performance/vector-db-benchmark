@@ -2,7 +2,19 @@
 
 A benchmarking tool for vector databases, written in Rust. Measures upload throughput, search QPS, latency percentiles (p50/p95/p99), and recall for vector search engines.
 
-Currently supported engines: **Redis** (RediSearch HNSW), **VectorSets**, and **Elasticsearch**.
+## Supported Engines
+
+| Engine | Client Library | Protocol | Distance Metrics | Metadata Filters |
+|--------|---------------|----------|-----------------|-----------------|
+| **Redis** (RediSearch) | `redis` 0.27 | Redis protocol | L2, Cosine, IP | Yes |
+| **VectorSets** | `redis` 0.27 | Redis protocol | L2, Cosine | Yes |
+| **Elasticsearch** | `elasticsearch` 8.15 | HTTP/REST | L2, Cosine | Yes |
+| **OpenSearch** | `opensearch` 2.3 | HTTP/REST | L2, Cosine | Yes |
+| **Qdrant** | `qdrant-client` 1.13 | gRPC | L2, Cosine, Dot | Yes |
+| **PgVector** | `postgres` 0.19 + `pgvector` 0.4 | PostgreSQL | L2, Cosine | Yes |
+| **Weaviate** | `reqwest` (REST API) | HTTP/REST + GraphQL | L2, Cosine, Dot | Yes |
+| **Milvus** | `reqwest` (REST API v2) | HTTP/REST | L2, Cosine, IP | Yes |
+| **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
 
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
@@ -191,6 +203,8 @@ Use `--engines` with wildcard patterns to select configurations:
 ```bash
 vector-db-benchmark --engines 'redis-single*' --datasets 'glove*'
 vector-db-benchmark --engines 'vectorsets*' --datasets 'h-and-m*'
+vector-db-benchmark --engines 'elasticsearch*' --datasets 'glove*'
+vector-db-benchmark --engines 'qdrant*' --datasets 'deep-image*'
 ```
 
 Or provide a custom file with `--engines-file`:
@@ -223,10 +237,26 @@ brew install hdf5 pkg-config
 ```bash
 make build              # Build release binary
 make test               # Run unit tests
-make integration-test   # Run integration tests (starts Redis via docker)
 make check              # Clippy + rustfmt
 make docker-build       # Build Docker image
 ```
+
+### Integration tests
+
+Each engine has a dedicated integration test that runs against a Docker container:
+
+```bash
+make integration-test                  # Redis (default)
+make integration-test-elasticsearch    # Elasticsearch 8.10.2
+make integration-test-opensearch       # OpenSearch 2.19.2
+make integration-test-pgvector         # PgVector (PostgreSQL 16)
+make integration-test-qdrant           # Qdrant v1.13.4
+make integration-test-weaviate         # Weaviate 1.28.9
+make integration-test-milvus           # Milvus 2.5.6
+make integration-test-mongodb          # MongoDB Atlas Local 8.0.4
+```
+
+Each target starts the engine via `docker compose -f tests/docker-compose.test.yml`, runs the tests, then stops the container.
 
 ### Project structure
 
@@ -239,11 +269,28 @@ src/
       main.rs                         # CLI entry point
       config.rs                       # Configuration loading
       dataset.rs                      # Dataset resolution and reading
+      experiment.rs                   # Experiment runner with calibration
       engine/
         mod.rs                        # Engine trait and factory
         redis.rs                      # Redis (RediSearch) engine
-        vectorsets.rs                  # VectorSets engine
+        vectorsets.rs                 # VectorSets engine
         elasticsearch.rs              # Elasticsearch engine
+        opensearch.rs                 # OpenSearch engine
+        qdrant.rs                     # Qdrant engine (gRPC)
+        pgvector.rs                   # PgVector engine (PostgreSQL)
+        weaviate.rs                   # Weaviate engine (REST)
+        milvus.rs                     # Milvus engine (REST)
+        mongodb_engine.rs             # MongoDB Atlas Search engine
 experiments/configurations/           # Engine configuration JSON files
 datasets/datasets.json                # Dataset definitions
+tests/
+  docker-compose.test.yml             # Docker services for integration tests
+  integration_redis.rs                # Redis integration tests
+  integration_elasticsearch.rs        # Elasticsearch integration tests
+  integration_opensearch.rs           # OpenSearch integration tests
+  integration_pgvector.rs             # PgVector integration tests
+  integration_qdrant.rs               # Qdrant integration tests
+  integration_weaviate.rs             # Weaviate integration tests
+  integration_milvus.rs               # Milvus integration tests
+  integration_mongodb.rs              # MongoDB integration tests
 ```

@@ -337,7 +337,12 @@ impl Engine for PgVectorEngine {
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
-        let (queries, neighbors, _conditions) = dataset.read_queries()?;
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+
+        let parsed_filters: Vec<Option<String>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_pg_conditions))
+            .collect();
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let num_to_run = if num_queries > 0 {
@@ -361,6 +366,7 @@ impl Engine for PgVectorEngine {
                 let distance_op = distance_op.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
+                let parsed_filters = &parsed_filters;
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
@@ -390,9 +396,14 @@ impl Engine for PgVectorEngine {
 
                         let query_vec = pgvector::Vector::from(queries[idx].clone());
 
+                        let where_clause = parsed_filters[idx]
+                            .as_deref()
+                            .map(|f| format!(" WHERE {}", f))
+                            .unwrap_or_default();
+
                         let query_sql = format!(
-                            "SELECT id, embedding {} $1 AS _score FROM items ORDER BY _score LIMIT {}",
-                            distance_op, top
+                            "SELECT id, embedding {} $1 AS _score FROM items{} ORDER BY _score LIMIT {}",
+                            distance_op, where_clause, top
                         );
 
                         let query_start = Instant::now();
@@ -481,5 +492,83 @@ impl Engine for PgVectorEngine {
         conn.execute("DROP TABLE IF EXISTS items CASCADE", &[])
             .map_err(|e| format!("Failed to drop table: {}", e))?;
         Ok(())
+    }
+}
+
+// ── PgVector condition parser ─────────────────────────────────────
+
+fn parse_pg_conditions(conditions: &serde_json::Value) -> Option<String> {
+    let obj = conditions.as_object()?;
+    if obj.is_empty() {
+        return None;
+    }
+
+    let mut clauses = Vec::new();
+
+    if let Some(and_entries) = obj.get("and").and_then(|v| v.as_array()) {
+        let sub: Vec<String> = and_entries.iter().filter_map(build_pg_clause).collect();
+        if !sub.is_empty() {
+            clauses.push(format!("({})", sub.join(" AND ")));
+        }
+    }
+
+    if let Some(or_entries) = obj.get("or").and_then(|v| v.as_array()) {
+        let sub: Vec<String> = or_entries.iter().filter_map(build_pg_clause).collect();
+        if !sub.is_empty() {
+            clauses.push(format!("({})", sub.join(" OR ")));
+        }
+    }
+
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses.join(" AND "))
+    }
+}
+
+fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
+    let entry_obj = entry.as_object()?;
+    let mut parts = Vec::new();
+    for (field_name, field_filters) in entry_obj {
+        let filter_obj = field_filters.as_object()?;
+        for (condition_type, criteria) in filter_obj {
+            match condition_type.as_str() {
+                "match" => {
+                    if let Some(value) = criteria.get("value") {
+                        if let Some(s) = value.as_str() {
+                            parts.push(format!(
+                                "{} = '{}'",
+                                field_name,
+                                s.replace('\'', "''")
+                            ));
+                        } else {
+                            parts.push(format!("{} = {}", field_name, value));
+                        }
+                    }
+                }
+                "range" => {
+                    if let Some(co) = criteria.as_object() {
+                        for (op, val) in co {
+                            let sql_op = match op.as_str() {
+                                "lt" => "<",
+                                "gt" => ">",
+                                "lte" => "<=",
+                                "gte" => ">=",
+                                _ => continue,
+                            };
+                            if !val.is_null() {
+                                parts.push(format!("{} {} {}", field_name, sql_op, val));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" AND "))
     }
 }

@@ -4,9 +4,17 @@ A Rust-based benchmarking tool for vector databases. Measures upload throughput,
 
 ## Supported Engines
 
-- **Redis** (RediSearch) — HNSW via `FT.CREATE` / `FT.SEARCH`
-- **VectorSets** — Redis VectorSets via `VADD` / `VSIM`
-- **Elasticsearch** — dense vector with HNSW
+| Engine | Client Library | Protocol |
+|--------|---------------|----------|
+| **Redis** (RediSearch) | `redis` 0.27 | Redis protocol |
+| **VectorSets** | `redis` 0.27 | Redis protocol |
+| **Elasticsearch** | `elasticsearch` 8.15 | HTTP/REST |
+| **OpenSearch** | `opensearch` 2.3 | HTTP/REST |
+| **Qdrant** | `qdrant-client` 1.13 | gRPC |
+| **PgVector** | `postgres` 0.19 + `pgvector` 0.4 | PostgreSQL |
+| **Weaviate** | `reqwest` (REST API) | HTTP/REST + GraphQL |
+| **Milvus** | `reqwest` (REST API v2) | HTTP/REST |
+| **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol |
 
 ## Quick Start
 
