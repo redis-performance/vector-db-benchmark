@@ -157,6 +157,17 @@ integration-test-mongodb:
 	docker compose -f tests/docker-compose.test.yml down ; \
 	exit $$EXIT_CODE
 
+.PHONY: integration-test-valkey
+integration-test-valkey:
+	@echo "=== Starting Valkey Bundle for integration tests ==="
+	docker compose -f tests/docker-compose.test.yml up -d valkey --wait
+	@echo "=== Running Valkey integration tests ==="
+	VALKEY_PORT=6380 cargo test --test integration_valkey --release -- --nocapture --test-threads=1; \
+	EXIT_CODE=$$?; \
+	echo "=== Stopping Valkey ===" ; \
+	docker compose -f tests/docker-compose.test.yml down ; \
+	exit $$EXIT_CODE
+
 .PHONY: integration-test-no-docker
 integration-test-no-docker:
 	@echo "=== Running integration tests (assumes redis on port 6399) ==="
@@ -304,6 +315,7 @@ help:
 	@echo "  make integration-test-weaviate        - Weaviate 1.28.9"
 	@echo "  make integration-test-milvus          - Milvus 2.5.6"
 	@echo "  make integration-test-mongodb         - MongoDB Atlas Local 8.0.4"
+	@echo "  make integration-test-valkey          - Valkey Bundle (latest)"
 	@echo ""
 	@echo "  Docker:"
 	@echo "  make docker-build                - Build Docker image (IMAGE_TAG=latest)"

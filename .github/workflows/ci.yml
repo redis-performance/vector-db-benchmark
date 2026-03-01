@@ -220,3 +220,24 @@ jobs:
     - name: Stop MongoDB
       if: always()
       run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-valkey:
+    name: Integration tests (Valkey)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Valkey
+      run: docker compose -f tests/docker-compose.test.yml up -d valkey --wait
+
+    - name: Run Valkey integration tests
+      run: VALKEY_PORT=6380 cargo test --test integration_valkey --release -- --test-threads=1
+
+    - name: Stop Valkey
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down

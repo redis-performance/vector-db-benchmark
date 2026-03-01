@@ -15,6 +15,7 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 | **Weaviate** | `reqwest` (REST API) | HTTP/REST + GraphQL | L2, Cosine, Dot | Yes |
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST | L2, Cosine, IP | Yes |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
+| **Valkey** (Valkey Search) | `redis` 0.27 | RESP protocol | L2, Cosine, IP | Yes |
 
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
@@ -254,6 +255,7 @@ make integration-test-qdrant           # Qdrant v1.13.4
 make integration-test-weaviate         # Weaviate 1.28.9
 make integration-test-milvus           # Milvus 2.5.6
 make integration-test-mongodb          # MongoDB Atlas Local 8.0.4
+make integration-test-valkey           # Valkey Bundle (latest)
 ```
 
 Each target starts the engine via `docker compose -f tests/docker-compose.test.yml`, runs the tests, then stops the container.
@@ -281,6 +283,7 @@ src/
         weaviate.rs                   # Weaviate engine (REST)
         milvus.rs                     # Milvus engine (REST)
         mongodb_engine.rs             # MongoDB Atlas Search engine
+        valkey.rs                     # Valkey engine (RESP protocol)
 experiments/configurations/           # Engine configuration JSON files
 datasets/datasets.json                # Dataset definitions
 tests/
@@ -293,4 +296,5 @@ tests/
   integration_weaviate.rs             # Weaviate integration tests
   integration_milvus.rs               # Milvus integration tests
   integration_mongodb.rs              # MongoDB integration tests
+  integration_valkey.rs               # Valkey integration tests
 ```

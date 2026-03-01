@@ -1,0 +1,1119 @@
+//! Valkey engine implementation.
+//!
+//! Implements the Engine trait for Valkey Search vector similarity.
+//! Valkey is a Redis fork that speaks the same RESP protocol and supports
+//! identical FT.* search commands via the Valkey Search module.
+//!
+//! Note: valkey-glide has no published Rust client (GitHub issue valkey-io/valkey-glide#828
+//! closed as NOT_PLANNED). The maintainers recommend using the redis crate for Rust,
+//! which works with Valkey since it speaks the same protocol.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
+use redis::Connection;
+
+use crate::config::{EngineConfig, SearchParams};
+use crate::dataset::Dataset;
+use crate::engine::{Engine, SearchResults, UploadStats};
+use vector_db_benchmark::readers::metadata::MetadataItem;
+
+/// Valkey engine configuration
+#[derive(Clone)]
+pub struct ValkeyEngineConfig {
+    pub m: i64,
+    pub ef_construction: i64,
+    pub data_type: String,
+    pub algorithm: String,
+    pub batch_size: usize,
+    pub parallel: usize,
+}
+
+pub struct ValkeyEngine {
+    name: String,
+    host: String,
+    port: u16,
+    config: ValkeyEngineConfig,
+    search_params: Vec<SearchParams>,
+}
+
+impl ValkeyEngine {
+    pub fn new(engine_config: &EngineConfig, host: &str) -> Result<Self, String> {
+        let port: u16 = std::env::var("VALKEY_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6379);
+
+        // Extract HNSW config
+        let (m, ef_construction) = engine_config
+            .collection_params
+            .as_ref()
+            .and_then(|cp| cp.hnsw_config.as_ref())
+            .map(|h| (h.m.unwrap_or(16), h.ef_construction.unwrap_or(128)))
+            .unwrap_or((16, 128));
+
+        let algorithm = engine_config
+            .algorithm
+            .clone()
+            .unwrap_or_else(|| "hnsw".to_string());
+
+        let data_type = engine_config
+            .upload_params
+            .as_ref()
+            .and_then(|p| p.get("data_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("FLOAT32")
+            .to_string();
+
+        let parallel = engine_config
+            .upload_params
+            .as_ref()
+            .and_then(|p| p.get("parallel"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(100) as usize;
+
+        let batch_size = engine_config
+            .upload_params
+            .as_ref()
+            .and_then(|p| p.get("batch_size"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(64) as usize;
+
+        Ok(Self {
+            name: engine_config.name.clone(),
+            host: host.to_string(),
+            port,
+            config: ValkeyEngineConfig {
+                m,
+                ef_construction,
+                data_type,
+                algorithm,
+                batch_size,
+                parallel,
+            },
+            search_params: engine_config.search_params.clone().unwrap_or_default(),
+        })
+    }
+
+    fn get_connection(&self) -> Result<Connection, String> {
+        let auth = std::env::var("VALKEY_AUTH").ok();
+        let user = std::env::var("VALKEY_USER").ok();
+
+        let auth_part = match (&user, &auth) {
+            (Some(u), Some(p)) => format!("{}:{}@", u, p),
+            (None, Some(p)) => format!(":{}@", p),
+            _ => String::new(),
+        };
+
+        let url = format!("redis://{}{}:{}/", auth_part, self.host, self.port);
+        let client = redis::Client::open(url.as_str()).map_err(|e| e.to_string())?;
+        client.get_connection().map_err(|e| e.to_string())
+    }
+
+    fn create_index(&self, conn: &mut Connection, dataset: &Dataset) -> Result<(), String> {
+        let distance = dataset.distance();
+        let vector_size = dataset.vector_size();
+
+        // Drop existing index if any (Valkey Search does not support DD flag)
+        let _ = redis::cmd("FT.DROPINDEX")
+            .arg("idx")
+            .query::<()>(conn);
+        // Flush all keys to clean up data from previous runs
+        let _ = redis::cmd("FLUSHALL").query::<()>(conn);
+
+        // Map distance metric
+        let distance_metric = match distance.to_lowercase().as_str() {
+            "cosine" | "angular" => "COSINE",
+            "euclidean" | "l2" => "L2",
+            "dot" | "ip" => "IP",
+            _ => "COSINE",
+        };
+
+        // Build FT.CREATE command
+        let mut cmd = redis::cmd("FT.CREATE");
+        cmd.arg("idx")
+            .arg("ON")
+            .arg("HASH")
+            .arg("PREFIX")
+            .arg("1")
+            .arg("");
+
+        cmd.arg("SCHEMA");
+
+        // Vector field with HNSW params
+        let num_attrs = 6 + 2 + 2; // TYPE+DIM+DISTANCE_METRIC + M + EF_CONSTRUCTION
+        cmd.arg("vector")
+            .arg("VECTOR")
+            .arg(self.config.algorithm.to_uppercase())
+            .arg(num_attrs);
+        cmd.arg("TYPE").arg(&self.config.data_type);
+        cmd.arg("DIM").arg(vector_size);
+        cmd.arg("DISTANCE_METRIC").arg(distance_metric);
+        cmd.arg("M").arg(self.config.m);
+        cmd.arg("EF_CONSTRUCTION").arg(self.config.ef_construction);
+
+        // Add schema fields from dataset config for filtering.
+        // Note: Valkey Search does not support SORTABLE, TEXT, or GEO field types.
+        // Only TAG and NUMERIC are supported as filter fields.
+        if let Some(schema) = &dataset.config.schema {
+            if let Some(schema_obj) = schema.as_object() {
+                for (field_name, field_type) in schema_obj {
+                    let ft = field_type.as_str().unwrap_or("");
+                    match ft {
+                        "keyword" => {
+                            cmd.arg(field_name)
+                                .arg("TAG")
+                                .arg("SEPARATOR")
+                                .arg(";");
+                        }
+                        "int" | "float" => {
+                            cmd.arg(field_name).arg("NUMERIC");
+                        }
+                        // Valkey Search does not support TEXT or GEO field types;
+                        // skip them silently.
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        cmd.query::<()>(conn)
+            .map_err(|e| format!("Failed to create index: {}", e))?;
+
+        Ok(())
+    }
+
+    fn upload_sequential(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+    ) -> Result<(), String> {
+        let mut conn = self.get_connection()?;
+        let pb = self.create_progress_bar(ids.len());
+
+        for batch_start in (0..ids.len()).step_by(self.config.batch_size) {
+            let batch_end = (batch_start + self.config.batch_size).min(ids.len());
+            self.upload_batch(
+                &mut conn,
+                &ids[batch_start..batch_end],
+                &vectors[batch_start..batch_end],
+                &metadata[batch_start..batch_end],
+            )?;
+            pb.inc((batch_end - batch_start) as u64);
+        }
+
+        pb.finish_with_message("Upload complete");
+        Ok(())
+    }
+
+    fn upload_parallel(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+    ) -> Result<(), String> {
+        let pb = self.create_progress_bar(ids.len());
+        let batches: Vec<(usize, usize)> = (0..ids.len())
+            .step_by(self.config.batch_size)
+            .map(|start| (start, (start + self.config.batch_size).min(ids.len())))
+            .collect();
+
+        let total_batches = batches.len();
+        let batch_idx = Arc::new(AtomicUsize::new(0));
+        let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+        std::thread::scope(|s| {
+            for _ in 0..self.config.parallel {
+                let host = self.host.clone();
+                let port = self.port;
+                let config = self.config.clone();
+                let batches = &batches;
+                let batch_idx = Arc::clone(&batch_idx);
+                let error = Arc::clone(&error);
+                let pb = &pb;
+
+                s.spawn(move || {
+                    let auth = std::env::var("VALKEY_AUTH").ok();
+                    let user = std::env::var("VALKEY_USER").ok();
+                    let auth_part = match (&user, &auth) {
+                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
+                        (None, Some(p)) => format!(":{}@", p),
+                        _ => String::new(),
+                    };
+                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
+                    let client = match redis::Client::open(url.as_str()) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            *error.lock().unwrap() = Some(e.to_string());
+                            return;
+                        }
+                    };
+                    let mut conn = match client.get_connection() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            *error.lock().unwrap() = Some(e.to_string());
+                            return;
+                        }
+                    };
+
+                    loop {
+                        let idx = batch_idx.fetch_add(1, Ordering::SeqCst);
+                        if idx >= total_batches {
+                            break;
+                        }
+                        let (batch_start, batch_end) = batches[idx];
+                        if let Err(e) = upload_batch_internal(
+                            &mut conn,
+                            &config,
+                            &ids[batch_start..batch_end],
+                            &vectors[batch_start..batch_end],
+                            &metadata[batch_start..batch_end],
+                        ) {
+                            *error.lock().unwrap() = Some(e);
+                            break;
+                        }
+                        pb.inc((batch_end - batch_start) as u64);
+                    }
+                });
+            }
+        });
+
+        pb.finish_with_message("Upload complete");
+
+        if let Some(e) = error.lock().unwrap().take() {
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn upload_batch(
+        &self,
+        conn: &mut Connection,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+    ) -> Result<(), String> {
+        upload_batch_internal(conn, &self.config, ids, vectors, metadata)
+    }
+
+    /// Wait until FT.INFO reports num_docs >= expected.
+    fn wait_for_indexing(&self, expected: usize) -> Result<(), String> {
+        let mut conn = self.get_connection()?;
+        let max_wait = 120; // seconds
+        let start = Instant::now();
+
+        loop {
+            let info: redis::Value = redis::cmd("FT.INFO")
+                .arg("idx")
+                .query(&mut conn)
+                .map_err(|e| format!("FT.INFO error: {}", e))?;
+
+            let mut num_docs: usize = 0;
+            let mut indexing: bool = false;
+
+            fn extract_usize(val: &redis::Value) -> usize {
+                match val {
+                    redis::Value::BulkString(s) => String::from_utf8_lossy(s).parse().unwrap_or(0),
+                    redis::Value::Int(n) => *n as usize,
+                    redis::Value::Double(f) => *f as usize,
+                    redis::Value::SimpleString(s) => s.parse().unwrap_or(0),
+                    _ => 0,
+                }
+            }
+
+            fn extract_bool_nonzero(val: &redis::Value) -> bool {
+                match val {
+                    redis::Value::BulkString(s) => s != b"0",
+                    redis::Value::Int(n) => *n != 0,
+                    redis::Value::Double(f) => *f != 0.0,
+                    redis::Value::SimpleString(s) => s != "0",
+                    redis::Value::Boolean(b) => *b,
+                    _ => false,
+                }
+            }
+
+            match &info {
+                redis::Value::Array(arr) => {
+                    for i in (0..arr.len()).step_by(2) {
+                        let key_str = match &arr[i] {
+                            redis::Value::BulkString(s) => String::from_utf8_lossy(s).to_string(),
+                            redis::Value::SimpleString(s) => s.clone(),
+                            _ => continue,
+                        };
+                        if key_str == "num_docs" {
+                            if let Some(val) = arr.get(i + 1) {
+                                num_docs = extract_usize(val);
+                            }
+                        }
+                        if key_str == "indexing" {
+                            if let Some(val) = arr.get(i + 1) {
+                                indexing = extract_bool_nonzero(val);
+                            }
+                        }
+                    }
+                }
+                redis::Value::Map(map) => {
+                    for (k, v) in map {
+                        let key_str = match k {
+                            redis::Value::BulkString(s) => String::from_utf8_lossy(s).to_string(),
+                            redis::Value::SimpleString(s) => s.clone(),
+                            _ => continue,
+                        };
+                        if key_str == "num_docs" {
+                            num_docs = extract_usize(v);
+                        }
+                        if key_str == "indexing" {
+                            indexing = extract_bool_nonzero(v);
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("Unexpected FT.INFO response type: {:?}", info);
+                }
+            }
+
+            if num_docs >= expected && !indexing {
+                println!(
+                    "Indexing complete: {} docs in {:.1}s",
+                    num_docs,
+                    start.elapsed().as_secs_f64()
+                );
+                return Ok(());
+            }
+
+            if start.elapsed().as_secs() > max_wait {
+                println!(
+                    "Warning: indexing timeout after {}s (num_docs={}/{})",
+                    max_wait, num_docs, expected
+                );
+                return Ok(());
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+
+    fn create_progress_bar(&self, total: usize) -> ProgressBar {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec_int}/s)")
+                .unwrap()
+                .with_key("per_sec_int", |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                    write!(w, "{}", HumanCount(state.per_sec() as u64)).unwrap()
+                })
+                .progress_chars("#>-"),
+        );
+        pb
+    }
+}
+
+/// Internal batch upload function
+fn upload_batch_internal(
+    conn: &mut Connection,
+    config: &ValkeyEngineConfig,
+    ids: &[i64],
+    vectors: &[Vec<f32>],
+    metadata: &[Option<MetadataItem>],
+) -> Result<(), String> {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+
+    let mut pipe = redis::pipe();
+
+    for i in 0..ids.len() {
+        let key = ids[i].to_string();
+        let vec_bytes: Vec<u8> = match config.data_type.as_str() {
+            "FLOAT64" => vectors[i]
+                .iter()
+                .map(|&f| f as f64)
+                .flat_map(|f| f.to_le_bytes())
+                .collect(),
+            "FLOAT16" => vectors[i]
+                .iter()
+                .map(|&f| half::f16::from_f32(f).to_bits())
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
+            "BFLOAT16" => vectors[i]
+                .iter()
+                .map(|&f| half::bf16::from_f32(f).to_bits())
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
+            _ => vectors[i].iter().flat_map(|f| f.to_le_bytes()).collect(),
+        };
+
+        let mut fields: Vec<(Vec<u8>, Vec<u8>)> = vec![("vector".as_bytes().to_vec(), vec_bytes)];
+
+        if let Some(meta) = &metadata[i] {
+            for (k, v) in &meta.fields {
+                match v {
+                    MetadataValue::String(s) => {
+                        fields.push((k.as_bytes().to_vec(), s.as_bytes().to_vec()));
+                    }
+                    MetadataValue::Labels(labels) => {
+                        fields.push((k.as_bytes().to_vec(), labels.join(";").into_bytes()));
+                    }
+                    MetadataValue::Geo { lon, lat } => {
+                        let lat_clamped = lat.clamp(-85.05112878, 85.05112878);
+                        let geo_str = format!("{},{}", lon, lat_clamped);
+                        fields.push((k.as_bytes().to_vec(), geo_str.into_bytes()));
+                    }
+                }
+            }
+        }
+
+        let mut hset_cmd = redis::cmd("HSET");
+        hset_cmd.arg(key.as_str());
+        for (field_key, field_val) in &fields {
+            hset_cmd.arg(&field_key[..]).arg(&field_val[..]);
+        }
+        pipe.add_command(hset_cmd);
+    }
+
+    pipe.query::<()>(conn).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Convert a redis::Value to serde_json::Value for serialization.
+fn redis_value_to_json(val: &redis::Value) -> serde_json::Value {
+    match val {
+        redis::Value::Nil => serde_json::Value::Null,
+        redis::Value::Int(n) => serde_json::json!(n),
+        redis::Value::Double(f) => serde_json::json!(f),
+        redis::Value::Boolean(b) => serde_json::json!(b),
+        redis::Value::SimpleString(s) => serde_json::json!(s),
+        redis::Value::BulkString(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(s) => serde_json::json!(s),
+            Err(_) => serde_json::json!(format!("<{} bytes>", bytes.len())),
+        },
+        redis::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(redis_value_to_json).collect())
+        }
+        redis::Value::Map(pairs) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in pairs {
+                let key = match k {
+                    redis::Value::SimpleString(s) => s.clone(),
+                    redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
+                    other => format!("{:?}", other),
+                };
+                map.insert(key, redis_value_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+        other => serde_json::json!(format!("{:?}", other)),
+    }
+}
+
+// ── Condition parser ─────────────────────────────────────────────────────
+// Converts JSON filter conditions into Valkey Search query filter syntax.
+// Identical to RediSearch filter syntax since Valkey Search is compatible.
+
+#[derive(Debug, Clone)]
+enum FilterParamValue {
+    Str(String),
+    Int(i64),
+    Float(f64),
+}
+
+type ParsedFilter = (String, HashMap<String, FilterParamValue>);
+
+fn parse_conditions(conditions: &serde_json::Value) -> Option<ParsedFilter> {
+    let obj = conditions.as_object()?;
+    if obj.is_empty() {
+        return None;
+    }
+
+    let mut counter: usize = 0;
+
+    let and_entries = obj.get("and").and_then(|v| v.as_array());
+    let or_entries = obj.get("or").and_then(|v| v.as_array());
+
+    let and_subfilters = and_entries.map(|entries| build_subfilters(entries, &mut counter));
+    let or_subfilters = or_entries.map(|entries| build_subfilters(entries, &mut counter));
+
+    build_condition(and_subfilters, or_subfilters)
+}
+
+fn build_subfilters(entries: &[serde_json::Value], counter: &mut usize) -> Vec<ParsedFilter> {
+    let mut filters = Vec::new();
+    for entry in entries {
+        if let Some(entry_obj) = entry.as_object() {
+            for (field_name, field_filters) in entry_obj {
+                if let Some(filter_obj) = field_filters.as_object() {
+                    for (condition_type, criteria) in filter_obj {
+                        if let Some(f) = build_filter(field_name, condition_type, criteria, counter)
+                        {
+                            filters.push(f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    filters
+}
+
+fn build_filter(
+    field_name: &str,
+    condition_type: &str,
+    criteria: &serde_json::Value,
+    counter: &mut usize,
+) -> Option<ParsedFilter> {
+    match condition_type {
+        "match" => build_exact_match_filter(field_name, criteria, counter),
+        "range" => build_range_filter(field_name, criteria, counter),
+        "geo" => build_geo_filter(field_name, criteria, counter),
+        _ => None,
+    }
+}
+
+fn build_exact_match_filter(
+    field_name: &str,
+    criteria: &serde_json::Value,
+    counter: &mut usize,
+) -> Option<ParsedFilter> {
+    let value = criteria.get("value")?;
+    let param_name = format!("{}_{}", field_name, counter);
+    *counter += 1;
+
+    let mut params = HashMap::new();
+
+    if let Some(s) = value.as_str() {
+        params.insert(param_name.clone(), FilterParamValue::Str(s.to_string()));
+        Some((format!("@{}:{{${}}}", field_name, param_name), params))
+    } else if let Some(i) = value.as_i64() {
+        params.insert(param_name.clone(), FilterParamValue::Int(i));
+        Some((
+            format!("@{}:[${} ${}]", field_name, param_name, param_name),
+            params,
+        ))
+    } else if let Some(f) = value.as_f64() {
+        params.insert(param_name.clone(), FilterParamValue::Float(f));
+        Some((
+            format!("@{}:[${} ${}]", field_name, param_name, param_name),
+            params,
+        ))
+    } else {
+        None
+    }
+}
+
+fn build_range_filter(
+    field_name: &str,
+    criteria: &serde_json::Value,
+    counter: &mut usize,
+) -> Option<ParsedFilter> {
+    let param_prefix = format!("{}_{}", field_name, counter);
+    *counter += 1;
+
+    let mut params = HashMap::new();
+    let mut clauses = Vec::new();
+
+    if let Some(lt) = criteria.get("lt") {
+        let pname = format!("{}_lt", param_prefix);
+        insert_number_param(&mut params, &pname, lt);
+        clauses.push(format!("@{}:[-inf (${}]", field_name, pname));
+    }
+    if let Some(gt) = criteria.get("gt") {
+        let pname = format!("{}_gt", param_prefix);
+        insert_number_param(&mut params, &pname, gt);
+        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    }
+    if let Some(lte) = criteria.get("lte") {
+        let pname = format!("{}_lte", param_prefix);
+        insert_number_param(&mut params, &pname, lte);
+        clauses.push(format!("@{}:[-inf ${}]", field_name, pname));
+    }
+    if let Some(gte) = criteria.get("gte") {
+        let pname = format!("{}_gte", param_prefix);
+        insert_number_param(&mut params, &pname, gte);
+        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    }
+
+    if clauses.is_empty() {
+        return None;
+    }
+
+    Some((clauses.join(" "), params))
+}
+
+fn build_geo_filter(
+    field_name: &str,
+    criteria: &serde_json::Value,
+    counter: &mut usize,
+) -> Option<ParsedFilter> {
+    let param_prefix = format!("{}_{}", field_name, counter);
+    *counter += 1;
+
+    let mut params = HashMap::new();
+
+    let lon_name = format!("{}_lon", param_prefix);
+    let lat_name = format!("{}_lat", param_prefix);
+    let radius_name = format!("{}_radius", param_prefix);
+
+    insert_number_param(&mut params, &lon_name, criteria.get("lon")?);
+    insert_number_param(&mut params, &lat_name, criteria.get("lat")?);
+    insert_number_param(&mut params, &radius_name, criteria.get("radius")?);
+
+    Some((
+        format!(
+            "@{}:[${} ${} ${} m]",
+            field_name, lon_name, lat_name, radius_name
+        ),
+        params,
+    ))
+}
+
+fn insert_number_param(
+    params: &mut HashMap<String, FilterParamValue>,
+    name: &str,
+    value: &serde_json::Value,
+) {
+    if let Some(i) = value.as_i64() {
+        params.insert(name.to_string(), FilterParamValue::Int(i));
+    } else if let Some(f) = value.as_f64() {
+        params.insert(name.to_string(), FilterParamValue::Float(f));
+    }
+}
+
+fn build_condition(
+    and_subfilters: Option<Vec<ParsedFilter>>,
+    or_subfilters: Option<Vec<ParsedFilter>>,
+) -> Option<ParsedFilter> {
+    let mut clause_parts = Vec::new();
+    let mut all_params = HashMap::new();
+
+    if let Some(and_filters) = and_subfilters {
+        if !and_filters.is_empty() {
+            let and_clauses: Vec<String> = and_filters.iter().map(|(c, _)| c.clone()).collect();
+            for (_, p) in &and_filters {
+                all_params.extend(p.clone());
+            }
+            clause_parts.push(format!("({})", and_clauses.join(" ")));
+        }
+    }
+
+    if let Some(or_filters) = or_subfilters {
+        if !or_filters.is_empty() {
+            let or_clauses: Vec<String> = or_filters.iter().map(|(c, _)| c.clone()).collect();
+            for (_, p) in &or_filters {
+                all_params.extend(p.clone());
+            }
+            clause_parts.push(format!("({})", or_clauses.join(" | ")));
+        }
+    }
+
+    if clause_parts.is_empty() {
+        return None;
+    }
+
+    Some((clause_parts.join(" "), all_params))
+}
+
+// ── FT.SEARCH ────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn ft_search_knn(
+    conn: &mut Connection,
+    query_vector: &[f32],
+    top: usize,
+    _ef: i64,
+    _algorithm: &str,
+    _hybrid_policy: &str,
+    query_timeout: i64,
+    filter: Option<&ParsedFilter>,
+) -> Result<Vec<(i64, f64)>, String> {
+    let vec_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+    // Valkey Search KNN query syntax (no EF_RUNTIME, no HYBRID_POLICY):
+    // "*=>[KNN $K @vector $vec_param AS vector_score]"
+    let prefilter = filter
+        .as_ref()
+        .map(|(expr, _)| expr.as_str())
+        .unwrap_or("*");
+
+    let query_str = format!(
+        "{}=>[KNN $K @vector $vec_param AS vector_score]",
+        prefilter
+    );
+
+    // Valkey Search: DIALECT 2 only, no SORTBY on computed fields
+    let mut cmd = redis::cmd("FT.SEARCH");
+    cmd.arg("idx")
+        .arg(&query_str)
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("RETURN")
+        .arg(1)
+        .arg("vector_score")
+        .arg("DIALECT")
+        .arg(2)
+        .arg("TIMEOUT")
+        .arg(query_timeout);
+
+    // Params: vec_param + K + filter params
+    let filter_param_count = filter.as_ref().map(|(_, p)| p.len() * 2).unwrap_or(0);
+    let total_param_count = 4 + filter_param_count; // vec_param(2) + K(2) + filter params
+
+    cmd.arg("PARAMS").arg(total_param_count);
+    cmd.arg("vec_param").arg(&vec_bytes[..]);
+    cmd.arg("K").arg(top.to_string());
+
+    if let Some((_, params)) = filter {
+        for (name, value) in params {
+            cmd.arg(name.as_str());
+            match value {
+                FilterParamValue::Str(s) => {
+                    cmd.arg(s.as_str());
+                }
+                FilterParamValue::Int(i) => {
+                    cmd.arg(*i);
+                }
+                FilterParamValue::Float(f) => {
+                    cmd.arg(*f);
+                }
+            }
+        }
+    }
+
+    let response: Vec<redis::Value> = cmd
+        .query(conn)
+        .map_err(|e| format!("FT.SEARCH error: {}", e))?;
+
+    parse_ft_search_response(&response)
+}
+
+fn parse_ft_search_response(response: &[redis::Value]) -> Result<Vec<(i64, f64)>, String> {
+    let mut results = Vec::new();
+    if response.is_empty() {
+        return Ok(results);
+    }
+
+    let mut i = 1;
+    while i < response.len() {
+        let id = match &response[i] {
+            redis::Value::BulkString(data) => {
+                String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0)
+            }
+            redis::Value::Int(n) => *n,
+            _ => 0,
+        };
+        i += 1;
+
+        if i < response.len() {
+            let score = match &response[i] {
+                redis::Value::Array(fields) => extract_vector_score(fields),
+                _ => 0.0,
+            };
+            results.push((id, score));
+            i += 1;
+        }
+    }
+
+    Ok(results)
+}
+
+fn extract_vector_score(fields: &[redis::Value]) -> f64 {
+    let mut i = 0;
+    while i + 1 < fields.len() {
+        if let redis::Value::BulkString(name) = &fields[i] {
+            if name == b"vector_score" {
+                if let redis::Value::BulkString(val) = &fields[i + 1] {
+                    return String::from_utf8_lossy(val).parse::<f64>().unwrap_or(0.0);
+                }
+            }
+        }
+        i += 2;
+    }
+    0.0
+}
+
+// ── Engine trait implementation ──────────────────────────────────────────
+
+impl Engine for ValkeyEngine {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn search_params(&self) -> &[SearchParams] {
+        &self.search_params
+    }
+
+    fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
+        let mut conn = self.get_connection()?;
+
+        println!(
+            "Using algorithm {} with config {{'M': {}, 'EF_CONSTRUCTION': {}}}",
+            self.config.algorithm, self.config.m, self.config.ef_construction
+        );
+
+        self.create_index(&mut conn, dataset)
+    }
+
+    fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        let normalize = dataset.needs_normalization();
+
+        let dataset_path = dataset.get_path()?;
+        println!("Reading dataset from {}...", dataset_path.display());
+        let read_start = Instant::now();
+        let (ids, vectors, metadata) = dataset.read_vectors(normalize)?;
+        let read_time = read_start.elapsed().as_secs_f64();
+
+        println!(
+            "Read {} vectors ({}d) in {:.3}s ({:.0} vectors/sec)",
+            vectors.len(),
+            vectors.first().map(|v| v.len()).unwrap_or(0),
+            read_time,
+            vectors.len() as f64 / read_time
+        );
+
+        println!(
+            "Starting upload with {} threads, batch size {}...",
+            self.config.parallel, self.config.batch_size
+        );
+        let upload_start = Instant::now();
+
+        if self.config.parallel <= 1 {
+            self.upload_sequential(&ids, &vectors, &metadata)?;
+        } else {
+            self.upload_parallel(&ids, &vectors, &metadata)?;
+        }
+
+        let upload_time = upload_start.elapsed().as_secs_f64();
+
+        println!(
+            "Upload time: {:.3}s ({:.0} records/sec)",
+            upload_time,
+            vectors.len() as f64 / upload_time
+        );
+
+        let expected = vectors.len();
+        self.wait_for_indexing(expected)?;
+
+        let total_time = read_time + upload_time;
+        println!("Total time: {:.3}s", total_time);
+
+        Ok(UploadStats {
+            upload_time,
+            total_time,
+            upload_count: vectors.len(),
+            parallel: self.config.parallel,
+            batch_size: self.config.batch_size,
+            memory_usage: None,
+        })
+    }
+
+    fn search(
+        &mut self,
+        dataset: &Dataset,
+        params: &SearchParams,
+        num_queries: i64,
+    ) -> Result<SearchResults, String> {
+        let ef = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.ef)
+            .unwrap_or(64);
+        let parallel = params.parallel.unwrap_or(1) as usize;
+        let hybrid_policy = std::env::var("VALKEY_HYBRID_POLICY").unwrap_or_default();
+        let query_timeout: i64 = std::env::var("VALKEY_QUERY_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(90_000);
+
+        let query_path = dataset.get_path()?;
+        println!("\tReading queries from {}...", query_path.display());
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+
+        let parsed_filters: Vec<Option<ParsedFilter>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_conditions))
+            .collect();
+
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(queries.len())
+        } else {
+            queries.len()
+        };
+
+        let search_times: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let query_idx = Arc::new(AtomicUsize::new(0));
+
+        let start_time = Instant::now();
+
+        std::thread::scope(|s| {
+            for _ in 0..parallel {
+                let host = self.host.clone();
+                let port = self.port;
+                let algorithm = self.config.algorithm.clone();
+                let hybrid_policy = hybrid_policy.clone();
+                let queries = &queries;
+                let neighbors = &neighbors;
+                let parsed_filters = &parsed_filters;
+                let search_times = Arc::clone(&search_times);
+                let precisions = Arc::clone(&precisions);
+                let query_idx = Arc::clone(&query_idx);
+
+                s.spawn(move || {
+                    let auth = std::env::var("VALKEY_AUTH").ok();
+                    let user = std::env::var("VALKEY_USER").ok();
+                    let auth_part = match (&user, &auth) {
+                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
+                        (None, Some(p)) => format!(":{}@", p),
+                        _ => String::new(),
+                    };
+                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
+                    let client = match redis::Client::open(url.as_str()) {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let mut conn = match client.get_connection() {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+
+                    loop {
+                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        if idx >= num_to_run {
+                            break;
+                        }
+
+                        let top = explicit_top.unwrap_or_else(|| {
+                            let n = neighbors[idx].len();
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
+                        });
+
+                        let query_start = Instant::now();
+                        let results = ft_search_knn(
+                            &mut conn,
+                            &queries[idx],
+                            top,
+                            ef,
+                            &algorithm,
+                            &hybrid_policy,
+                            query_timeout,
+                            parsed_filters[idx].as_ref(),
+                        );
+                        let query_time = query_start.elapsed().as_secs_f64();
+
+                        search_times.lock().unwrap().push(query_time);
+
+                        if let Ok(result_ids) = results {
+                            let ground_truth: std::collections::HashSet<i64> =
+                                neighbors[idx].iter().take(top).copied().collect();
+                            let found: std::collections::HashSet<i64> =
+                                result_ids.iter().map(|(id, _)| *id).collect();
+                            let hits = ground_truth.intersection(&found).count();
+                            let precision = hits as f64 / top as f64;
+                            precisions.lock().unwrap().push(precision);
+                        } else {
+                            precisions.lock().unwrap().push(0.0);
+                        }
+                    }
+                });
+            }
+        });
+
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        let times = search_times.lock().unwrap();
+        let precs = precisions.lock().unwrap();
+
+        if times.is_empty() {
+            return Err("No searches completed".to_string());
+        }
+
+        let rps = times.len() as f64 / total_time;
+        let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
+        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
+            / times.len() as f64)
+            .sqrt();
+        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        let mut sorted_times: Vec<f64> = times.clone();
+        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
+        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
+        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
+
+        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
+        let p95_time = sorted_times
+            .get(p95_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+        let p99_time = sorted_times
+            .get(p99_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+
+        Ok(SearchResults {
+            total_time,
+            mean_time,
+            mean_precision,
+            std_time,
+            min_time,
+            max_time,
+            rps,
+            p50_time,
+            p95_time,
+            p99_time,
+            precisions: precs.to_vec(),
+            latencies: times.to_vec(),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            num_queries: times.len(),
+            parallel,
+        })
+    }
+
+    fn delete(&mut self) -> Result<(), String> {
+        let mut conn = self.get_connection()?;
+        // Valkey Search does not support DD flag on FT.DROPINDEX
+        let _ = redis::cmd("FT.DROPINDEX")
+            .arg("idx")
+            .query::<()>(&mut conn);
+        // Flush all keys to clean up uploaded data
+        let _ = redis::cmd("FLUSHALL").query::<()>(&mut conn);
+        Ok(())
+    }
+
+    fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
+        let mut conn = self.get_connection().ok()?;
+
+        let info_str: String = redis::cmd("INFO")
+            .arg("memory")
+            .query(&mut conn)
+            .ok()?;
+        let used_memory: i64 = info_str
+            .lines()
+            .find(|l| l.starts_with("used_memory:"))
+            .and_then(|l| l.strip_prefix("used_memory:"))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+
+        let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
+            .arg("idx")
+            .query::<redis::Value>(&mut conn)
+            .ok()
+            .map(|v| redis_value_to_json(&v));
+
+        Some(serde_json::json!({
+            "used_memory": [used_memory],
+            "index_info": ft_info,
+        }))
+    }
+}

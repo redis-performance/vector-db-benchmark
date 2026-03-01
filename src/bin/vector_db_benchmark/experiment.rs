@@ -50,6 +50,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "pgvector",
         "milvus",
         "mongodb",
+        "valkey",
     ];
     let engines: Vec<_> = engine_configs
         .iter()

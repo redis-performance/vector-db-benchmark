@@ -142,3 +142,13 @@ services:
       interval: 5s
       timeout: 10s
       retries: 30
+
+  valkey:
+    image: valkey/valkey-bundle:latest
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
