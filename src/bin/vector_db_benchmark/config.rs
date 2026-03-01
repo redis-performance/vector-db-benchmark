@@ -160,19 +160,151 @@ pub fn matches_pattern(name: &str, pattern: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Format a vector count with K/M/B suffixes
+fn format_count(count: i64) -> String {
+    if count >= 1_000_000_000 {
+        format!("{:.1}B", count as f64 / 1_000_000_000.0)
+    } else if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}K", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+/// Summarize a schema value into a compact string
+fn format_schema(schema: &serde_json::Value, max_len: usize) -> String {
+    let obj = match schema.as_object() {
+        Some(o) => o,
+        None => return schema.to_string(),
+    };
+    let field_count = obj.len();
+    let base = if field_count == 1 {
+        "1 field".to_string()
+    } else {
+        format!("{} fields", field_count)
+    };
+    if field_count == 0 {
+        return base;
+    }
+    // Try to add detail
+    let detail = if field_count <= 2 {
+        let names: Vec<&String> = obj.keys().collect();
+        format!("{}: {}", base, names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+    } else {
+        let mut types: Vec<String> = obj
+            .values()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        types.sort();
+        types.dedup();
+        format!("{} ({})", base, types.join(", "))
+    };
+    if detail.len() <= max_len {
+        detail
+    } else {
+        base
+    }
+}
+
 /// Describe available datasets
 pub fn describe_datasets(verbose: bool) -> Result<(), String> {
     let configs = read_dataset_configs()?;
-    println!("Available datasets ({}):", configs.len());
-    for (name, config) in configs.iter() {
-        if verbose {
+
+    // Sort by dimension, then vector count, then name
+    let mut sorted: Vec<(&String, &DatasetConfig)> = configs.iter().collect();
+    sorted.sort_by(|(_, a), (_, b)| {
+        let dim_a = a.vector_size.unwrap_or(0);
+        let dim_b = b.vector_size.unwrap_or(0);
+        dim_a
+            .cmp(&dim_b)
+            .then_with(|| a.vector_count.unwrap_or(0).cmp(&b.vector_count.unwrap_or(0)))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    println!("\nAvailable Datasets ({} found)", configs.len());
+    println!("{}", "=".repeat(131));
+
+    if verbose {
+        for (name, config) in &sorted {
+            println!("\n  {}", name);
             println!(
-                "  {} - {:?}d, {:?} vectors, type: {:?}",
-                name, config.vector_size, config.vector_count, config.dataset_type
+                "   Vector Size: {}",
+                config
+                    .vector_size
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "N/A".into())
             );
-        } else {
-            println!("  {}", name);
+            println!(
+                "   Distance:    {}",
+                config.distance.as_deref().unwrap_or("N/A")
+            );
+            println!(
+                "   Type:        {}",
+                config.dataset_type.as_deref().unwrap_or("N/A")
+            );
+            if let serde_json::Value::String(p) = &config.path {
+                println!("   Path:        {}", p);
+            }
+            if let Some(link) = &config.link {
+                println!("   Download:    {}", link);
+            }
+            if let Some(desc) = &config.description {
+                println!("   Description: {}", desc);
+            }
+            if let Some(schema) = &config.schema {
+                println!("   Schema:      {}", schema);
+            }
         }
+    } else {
+        // Column widths: Name(35) Dims(6) Distance(10) Count(14) Description(30) Schema(20)
+        println!(
+            "{:<35}{:<6}{:<10}{:<14}{:<30}{:<20}",
+            "Dataset Name", "Dims", "Distance", "Vector Count", "Description", "Schema"
+        );
+        println!("{}", "-".repeat(115));
+
+        for (name, config) in &sorted {
+            let dims = config
+                .vector_size
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "N/A".into());
+            let distance = config.distance.as_deref().unwrap_or("N/A");
+            let count_str = config
+                .vector_count
+                .map(format_count)
+                .unwrap_or_else(|| "N/A".into());
+            let desc = config.description.as_deref().unwrap_or("");
+            let desc_display = if desc.len() > 29 {
+                format!("{}...", &desc[..26])
+            } else {
+                desc.to_string()
+            };
+            let schema_str = config
+                .schema
+                .as_ref()
+                .map(|s| format_schema(s, 19))
+                .unwrap_or_default();
+
+            let display_name = if name.len() > 34 {
+                format!("{}...", &name[..31])
+            } else {
+                name.to_string()
+            };
+
+            println!(
+                "{:<35}{:<6}{:<10}{:<14}{:<30}{:<20}",
+                display_name, dims, distance, count_str, desc_display, schema_str
+            );
+        }
+    }
+
+    println!("\nTotal: {} datasets", configs.len());
+    if verbose {
+        println!();
+    } else {
+        println!("Use --verbose for detailed information");
     }
     Ok(())
 }
