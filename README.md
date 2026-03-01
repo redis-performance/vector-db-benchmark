@@ -16,6 +16,7 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST | L2, Cosine, IP | Yes |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
 | **Valkey** (Valkey Search) | `redis` 0.27 | RESP protocol | L2, Cosine, IP | Yes |
+| **Turbopuffer** | `turbopuffer-client` 0.0.4 | HTTP/REST (cloud) | Cosine, Euclidean | Yes |
 
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
@@ -260,6 +261,12 @@ make integration-test-valkey           # Valkey Bundle (latest)
 
 Each target starts the engine via `docker compose -f tests/docker-compose.test.yml`, runs the tests, then stops the container.
 
+**Turbopuffer** is cloud-only and requires an API key:
+```bash
+TURBOPUFFER_API_KEY=your-key ./target/release/vector-db-benchmark \
+  --engines 'turbopuffer*' --datasets random-100
+```
+
 ### Project structure
 
 ```
@@ -284,6 +291,7 @@ src/
         milvus.rs                     # Milvus engine (REST)
         mongodb_engine.rs             # MongoDB Atlas Search engine
         valkey.rs                     # Valkey engine (RESP protocol)
+        turbopuffer.rs                # Turbopuffer engine (cloud API)
 experiments/configurations/           # Engine configuration JSON files
 datasets/datasets.json                # Dataset definitions
 tests/

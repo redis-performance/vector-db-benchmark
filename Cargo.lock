@@ -3651,6 +3651,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "turbopuffer-client"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a63851e9db146b2099f9624aed1260922de6efc1845303060633903eca6a82e"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "typed-builder"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3811,6 +3824,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "turbopuffer-client",
  "uuid",
 ]
 

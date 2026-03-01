@@ -33,6 +33,7 @@ qdrant-client = "1.13"
 elasticsearch = "8.15.0-alpha.1"
 opensearch = "2.3.0"
 mongodb = { version = "3", features = ["sync"] }
+turbopuffer-client = "0.0.4"
 
 [dev-dependencies]
 tempfile = "3"

@@ -16,6 +16,7 @@ A Rust-based benchmarking tool for vector databases. Measures upload throughput,
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol |
 | **Valkey** (Valkey Search) | `redis` 0.27 | RESP protocol |
+| **Turbopuffer** | `turbopuffer-client` 0.0.4 | HTTP/REST (cloud) |
 
 ## Quick Start
 

@@ -51,6 +51,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "milvus",
         "mongodb",
         "valkey",
+        "turbopuffer",
     ];
     let engines: Vec<_> = engine_configs
         .iter()

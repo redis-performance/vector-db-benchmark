@@ -13,6 +13,7 @@ mod opensearch;
 mod pgvector;
 mod qdrant;
 mod redis;
+mod turbopuffer;
 mod valkey;
 mod vectorsets;
 mod weaviate;
@@ -27,6 +28,7 @@ pub use opensearch::OpenSearchEngine;
 pub use pgvector::PgVectorEngine;
 pub use qdrant::QdrantEngine;
 pub use redis::RedisEngine;
+pub use turbopuffer::TurbopufferEngine;
 pub use valkey::ValkeyEngine;
 pub use vectorsets::VectorSetsEngine;
 pub use weaviate::WeaviateEngine;
@@ -115,8 +117,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "milvus" => Ok(Box::new(MilvusEngine::new(engine_config, host)?)),
         "mongodb" => Ok(Box::new(MongoDBEngine::new(engine_config, host)?)),
         "valkey" => Ok(Box::new(ValkeyEngine::new(engine_config, host)?)),
+        "turbopuffer" => Ok(Box::new(TurbopufferEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer'.",
             other
         )),
     }
