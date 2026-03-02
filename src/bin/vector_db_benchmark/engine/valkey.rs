@@ -99,6 +99,10 @@ impl ValkeyEngine {
     }
 
     fn get_connection(&self) -> Result<Connection, String> {
+        Self::connect(&self.host, self.port)
+    }
+
+    fn connect(host: &str, port: u16) -> Result<Connection, String> {
         let auth = std::env::var("VALKEY_AUTH").ok();
         let user = std::env::var("VALKEY_USER").ok();
 
@@ -108,9 +112,14 @@ impl ValkeyEngine {
             _ => String::new(),
         };
 
-        let url = format!("redis://{}{}:{}/", auth_part, self.host, self.port);
+        let url = format!("redis://{}{}:{}/", auth_part, host, port);
         let client = redis::Client::open(url.as_str()).map_err(|e| e.to_string())?;
-        client.get_connection().map_err(|e| e.to_string())
+        let conn = client.get_connection().map_err(|e| e.to_string())?;
+        // Safety timeout: prevents indefinite hangs from pipeline stalls.
+        let timeout = std::time::Duration::from_secs(300);
+        conn.set_read_timeout(Some(timeout)).ok();
+        conn.set_write_timeout(Some(timeout)).ok();
+        Ok(conn)
     }
 
     fn create_index(&self, conn: &mut Connection, dataset: &Dataset) -> Result<(), String> {
@@ -238,22 +247,7 @@ impl ValkeyEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let auth = std::env::var("VALKEY_AUTH").ok();
-                    let user = std::env::var("VALKEY_USER").ok();
-                    let auth_part = match (&user, &auth) {
-                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                        (None, Some(p)) => format!(":{}@", p),
-                        _ => String::new(),
-                    };
-                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
-                    let client = match redis::Client::open(url.as_str()) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            *error.lock().unwrap() = Some(e.to_string());
-                            return;
-                        }
-                    };
-                    let mut conn = match client.get_connection() {
+                    let mut conn = match ValkeyEngine::connect(&host, port) {
                         Ok(c) => c,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
@@ -450,10 +444,12 @@ impl ValkeyEngine {
 }
 
 /// Maximum RESP wire bytes per pipeline flush.
-/// Valkey Search HNSW indexing can cause pipeline stalls when the total pipeline
-/// payload is large (~20KB+). Keeping sub-batches under this limit avoids the issue
-/// while still amortising round-trip overhead.
-const MAX_PIPE_BYTES: usize = 16_384;
+/// Valkey Search HNSW indexing can stall pipelines when the payload fills
+/// the TCP send buffer (default 16 KB on Linux). With concurrent upload
+/// threads the server must interleave reads across connections, amplifying
+/// the effect. Keeping each sub-batch well below the TCP buffer prevents
+/// blocking writes while still amortising round-trip overhead.
+const MAX_PIPE_BYTES: usize = 4_096;
 
 /// Internal batch upload function.
 ///
@@ -991,10 +987,11 @@ impl Engine for ValkeyEngine {
             .unwrap_or(64);
         let parallel = params.parallel.unwrap_or(1) as usize;
         let hybrid_policy = std::env::var("VALKEY_HYBRID_POLICY").unwrap_or_default();
+        // Valkey Search caps TIMEOUT at 60000ms
         let query_timeout: i64 = std::env::var("VALKEY_QUERY_TIMEOUT")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(90_000);
+            .unwrap_or(60_000);
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());

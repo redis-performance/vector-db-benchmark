@@ -1011,7 +1011,7 @@ fn test_valkey_sub_batched_pipeline_upload_high_dim() {
     let dim = 100;
     let count = 200;
     let batch_size = 64;
-    let max_pipe_bytes: usize = 16_384;
+    let max_pipe_bytes: usize = 4_096;
     let (ids, vectors) = generate_test_vectors(count, dim);
 
     redis::cmd("FT.CREATE")
