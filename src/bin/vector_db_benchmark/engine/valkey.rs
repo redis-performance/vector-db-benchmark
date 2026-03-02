@@ -223,11 +223,12 @@ impl ValkeyEngine {
             .collect();
 
         let total_batches = batches.len();
+        let num_threads = self.config.parallel.min(total_batches);
         let batch_idx = Arc::new(AtomicUsize::new(0));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         std::thread::scope(|s| {
-            for _ in 0..self.config.parallel {
+            for _ in 0..num_threads {
                 let host = self.host.clone();
                 let port = self.port;
                 let config = self.config.clone();
@@ -412,7 +413,18 @@ impl ValkeyEngine {
     }
 }
 
-/// Internal batch upload function
+/// Maximum RESP wire bytes per pipeline flush.
+/// Valkey Search HNSW indexing can cause pipeline stalls when the total pipeline
+/// payload is large (~20KB+). Keeping sub-batches under this limit avoids the issue
+/// while still amortising round-trip overhead.
+const MAX_PIPE_BYTES: usize = 16_384;
+
+/// Internal batch upload function.
+///
+/// Sends HSET commands in sub-batched pipelines whose total serialised size
+/// stays under `MAX_PIPE_BYTES`. This avoids a known interaction between
+/// the Rust `redis` crate's synchronous pipeline writer and Valkey Search's
+/// HNSW indexing that can stall large single-write pipelines.
 fn upload_batch_internal(
     conn: &mut Connection,
     config: &ValkeyEngineConfig,
@@ -423,6 +435,7 @@ fn upload_batch_internal(
     use vector_db_benchmark::readers::metadata::MetadataValue;
 
     let mut pipe = redis::pipe();
+    let mut pipe_bytes: usize = 0;
 
     for i in 0..ids.len() {
         let key = ids[i].to_string();
@@ -465,15 +478,36 @@ fn upload_batch_internal(
             }
         }
 
+        // Estimate RESP wire size: *N\r\n + $4\r\nHSET\r\n + $K\r\nkey\r\n + fields
+        let num_args = 1 + 1 + fields.len() * 2; // HSET + key + (field_name, field_value)*
+        let mut cmd_bytes = format!("*{}\r\n", num_args).len()
+            + 10 // $4\r\nHSET\r\n
+            + format!("${}\r\n", key.len()).len() + key.len() + 2;
+        for (fk, fv) in &fields {
+            cmd_bytes += format!("${}\r\n", fk.len()).len() + fk.len() + 2;
+            cmd_bytes += format!("${}\r\n", fv.len()).len() + fv.len() + 2;
+        }
+
+        // Flush the current pipeline if adding this command would exceed the limit
+        if pipe_bytes > 0 && pipe_bytes + cmd_bytes > MAX_PIPE_BYTES {
+            pipe.query::<()>(conn).map_err(|e| e.to_string())?;
+            pipe = redis::pipe();
+            pipe_bytes = 0;
+        }
+
         let mut hset_cmd = redis::cmd("HSET");
         hset_cmd.arg(key.as_str());
         for (field_key, field_val) in &fields {
             hset_cmd.arg(&field_key[..]).arg(&field_val[..]);
         }
-        pipe.add_command(hset_cmd);
+        pipe.add_command(hset_cmd).ignore();
+        pipe_bytes += cmd_bytes;
     }
 
-    pipe.query::<()>(conn).map_err(|e| e.to_string())?;
+    // Flush remaining commands
+    if pipe_bytes > 0 {
+        pipe.query::<()>(conn).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

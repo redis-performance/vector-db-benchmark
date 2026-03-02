@@ -156,6 +156,195 @@ fn extract_ft_info_value(info: &redis::Value, key: &str) -> Option<i64> {
 // Valkey (Valkey Search FT.*) Integration Tests
 // ---------------------------------------------------------------------------
 
+/// Verify parallel pipelined uploads (matching the engine's threaded path)
+/// persist every vector and that DBSIZE / FT.INFO num_docs agree.
+#[test]
+fn test_valkey_parallel_pipeline_upload_keyspace() {
+    wait_for_valkey();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 500;
+    let batch_size = 64;
+    let num_threads = 8;
+    let (ids, vectors) = generate_test_vectors(count, dim);
+
+    // Create index
+    redis::cmd("FT.CREATE")
+        .arg("idx")
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg("1")
+        .arg("")
+        .arg("SCHEMA")
+        .arg("vector")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg("6")
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dim)
+        .arg("DISTANCE_METRIC")
+        .arg("L2")
+        .query::<()>(&mut conn)
+        .expect("FT.CREATE failed");
+
+    // Build batches
+    let batches: Vec<(usize, usize)> = (0..ids.len())
+        .step_by(batch_size)
+        .map(|start| (start, (start + batch_size).min(ids.len())))
+        .collect();
+
+    let batch_idx = std::sync::atomic::AtomicUsize::new(0);
+    let total_batches = batches.len();
+    let port = test_port();
+
+    // Parallel upload using std::thread::scope (same as engine code)
+    std::thread::scope(|s| {
+        for _ in 0..num_threads {
+            let batches = &batches;
+            let batch_idx = &batch_idx;
+            let ids = &ids;
+            let vectors = &vectors;
+
+            s.spawn(move || {
+                let url = format!("redis://127.0.0.1:{}/", port);
+                let client = redis::Client::open(url.as_str()).unwrap();
+                let mut t_conn = client.get_connection().unwrap();
+
+                loop {
+                    let idx =
+                        batch_idx.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if idx >= total_batches {
+                        break;
+                    }
+                    let (start, end) = batches[idx];
+                    let mut pipe = redis::pipe();
+                    for i in start..end {
+                        let key = ids[i].to_string();
+                        let vec_bytes = vec_to_bytes(&vectors[i]);
+                        let mut cmd = redis::cmd("HSET");
+                        cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
+                        pipe.add_command(cmd).ignore();
+                    }
+                    pipe.query::<()>(&mut t_conn)
+                        .unwrap_or_else(|e| panic!("Pipeline batch {} failed: {}", idx, e));
+                }
+            });
+        }
+    });
+
+    thread::sleep(Duration::from_millis(1000));
+
+    // Verify DBSIZE
+    let dbsize: i64 = redis::cmd("DBSIZE").query(&mut conn).unwrap();
+    assert_eq!(
+        dbsize, count as i64,
+        "DBSIZE ({}) must equal uploaded count ({})",
+        dbsize, count
+    );
+
+    // Verify FT.INFO num_docs
+    let info: redis::Value = redis::cmd("FT.INFO")
+        .arg("idx")
+        .query(&mut conn)
+        .expect("FT.INFO failed");
+    let num_docs = extract_ft_info_value(&info, "num_docs").unwrap_or(-1);
+    assert_eq!(
+        num_docs, count as i64,
+        "FT.INFO num_docs ({}) must equal uploaded count ({})",
+        num_docs, count
+    );
+
+    // Cleanup
+    let _: () = redis::cmd("FT.DROPINDEX")
+        .arg("idx")
+        .query(&mut conn)
+        .unwrap();
+}
+
+/// Verify that pipelined uploads (matching the engine's code path) actually
+/// persist every vector and that DBSIZE / FT.INFO num_docs agree.
+#[test]
+fn test_valkey_pipeline_upload_keyspace() {
+    wait_for_valkey();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 500;
+    let batch_size = 64; // matches valkey-docker-test config
+    let (ids, vectors) = generate_test_vectors(count, dim);
+
+    // Create index
+    redis::cmd("FT.CREATE")
+        .arg("idx")
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg("1")
+        .arg("")
+        .arg("SCHEMA")
+        .arg("vector")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg("6")
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dim)
+        .arg("DISTANCE_METRIC")
+        .arg("L2")
+        .query::<()>(&mut conn)
+        .expect("FT.CREATE failed");
+
+    // Upload using the same pattern as the engine: pipe.add_command(cmd).ignore()
+    for chunk_start in (0..ids.len()).step_by(batch_size) {
+        let chunk_end = (chunk_start + batch_size).min(ids.len());
+        let mut pipe = redis::pipe();
+        for i in chunk_start..chunk_end {
+            let key = ids[i].to_string();
+            let vec_bytes = vec_to_bytes(&vectors[i]);
+            let mut cmd = redis::cmd("HSET");
+            cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
+            pipe.add_command(cmd).ignore();
+        }
+        pipe.query::<()>(&mut conn)
+            .unwrap_or_else(|e| panic!("Pipeline batch at offset {} failed: {}", chunk_start, e));
+    }
+
+    thread::sleep(Duration::from_millis(1000));
+
+    // Verify DBSIZE
+    let dbsize: i64 = redis::cmd("DBSIZE").query(&mut conn).unwrap();
+    assert_eq!(
+        dbsize, count as i64,
+        "DBSIZE ({}) must equal uploaded count ({})",
+        dbsize, count
+    );
+
+    // Verify FT.INFO num_docs
+    let info: redis::Value = redis::cmd("FT.INFO")
+        .arg("idx")
+        .query(&mut conn)
+        .expect("FT.INFO failed");
+    let num_docs = extract_ft_info_value(&info, "num_docs").unwrap_or(-1);
+    assert_eq!(
+        num_docs, count as i64,
+        "FT.INFO num_docs ({}) must equal uploaded count ({})",
+        num_docs, count
+    );
+
+    // Cleanup
+    let _: () = redis::cmd("FT.DROPINDEX")
+        .arg("idx")
+        .query(&mut conn)
+        .unwrap();
+}
+
 #[test]
 fn test_valkey_upload_and_retrieve() {
     wait_for_valkey();
@@ -258,6 +447,20 @@ fn test_valkey_knn_search() {
     }
 
     thread::sleep(Duration::from_millis(500));
+
+    // Verify keyspace matches expected vector count
+    let dbsize: i64 = redis::cmd("DBSIZE").query(&mut conn).unwrap();
+    assert_eq!(
+        dbsize, count as i64,
+        "DBSIZE should match uploaded vector count"
+    );
+
+    let info: redis::Value = redis::cmd("FT.INFO").arg("idx").query(&mut conn).unwrap();
+    let num_docs = extract_ft_info_value(&info, "num_docs").unwrap_or(0);
+    assert_eq!(
+        num_docs, count as i64,
+        "FT.INFO num_docs should match uploaded vector count"
+    );
 
     let query_vec = &vectors[0];
     let query_bytes = vec_to_bytes(query_vec);
@@ -783,4 +986,121 @@ fn test_valkey_full_cycle_via_binary() {
         stdout.contains("Search") || stdout.contains("search") || stdout.contains("QPS"),
         "Output should mention Search phase or QPS"
     );
+
+    // Verify stdout reports uploading the expected number of vectors
+    // (DBSIZE will be 0 after the benchmark because it calls delete())
+    let expected_count_msg = format!("Read {} vectors", count);
+    assert!(
+        stdout.contains(&expected_count_msg),
+        "Output should report reading {} vectors, got:\n{}",
+        count,
+        stdout
+    );
+}
+
+/// Verify sub-batched pipeline upload with high-dimensional vectors.
+/// With dim=100 (400 bytes/vector), 64 HSETs would be ~28KB RESP data,
+/// exceeding the 16KB sub-batch limit. This test confirms the sub-batching
+/// pattern from the engine code works correctly.
+#[test]
+fn test_valkey_sub_batched_pipeline_upload_high_dim() {
+    wait_for_valkey();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 100;
+    let count = 200;
+    let batch_size = 64;
+    let max_pipe_bytes: usize = 16_384;
+    let (ids, vectors) = generate_test_vectors(count, dim);
+
+    redis::cmd("FT.CREATE")
+        .arg("idx")
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg("1")
+        .arg("")
+        .arg("SCHEMA")
+        .arg("vector")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg("6")
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dim)
+        .arg("DISTANCE_METRIC")
+        .arg("L2")
+        .query::<()>(&mut conn)
+        .expect("FT.CREATE failed");
+
+    // Upload using the same sub-batching pattern as the engine code
+    for chunk_start in (0..ids.len()).step_by(batch_size) {
+        let chunk_end = (chunk_start + batch_size).min(ids.len());
+
+        let mut pipe = redis::pipe();
+        let mut pipe_bytes: usize = 0;
+
+        for i in chunk_start..chunk_end {
+            let key = ids[i].to_string();
+            let vec_bytes = vec_to_bytes(&vectors[i]);
+
+            // Estimate RESP wire size (same formula as engine code)
+            let num_args = 4; // HSET key vector <bytes>
+            let cmd_bytes = format!("*{}\r\n", num_args).len()
+                + 10 // $4\r\nHSET\r\n
+                + format!("${}\r\n", key.len()).len() + key.len() + 2
+                + 12 // $6\r\nvector\r\n
+                + format!("${}\r\n", vec_bytes.len()).len() + vec_bytes.len() + 2;
+
+            if pipe_bytes > 0 && pipe_bytes + cmd_bytes > max_pipe_bytes {
+                pipe.query::<()>(&mut conn)
+                    .unwrap_or_else(|e| panic!("Sub-batch flush failed at offset {}: {}", i, e));
+                pipe = redis::pipe();
+                pipe_bytes = 0;
+            }
+
+            let mut hset_cmd = redis::cmd("HSET");
+            hset_cmd
+                .arg(key.as_str())
+                .arg("vector")
+                .arg(&vec_bytes[..]);
+            pipe.add_command(hset_cmd).ignore();
+            pipe_bytes += cmd_bytes;
+        }
+
+        if pipe_bytes > 0 {
+            pipe.query::<()>(&mut conn)
+                .unwrap_or_else(|e| panic!("Final sub-batch failed at chunk {}: {}", chunk_start, e));
+        }
+    }
+
+    thread::sleep(Duration::from_millis(1000));
+
+    // Verify DBSIZE
+    let dbsize: i64 = redis::cmd("DBSIZE").query(&mut conn).unwrap();
+    assert_eq!(
+        dbsize, count as i64,
+        "DBSIZE ({}) must equal uploaded count ({})",
+        dbsize, count
+    );
+
+    // Verify FT.INFO num_docs
+    let info: redis::Value = redis::cmd("FT.INFO")
+        .arg("idx")
+        .query(&mut conn)
+        .expect("FT.INFO failed");
+    let num_docs = extract_ft_info_value(&info, "num_docs").unwrap_or(-1);
+    assert_eq!(
+        num_docs, count as i64,
+        "FT.INFO num_docs ({}) must equal uploaded count ({})",
+        num_docs, count
+    );
+
+    // Cleanup
+    let _: () = redis::cmd("FT.DROPINDEX")
+        .arg("idx")
+        .query(&mut conn)
+        .unwrap();
 }
