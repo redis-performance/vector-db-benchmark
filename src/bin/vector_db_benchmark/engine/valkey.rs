@@ -301,10 +301,13 @@ impl ValkeyEngine {
         upload_batch_internal(conn, &self.config, ids, vectors, metadata)
     }
 
-    /// Wait until FT.INFO reports num_docs >= expected.
+    /// Wait until FT.INFO reports num_docs >= expected and indexing/backfill is done.
+    ///
+    /// Checks both Redis Search's `indexing` flag and Valkey Search's
+    /// `backfill_in_progress` / `state` fields so this works with either engine.
     fn wait_for_indexing(&self, expected: usize) -> Result<(), String> {
         let mut conn = self.get_connection()?;
-        let max_wait = 120; // seconds
+        let max_wait = 600; // seconds – large HNSW indices can take minutes
         let start = Instant::now();
 
         loop {
@@ -337,6 +340,14 @@ impl ValkeyEngine {
                 }
             }
 
+            fn extract_string(val: &redis::Value) -> String {
+                match val {
+                    redis::Value::BulkString(s) => String::from_utf8_lossy(s).to_string(),
+                    redis::Value::SimpleString(s) => s.clone(),
+                    _ => String::new(),
+                }
+            }
+
             match &info {
                 redis::Value::Array(arr) => {
                     for i in (0..arr.len()).step_by(2) {
@@ -345,14 +356,22 @@ impl ValkeyEngine {
                             redis::Value::SimpleString(s) => s.clone(),
                             _ => continue,
                         };
-                        if key_str == "num_docs" {
-                            if let Some(val) = arr.get(i + 1) {
-                                num_docs = extract_usize(val);
-                            }
-                        }
-                        if key_str == "indexing" {
-                            if let Some(val) = arr.get(i + 1) {
-                                indexing = extract_bool_nonzero(val);
+                        if let Some(val) = arr.get(i + 1) {
+                            match key_str.as_str() {
+                                "num_docs" => num_docs = extract_usize(val),
+                                // Redis Search field
+                                "indexing" => indexing = indexing || extract_bool_nonzero(val),
+                                // Valkey Search fields
+                                "backfill_in_progress" => {
+                                    indexing = indexing || extract_bool_nonzero(val)
+                                }
+                                "state" => {
+                                    let state = extract_string(val);
+                                    if state != "ready" && !state.is_empty() {
+                                        indexing = true;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -364,11 +383,19 @@ impl ValkeyEngine {
                             redis::Value::SimpleString(s) => s.clone(),
                             _ => continue,
                         };
-                        if key_str == "num_docs" {
-                            num_docs = extract_usize(v);
-                        }
-                        if key_str == "indexing" {
-                            indexing = extract_bool_nonzero(v);
+                        match key_str.as_str() {
+                            "num_docs" => num_docs = extract_usize(v),
+                            "indexing" => indexing = indexing || extract_bool_nonzero(v),
+                            "backfill_in_progress" => {
+                                indexing = indexing || extract_bool_nonzero(v)
+                            }
+                            "state" => {
+                                let state = extract_string(v);
+                                if state != "ready" && !state.is_empty() {
+                                    indexing = true;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -388,10 +415,19 @@ impl ValkeyEngine {
 
             if start.elapsed().as_secs() > max_wait {
                 println!(
-                    "Warning: indexing timeout after {}s (num_docs={}/{})",
-                    max_wait, num_docs, expected
+                    "Warning: indexing timeout after {}s (num_docs={}/{}, indexing={})",
+                    max_wait, num_docs, expected, indexing
                 );
                 return Ok(());
+            }
+
+            if start.elapsed().as_secs() % 10 == 0 && start.elapsed().as_secs() > 0 {
+                println!(
+                    "Waiting for indexing: {} docs, indexing={} ({:.0}s)",
+                    num_docs,
+                    indexing,
+                    start.elapsed().as_secs_f64()
+                );
             }
 
             std::thread::sleep(std::time::Duration::from_millis(500));
