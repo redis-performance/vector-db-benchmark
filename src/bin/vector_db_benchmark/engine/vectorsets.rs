@@ -9,9 +9,11 @@ use std::time::Instant;
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use redis::Connection;
 
+use super::redis_utils;
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
+use vector_db_benchmark::readers::metadata::MetadataItem;
 
 /// VectorSets engine configuration
 #[derive(Clone)]
@@ -111,7 +113,12 @@ impl VectorSetsEngine {
         client.get_connection().map_err(|e| e.to_string())
     }
 
-    fn upload_sequential(&self, ids: &[i64], vectors: &[Vec<f32>]) -> Result<(), String> {
+    fn upload_sequential(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+    ) -> Result<(), String> {
         let mut conn = self.get_connection()?;
         let pb = self.create_progress_bar(ids.len());
 
@@ -122,6 +129,7 @@ impl VectorSetsEngine {
                 &self.config,
                 &ids[batch_start..batch_end],
                 &vectors[batch_start..batch_end],
+                &metadata[batch_start..batch_end],
             )?;
             pb.inc((batch_end - batch_start) as u64);
         }
@@ -130,7 +138,12 @@ impl VectorSetsEngine {
         Ok(())
     }
 
-    fn upload_parallel(&self, ids: &[i64], vectors: &[Vec<f32>]) -> Result<(), String> {
+    fn upload_parallel(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+    ) -> Result<(), String> {
         let pb = self.create_progress_bar(ids.len());
         let batches: Vec<(usize, usize)> = (0..ids.len())
             .step_by(self.config.batch_size)
@@ -186,6 +199,7 @@ impl VectorSetsEngine {
                             &config,
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
+                            &metadata[batch_start..batch_end],
                         ) {
                             *error.lock().unwrap() = Some(e);
                             break;
@@ -220,13 +234,16 @@ impl VectorSetsEngine {
 }
 
 /// Execute a batch of VADD commands via pipeline.
-/// VADD idx FP32 <vec_bytes> <id> <quant> M <M> EF <EF_CONSTRUCTION> CAS
+/// VADD idx FP32 <vec_bytes> <id> <quant> M <M> EF <EF_CONSTRUCTION> [CAS] [SETATTR '<json>']
 fn vadd_batch(
     conn: &mut Connection,
     config: &VectorSetsConfig,
     ids: &[i64],
     vectors: &[Vec<f32>],
+    metadata: &[Option<MetadataItem>],
 ) -> Result<(), String> {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+
     let mut pipe = redis::pipe();
 
     for i in 0..ids.len() {
@@ -247,6 +264,39 @@ fn vadd_batch(
             cmd.arg("CAS");
         }
 
+        // Attach metadata as JSON attributes for FILTER support
+        if let Some(meta) = &metadata[i] {
+            if !meta.fields.is_empty() {
+                let mut map = serde_json::Map::new();
+                for (k, v) in &meta.fields {
+                    match v {
+                        MetadataValue::String(s) => {
+                            map.insert(k.clone(), serde_json::Value::String(s.clone()));
+                        }
+                        MetadataValue::Labels(labels) => {
+                            map.insert(
+                                k.clone(),
+                                serde_json::Value::Array(
+                                    labels
+                                        .iter()
+                                        .map(|l| serde_json::Value::String(l.clone()))
+                                        .collect(),
+                                ),
+                            );
+                        }
+                        MetadataValue::Geo { lon, lat } => {
+                            map.insert(
+                                k.clone(),
+                                serde_json::json!({"lon": lon, "lat": lat}),
+                            );
+                        }
+                    }
+                }
+                let json_str = serde_json::Value::Object(map).to_string();
+                cmd.arg("SETATTR").arg(json_str);
+            }
+        }
+
         pipe.add_command(cmd);
     }
 
@@ -256,7 +306,7 @@ fn vadd_batch(
 }
 
 /// Execute VSIM query and return (id, score) pairs.
-/// VSIM idx FP32 <vec_bytes> WITHSCORES COUNT <top> EF <ef>
+/// VSIM idx FP32 <vec_bytes> WITHSCORES COUNT <top> EF <ef> [FILTER '<expr>' [FILTER-EF <n>]]
 /// Response: alternating [id, score, id, score, ...]
 /// Score conversion: 1.0 - score (VectorSets: 1=identical, 0=opposite)
 fn vsim_search(
@@ -264,18 +314,34 @@ fn vsim_search(
     query_vector: &[f32],
     top: usize,
     ef: i64,
+    filter: Option<&str>,
+    filter_ef: Option<i64>,
 ) -> Result<Vec<(i64, f64)>, String> {
     let vec_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-    let response: Vec<redis::Value> = redis::cmd("VSIM")
-        .arg("idx")
+    let mut cmd = redis::cmd("VSIM");
+    cmd.arg("idx")
         .arg("FP32")
         .arg(&vec_bytes[..])
         .arg("WITHSCORES")
         .arg("COUNT")
         .arg(top)
         .arg("EF")
-        .arg(ef)
+        .arg(ef);
+
+    if let Some(filter_expr) = filter {
+        cmd.arg("FILTER").arg(filter_expr);
+        // FILTER-EF controls how many candidate nodes the engine inspects
+        // for filtered results. Default is COUNT * 100.
+        // Docs say FILTER-EF 0 means "scan as many as needed", but
+        // Redis 8.6.0 rejects 0 with "invalid FILTER-EF".
+        // Workaround: use a very large value (10M) to approximate unlimited.
+        // Configurable via search_params.filter_ef in experiment JSON.
+        let fe = filter_ef.unwrap_or(10_000_000);
+        cmd.arg("FILTER-EF").arg(fe);
+    }
+
+    let response: Vec<redis::Value> = cmd
         .query(conn)
         .map_err(|e| format!("VSIM error: {}", e))?;
 
@@ -327,6 +393,7 @@ impl Engine for VectorSetsEngine {
         // Delete existing key if any
         let _ = redis::cmd("DEL").arg("idx").query::<()>(&mut conn);
 
+        redis_utils::reset_commandstats(&mut conn)?;
         Ok(())
     }
 
@@ -336,7 +403,7 @@ impl Engine for VectorSetsEngine {
         let dataset_path = dataset.get_path()?;
         println!("Reading dataset from {}...", dataset_path.display());
         let read_start = Instant::now();
-        let (ids, vectors, _metadata) = dataset.read_vectors(normalize)?;
+        let (ids, vectors, metadata) = dataset.read_vectors(normalize)?;
         let read_time = read_start.elapsed().as_secs_f64();
 
         println!(
@@ -354,9 +421,9 @@ impl Engine for VectorSetsEngine {
         let upload_start = Instant::now();
 
         if self.config.parallel <= 1 {
-            self.upload_sequential(&ids, &vectors)?;
+            self.upload_sequential(&ids, &vectors, &metadata)?;
         } else {
-            self.upload_parallel(&ids, &vectors)?;
+            self.upload_parallel(&ids, &vectors, &metadata)?;
         }
 
         let upload_time = upload_start.elapsed().as_secs_f64();
@@ -368,6 +435,10 @@ impl Engine for VectorSetsEngine {
             vectors.len() as f64 / upload_time
         );
         println!("Total time: {:.3}s", total_time);
+
+        // Verify no VADD failures occurred during upload
+        let mut conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut conn, &["VADD"], "upload")?;
 
         Ok(UploadStats {
             upload_time,
@@ -390,12 +461,24 @@ impl Engine for VectorSetsEngine {
             .as_ref()
             .and_then(|sp| sp.ef)
             .unwrap_or(64);
+        let filter_ef: Option<i64> = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.extra.as_ref())
+            .and_then(|extra| extra.get("filter_ef"))
+            .and_then(|v| v.as_i64());
         let parallel = params.parallel.unwrap_or(1) as usize;
 
         // Read queries and ground truth
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
-        let (queries, neighbors, _conditions) = dataset.read_queries()?;
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+
+        // Pre-build filter expressions for each query
+        let filters: Vec<Option<String>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(build_filter_expression))
+            .collect();
 
         // When top is explicitly set, use it for all queries.
         // When not set, use per-query ground truth count (matches Python v0 behavior
@@ -420,6 +503,7 @@ impl Engine for VectorSetsEngine {
                 let port = self.port;
                 let queries = &queries;
                 let neighbors = &neighbors;
+                let filters = &filters;
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
@@ -459,8 +543,10 @@ impl Engine for VectorSetsEngine {
                             }
                         });
 
+                        let filter_ref = filters[idx].as_deref();
                         let query_start = Instant::now();
-                        let results = vsim_search(&mut conn, &queries[idx], top, ef);
+                        let results =
+                            vsim_search(&mut conn, &queries[idx], top, ef, filter_ref, filter_ef);
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         search_times.lock().unwrap().push(query_time);
@@ -516,6 +602,10 @@ impl Engine for VectorSetsEngine {
             .copied()
             .unwrap_or(0.0);
 
+        // Verify no VSIM failures occurred
+        let mut check_conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut check_conn, &["VSIM"], "search")?;
+
         Ok(SearchResults {
             total_time,
             mean_time,
@@ -559,5 +649,121 @@ impl Engine for VectorSetsEngine {
             "used_memory": used_memory,
             "shards": 1,
         }))
+    }
+}
+
+// ── Filter expression builder ────────────────────────────────────────────
+// Converts JSON filter conditions into VectorSets FILTER expression syntax.
+// VectorSets uses dot-notation field access with standard comparison operators:
+//   .field == "value"   .field > 10   .field in ["a", "b"]
+
+/// Build a VectorSets FILTER expression from JSON conditions.
+fn build_filter_expression(conditions: &serde_json::Value) -> Option<String> {
+    let obj = conditions.as_object()?;
+    if obj.is_empty() {
+        return None;
+    }
+
+    let and_entries = obj.get("and").and_then(|v| v.as_array());
+    let or_entries = obj.get("or").and_then(|v| v.as_array());
+
+    let mut parts = Vec::new();
+
+    if let Some(entries) = and_entries {
+        let clauses = build_clauses(entries);
+        if !clauses.is_empty() {
+            parts.push(clauses.join(" and "));
+        }
+    }
+
+    if let Some(entries) = or_entries {
+        let clauses = build_clauses(entries);
+        if !clauses.is_empty() {
+            parts.push(format!("({})", clauses.join(" or ")));
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" and "))
+    }
+}
+
+fn build_clauses(entries: &[serde_json::Value]) -> Vec<String> {
+    let mut clauses = Vec::new();
+    for entry in entries {
+        if let Some(entry_obj) = entry.as_object() {
+            for (field_name, field_filters) in entry_obj {
+                if let Some(filter_obj) = field_filters.as_object() {
+                    for (condition_type, criteria) in filter_obj {
+                        if let Some(expr) = build_clause(field_name, condition_type, criteria) {
+                            clauses.push(expr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    clauses
+}
+
+fn build_clause(
+    field_name: &str,
+    condition_type: &str,
+    criteria: &serde_json::Value,
+) -> Option<String> {
+    match condition_type {
+        "match" => build_match_clause(field_name, criteria),
+        "range" => build_range_clause(field_name, criteria),
+        _ => None,
+    }
+}
+
+fn build_match_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
+    let value = criteria.get("value")?;
+    if let Some(s) = value.as_str() {
+        // Escape double quotes in the string value
+        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        Some(format!(".{} == \"{}\"", field_name, escaped))
+    } else if let Some(n) = value.as_i64() {
+        Some(format!(".{} == {}", field_name, n))
+    } else if let Some(f) = value.as_f64() {
+        Some(format!(".{} == {}", field_name, f))
+    } else {
+        None
+    }
+}
+
+fn build_range_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if let Some(gt) = criteria.get("gt") {
+        parts.push(format!(".{} > {}", field_name, format_number(gt)));
+    }
+    if let Some(gte) = criteria.get("gte") {
+        parts.push(format!(".{} >= {}", field_name, format_number(gte)));
+    }
+    if let Some(lt) = criteria.get("lt") {
+        parts.push(format!(".{} < {}", field_name, format_number(lt)));
+    }
+    if let Some(lte) = criteria.get("lte") {
+        parts.push(format!(".{} <= {}", field_name, format_number(lte)));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" and "))
+    }
+}
+
+fn format_number(value: &serde_json::Value) -> String {
+    if let Some(i) = value.as_i64() {
+        i.to_string()
+    } else if let Some(f) = value.as_f64() {
+        f.to_string()
+    } else {
+        "0".to_string()
     }
 }

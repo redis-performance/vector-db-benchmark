@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
+
+use super::redis_utils;
 use redis::Connection;
 
 use crate::config::{EngineConfig, SearchParams};
@@ -899,7 +901,9 @@ impl Engine for RedisEngine {
             self.config.algorithm, self.config.m, self.config.ef_construction
         );
 
-        self.create_index(&mut conn, dataset)
+        self.create_index(&mut conn, dataset)?;
+        redis_utils::reset_commandstats(&mut conn)?;
+        Ok(())
     }
 
     fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
@@ -945,6 +949,10 @@ impl Engine for RedisEngine {
 
         let total_time = read_time + upload_time;
         println!("Total time: {:.3}s", total_time);
+
+        // Verify no HSET failures occurred during upload
+        let mut conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut conn, &["hset"], "upload")?;
 
         Ok(UploadStats {
             upload_time,
@@ -1119,6 +1127,10 @@ impl Engine for RedisEngine {
             .get(p99_idx.min(sorted_times.len() - 1))
             .copied()
             .unwrap_or(0.0);
+
+        // Verify no FT.SEARCH failures occurred
+        let mut check_conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search")?;
 
         Ok(SearchResults {
             total_time,

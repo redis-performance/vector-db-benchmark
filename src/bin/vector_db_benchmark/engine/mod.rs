@@ -13,6 +13,7 @@ mod opensearch;
 mod pgvector;
 mod qdrant;
 mod redis;
+mod redis_utils;
 mod turbopuffer;
 mod valkey;
 mod vectorsets;

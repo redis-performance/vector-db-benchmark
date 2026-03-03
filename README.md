@@ -15,8 +15,11 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 | **Weaviate** | `reqwest` (REST API) | HTTP/REST + GraphQL | L2, Cosine, Dot | Yes |
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST | L2, Cosine, IP | Yes |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
-| **Valkey** (Valkey Search) | `redis` 0.27 | RESP protocol | L2, Cosine, IP | Yes |
+| **Valkey** (Valkey Search) | `redis` 0.27 [\*](#valkey-client-note) | RESP protocol | L2, Cosine, IP | Yes |
 | **Turbopuffer** | `turbopuffer-client` 0.0.4 | HTTP/REST (cloud) | Cosine, Euclidean | Yes |
+
+<a id="valkey-client-note"></a>
+\* **Valkey client note:** Valkey GLIDE has no published Rust crate ([valkey-io/valkey-glide#828](https://github.com/valkey-io/valkey-glide/issues/828), closed NOT_PLANNED). The GLIDE maintainers recommend using `redis-rs` for Rust and upstream their improvements to it. The `redis` crate works with Valkey since it speaks the same RESP protocol.
 
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
@@ -292,6 +295,7 @@ src/
         mongodb_engine.rs             # MongoDB Atlas Search engine
         valkey.rs                     # Valkey engine (RESP protocol)
         turbopuffer.rs                # Turbopuffer engine (cloud API)
+        redis_utils.rs                # Shared utils for Redis-protocol engines
 experiments/configurations/           # Engine configuration JSON files
 datasets/datasets.json                # Dataset definitions
 tests/

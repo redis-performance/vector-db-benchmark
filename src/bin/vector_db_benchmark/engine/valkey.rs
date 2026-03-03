@@ -2,16 +2,28 @@
 //!
 //! Implements the Engine trait for Valkey Search vector similarity.
 //! Valkey is a Redis fork that speaks the same RESP protocol and supports
-//! identical FT.* search commands via the Valkey Search module.
+//! FT.* search commands via the Valkey Search module.
 //!
-//! Note: valkey-glide has no published Rust client (GitHub issue valkey-io/valkey-glide#828
-//! closed as NOT_PLANNED). The maintainers recommend using the redis crate for Rust,
-//! which works with Valkey since it speaks the same protocol.
+//! # Why `redis` crate instead of Valkey GLIDE?
+//!
+//! | Option              | Status                                          |
+//! |---------------------|-------------------------------------------------|
+//! | `valkey-glide` Rust | No published crate. GitHub issue                |
+//! |                     | valkey-io/valkey-glide#828 closed NOT_PLANNED.   |
+//! |                     | Supported langs: Java, Python, Node.js, Go.     |
+//! |                     | Rust is not on the roadmap.                      |
+//! | `redis` crate       | Recommended by GLIDE maintainers for Rust.       |
+//! |                     | GLIDE team upstreams improvements to redis-rs.   |
+//! |                     | Works with Valkey via RESP protocol compat.      |
+//!
+//! Reference: <https://github.com/valkey-io/valkey-glide/issues/828>
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use super::redis_utils;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use redis::Connection;
@@ -576,11 +588,12 @@ fn redis_value_to_json(val: &redis::Value) -> serde_json::Value {
 
 // ── Condition parser ─────────────────────────────────────────────────────
 // Converts JSON filter conditions into Valkey Search query filter syntax.
-// Identical to RediSearch filter syntax since Valkey Search is compatible.
+// Note: Valkey Search does not support $param inside TAG {…} brackets,
+// so TAG values are inlined directly (with escaping). Numeric and geo
+// filters still use parameterised PARAMS.
 
 #[derive(Debug, Clone)]
 enum FilterParamValue {
-    Str(String),
     Int(i64),
     Float(f64),
 }
@@ -649,8 +662,10 @@ fn build_exact_match_filter(
     let mut params = HashMap::new();
 
     if let Some(s) = value.as_str() {
-        params.insert(param_name.clone(), FilterParamValue::Str(s.to_string()));
-        Some((format!("@{}:{{${}}}", field_name, param_name), params))
+        // Valkey Search does not support $param references inside TAG {…}
+        // brackets, and does NOT require backslash-escaping of spaces, dots,
+        // or other special characters. Values are passed raw inside {…}.
+        Some((format!("@{}:{{{}}}", field_name, s), params))
     } else if let Some(i) = value.as_i64() {
         params.insert(param_name.clone(), FilterParamValue::Int(i));
         Some((
@@ -834,9 +849,6 @@ fn ft_search_knn(
         for (name, value) in params {
             cmd.arg(name.as_str());
             match value {
-                FilterParamValue::Str(s) => {
-                    cmd.arg(s.as_str());
-                }
                 FilterParamValue::Int(i) => {
                     cmd.arg(*i);
                 }
@@ -918,7 +930,9 @@ impl Engine for ValkeyEngine {
             self.config.algorithm, self.config.m, self.config.ef_construction
         );
 
-        self.create_index(&mut conn, dataset)
+        self.create_index(&mut conn, dataset)?;
+        redis_utils::reset_commandstats(&mut conn)?;
+        Ok(())
     }
 
     fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
@@ -963,6 +977,10 @@ impl Engine for ValkeyEngine {
 
         let total_time = read_time + upload_time;
         println!("Total time: {:.3}s", total_time);
+
+        // Verify no HSET failures occurred during upload
+        let mut conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut conn, &["hset"], "upload")?;
 
         Ok(UploadStats {
             upload_time,
@@ -1077,16 +1095,19 @@ impl Engine for ValkeyEngine {
 
                         search_times.lock().unwrap().push(query_time);
 
-                        if let Ok(result_ids) = results {
-                            let ground_truth: std::collections::HashSet<i64> =
-                                neighbors[idx].iter().take(top).copied().collect();
-                            let found: std::collections::HashSet<i64> =
-                                result_ids.iter().map(|(id, _)| *id).collect();
-                            let hits = ground_truth.intersection(&found).count();
-                            let precision = hits as f64 / top as f64;
-                            precisions.lock().unwrap().push(precision);
-                        } else {
-                            precisions.lock().unwrap().push(0.0);
+                        match &results {
+                            Ok(result_ids) => {
+                                let ground_truth: std::collections::HashSet<i64> =
+                                    neighbors[idx].iter().take(top).copied().collect();
+                                let found: std::collections::HashSet<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let hits = ground_truth.intersection(&found).count();
+                                let precision = hits as f64 / top as f64;
+                                precisions.lock().unwrap().push(precision);
+                            }
+                            Err(_e) => {
+                                precisions.lock().unwrap().push(0.0);
+                            }
                         }
                     }
                 });
@@ -1127,6 +1148,10 @@ impl Engine for ValkeyEngine {
             .get(p99_idx.min(sorted_times.len() - 1))
             .copied()
             .unwrap_or(0.0);
+
+        // Verify no FT.SEARCH failures occurred
+        let mut check_conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search")?;
 
         Ok(SearchResults {
             total_time,

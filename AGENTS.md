@@ -52,7 +52,9 @@ src/
       engine/
         mod.rs                    # Engine trait + SearchResults
         redis.rs                  # Redis/RediSearch engine (FT.CREATE, HSET, FT.SEARCH)
+        valkey.rs                 # Valkey Search engine (RESP, uses redis crate)
         vectorsets.rs             # VectorSets engine (VADD, VSIM)
+        redis_utils.rs            # Shared utils: commandstats validation
 tests/
   integration_redis.rs            # Integration tests (requires redis:8.6.0 on port 6399)
 datasets/
@@ -88,16 +90,21 @@ The `v0/` directory contains the original Python implementation. The Rust versio
 
 ### Engine coverage
 
-| Engine | Python (v0/) | Rust |
-|--------|:---:|:---:|
-| Redis / RediSearch | `redis` | `redis` |
-| VectorSets | `vectorsets` | `vectorsets` |
-| Elasticsearch | `elasticsearch` | — |
-| Milvus | `milvus` | — |
-| OpenSearch | `opensearch` | — |
-| pgvector | `pgvector` | — |
-| Qdrant | `qdrant` | — |
-| Weaviate | `weaviate` | — |
+| Engine | Python (v0/) | Rust | Client Library |
+|--------|:---:|:---:|----------------|
+| Redis / RediSearch | `redis` | `redis` | `redis` 0.27 |
+| VectorSets | `vectorsets` | `vectorsets` | `redis` 0.27 |
+| Elasticsearch | `elasticsearch` | `elasticsearch` | `elasticsearch` 8.15 |
+| Milvus | `milvus` | `milvus` | `reqwest` (REST API v2) |
+| OpenSearch | `opensearch` | `opensearch` | `opensearch` 2.3 |
+| pgvector | `pgvector` | `pgvector` | `postgres` 0.19 + `pgvector` 0.4 |
+| Qdrant | `qdrant` | `qdrant` | `qdrant-client` 1.13 (gRPC) |
+| Weaviate | `weaviate` | `weaviate` | `reqwest` (REST API) |
+| MongoDB | — | `mongodb` | `mongodb` 3 (sync) |
+| Valkey | — | `valkey` | `redis` 0.27 \* |
+| Turbopuffer | — | `turbopuffer` | `turbopuffer-client` 0.0.4 |
+
+\* Valkey GLIDE has no Rust crate ([valkey-io/valkey-glide#828](https://github.com/valkey-io/valkey-glide/issues/828), closed NOT_PLANNED). GLIDE maintainers recommend `redis-rs` for Rust.
 
 Python engine configs use engine names like `redis`, `vectorsets`. Rust engine configs use the same.
 
