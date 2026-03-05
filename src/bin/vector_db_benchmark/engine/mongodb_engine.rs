@@ -111,9 +111,71 @@ impl MongoDBEngine {
 
     fn drop_collection(&self) -> Result<(), String> {
         let db = self.client.database(&self.db_name);
+
+        // 1. Drop the search index explicitly and wait for it to disappear.
+        //    On Atlas, stale indexes can prevent clean recreation.
+        println!("Dropping search index '{}'...", self.index_name);
+        let drop_cmd = doc! {
+            "dropSearchIndex": &self.collection_name,
+            "name": &self.index_name,
+        };
+        // Ignore errors (e.g. IndexNotFound, collection doesn't exist)
+        let _ = db.run_command(drop_cmd).run();
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let cmd = doc! { "listSearchIndexes": &self.collection_name };
+            let index_exists = db.run_command(cmd).run().ok().map_or(false, |result| {
+                result
+                    .get_document("cursor")
+                    .ok()
+                    .and_then(|c| c.get_array("firstBatch").ok())
+                    .map_or(false, |batch| {
+                        batch.iter().any(|idx| {
+                            idx.as_document()
+                                .and_then(|d| d.get_str("name").ok())
+                                .map_or(false, |n| n == self.index_name)
+                        })
+                    })
+            });
+
+            if !index_exists {
+                break;
+            }
+            if Instant::now() > deadline {
+                eprintln!(
+                    "Warning: search index '{}' still exists after 120s, proceeding anyway",
+                    self.index_name
+                );
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+
+        // 2. Drop the collection and verify it's gone.
         let coll = db.collection::<Document>(&self.collection_name);
         coll.drop().run()
             .map_err(|e| format!("Failed to drop collection: {}", e))?;
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let names = db
+                .list_collection_names()
+                .run()
+                .unwrap_or_default();
+            if !names.contains(&self.collection_name.to_string()) {
+                break;
+            }
+            if Instant::now() > deadline {
+                eprintln!(
+                    "Warning: collection '{}' still exists after 60s, proceeding anyway",
+                    self.collection_name
+                );
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+
         Ok(())
     }
 
@@ -193,8 +255,16 @@ impl MongoDBEngine {
                             if let Some(index_doc) = index.as_document() {
                                 let name = index_doc.get_str("name").unwrap_or("");
                                 let status = index_doc.get_str("status").unwrap_or("");
-                                if name == self.index_name && status == "READY" {
-                                    println!("Vector search index is ready.");
+                                let queryable = index_doc.get_bool("queryable").unwrap_or(false);
+                                // Atlas uses READY, local uses ACTIVE
+                                if name == self.index_name
+                                    && (status == "READY" || status == "ACTIVE")
+                                    && queryable
+                                {
+                                    println!(
+                                        "Vector search index is ready (status={}, queryable=true).",
+                                        status
+                                    );
                                     return Ok(());
                                 }
                             }
