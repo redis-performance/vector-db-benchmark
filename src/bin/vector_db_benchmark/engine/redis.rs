@@ -289,10 +289,11 @@ impl RedisEngine {
                 .query(&mut conn)
                 .map_err(|e| format!("FT.INFO error: {}", e))?;
 
-            // Parse num_docs and indexing from FT.INFO response.
+            // Parse num_docs, indexing, and percent_indexed from FT.INFO response.
             // The response can be a flat array (RESP2) or a Map (RESP3).
             let mut num_docs: usize = 0;
             let mut indexing: bool = false;
+            let mut percent_indexed: f64 = 1.0;
 
             fn extract_usize(val: &redis::Value) -> usize {
                 match val {
@@ -315,6 +316,16 @@ impl RedisEngine {
                 }
             }
 
+            fn extract_f64(val: &redis::Value) -> f64 {
+                match val {
+                    redis::Value::BulkString(s) => String::from_utf8_lossy(s).parse().unwrap_or(1.0),
+                    redis::Value::Int(n) => *n as f64,
+                    redis::Value::Double(f) => *f,
+                    redis::Value::SimpleString(s) => s.parse().unwrap_or(1.0),
+                    _ => 1.0,
+                }
+            }
+
             match &info {
                 redis::Value::Array(arr) => {
                     // RESP2: alternating key-value pairs (keys can be BulkString or SimpleString)
@@ -334,6 +345,11 @@ impl RedisEngine {
                                 indexing = extract_bool_nonzero(val);
                             }
                         }
+                        if key_str == "percent_indexed" {
+                            if let Some(val) = arr.get(i + 1) {
+                                percent_indexed = extract_f64(val);
+                            }
+                        }
                     }
                 }
                 redis::Value::Map(map) => {
@@ -350,6 +366,9 @@ impl RedisEngine {
                         if key_str == "indexing" {
                             indexing = extract_bool_nonzero(v);
                         }
+                        if key_str == "percent_indexed" {
+                            percent_indexed = extract_f64(v);
+                        }
                     }
                 }
                 _ => {
@@ -357,7 +376,7 @@ impl RedisEngine {
                 }
             }
 
-            if num_docs >= expected && !indexing {
+            if num_docs >= expected && !indexing && percent_indexed >= 1.0 {
                 println!(
                     "Indexing complete: {} docs in {:.1}s",
                     num_docs,
@@ -368,10 +387,17 @@ impl RedisEngine {
 
             if start.elapsed().as_secs() > max_wait {
                 println!(
-                    "Warning: indexing timeout after {}s (num_docs={}/{})",
-                    max_wait, num_docs, expected
+                    "Warning: indexing timeout after {}s (num_docs={}/{}, percent_indexed={:.2})",
+                    max_wait, num_docs, expected, percent_indexed
                 );
                 return Ok(());
+            }
+
+            if start.elapsed().as_secs() > 0 && start.elapsed().as_secs() % 10 == 0 {
+                println!(
+                    "  indexing... num_docs={}/{}, percent_indexed={:.2}, indexing={}",
+                    num_docs, expected, percent_indexed, indexing
+                );
             }
 
             std::thread::sleep(std::time::Duration::from_millis(500));
