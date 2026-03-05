@@ -55,11 +55,64 @@ fn wait_for_mongodb() {
     }
 }
 
+/// Drop the search index (if any), wait for it to disappear, then drop the
+/// collection and wait for it to be gone.  Mirrors the engine's configure()
+/// cleanup so tests exercise the same Atlas-safe path.
 fn drop_test_collection() {
     let client = mongodb_client();
     let db = client.database(TEST_DB);
+
+    // Drop search index explicitly
+    let _ = db
+        .run_command(doc! {
+            "dropSearchIndex": TEST_COLLECTION,
+            "name": TEST_INDEX,
+        })
+        .run();
+
+    // Wait for index to disappear
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let cmd = doc! { "listSearchIndexes": TEST_COLLECTION };
+        let index_exists = db.run_command(cmd).run().ok().map_or(false, |result| {
+            result
+                .get_document("cursor")
+                .ok()
+                .and_then(|c| c.get_array("firstBatch").ok())
+                .map_or(false, |batch| {
+                    batch.iter().any(|idx| {
+                        idx.as_document()
+                            .and_then(|d| d.get_str("name").ok())
+                            .map_or(false, |n| n == TEST_INDEX)
+                    })
+                })
+        });
+        if !index_exists {
+            break;
+        }
+        if Instant::now() > deadline {
+            eprintln!("Warning: search index still exists after 60s");
+            break;
+        }
+        thread::sleep(Duration::from_secs(2));
+    }
+
+    // Drop collection
     let coll = db.collection::<Document>(TEST_COLLECTION);
     let _ = coll.drop().run();
+
+    // Wait for collection to disappear
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let names = db.list_collection_names().run().unwrap_or_default();
+        if !names.contains(&TEST_COLLECTION.to_string()) {
+            break;
+        }
+        if Instant::now() > deadline {
+            break;
+        }
+        thread::sleep(Duration::from_secs(2));
+    }
 }
 
 fn generate_test_vectors(count: usize, dim: usize) -> (Vec<i64>, Vec<Vec<f32>>) {
@@ -137,7 +190,11 @@ fn create_vector_index(client: &Client, dim: usize, similarity: &str) {
                         if let Some(index_doc) = index.as_document() {
                             let name = index_doc.get_str("name").unwrap_or("");
                             let status = index_doc.get_str("status").unwrap_or("");
-                            if name == TEST_INDEX && status == "READY" {
+                            let queryable = index_doc.get_bool("queryable").unwrap_or(false);
+                            if name == TEST_INDEX
+                                && (status == "READY" || status == "ACTIVE")
+                                && queryable
+                            {
                                 // Remove dummy
                                 let _ = coll.delete_one(doc! { "_id": -1i64 }).run();
                                 return;
@@ -385,4 +442,108 @@ fn test_mongodb_full_cycle() {
 
     let count = coll.count_documents(doc! {}).run().unwrap_or(0);
     assert_eq!(count, 0);
+}
+
+/// Two back-to-back benchmark cycles with different dimensions.
+/// Verifies that index cleanup between runs is correct — the second run
+/// must create a fresh index with a different dimension and still return
+/// accurate results.
+#[test]
+fn test_mongodb_multi_dataset_runs() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let client = mongodb_client();
+
+    // ── Run 1: dim=4, euclidean, 20 vectors ───────────────────────
+    println!("=== Run 1: dim=4, euclidean ===");
+    {
+        let dim = 4;
+        create_vector_index(&client, dim, "euclidean");
+
+        let (ids, vectors) = generate_test_vectors(20, dim);
+        insert_vectors(&client, &ids, &vectors);
+        thread::sleep(Duration::from_secs(2));
+
+        let coll = client
+            .database(TEST_DB)
+            .collection::<Document>(TEST_COLLECTION);
+        let bson_query: Vec<mongodb::bson::Bson> = vectors[0]
+            .iter()
+            .map(|&f| mongodb::bson::Bson::Double(f as f64))
+            .collect();
+
+        let pipeline = vec![
+            doc! {
+                "$vectorSearch": {
+                    "index": TEST_INDEX,
+                    "path": "vector",
+                    "queryVector": bson_query,
+                    "numCandidates": 50i64,
+                    "limit": 5i64,
+                }
+            },
+            doc! {
+                "$project": {
+                    "_id": 1,
+                    "score": { "$meta": "vectorSearchScore" },
+                }
+            },
+        ];
+        let cursor = coll.aggregate(pipeline).run().expect("Run 1 search failed");
+        let results: Vec<Document> = cursor.filter_map(|r| r.ok()).collect();
+        assert_eq!(results.len(), 5, "Run 1: expected 5 results");
+        let first_id = results[0].get_i64("_id").unwrap();
+        assert_eq!(first_id, ids[0], "Run 1: first result should be query vector");
+    }
+
+    // ── Cleanup between runs (mirrors engine configure()) ─────────
+    println!("=== Cleanup between runs ===");
+    drop_test_collection();
+
+    // ── Run 2: dim=8, cosine, 50 vectors ──────────────────────────
+    println!("=== Run 2: dim=8, cosine ===");
+    {
+        let dim = 8;
+        create_vector_index(&client, dim, "cosine");
+
+        let (ids, vectors) = generate_test_vectors(50, dim);
+        insert_vectors(&client, &ids, &vectors);
+        thread::sleep(Duration::from_secs(2));
+
+        let coll = client
+            .database(TEST_DB)
+            .collection::<Document>(TEST_COLLECTION);
+        let bson_query: Vec<mongodb::bson::Bson> = vectors[0]
+            .iter()
+            .map(|&f| mongodb::bson::Bson::Double(f as f64))
+            .collect();
+
+        let pipeline = vec![
+            doc! {
+                "$vectorSearch": {
+                    "index": TEST_INDEX,
+                    "path": "vector",
+                    "queryVector": bson_query,
+                    "numCandidates": 100i64,
+                    "limit": 10i64,
+                }
+            },
+            doc! {
+                "$project": {
+                    "_id": 1,
+                    "score": { "$meta": "vectorSearchScore" },
+                }
+            },
+        ];
+        let cursor = coll.aggregate(pipeline).run().expect("Run 2 search failed");
+        let results: Vec<Document> = cursor.filter_map(|r| r.ok()).collect();
+        assert_eq!(results.len(), 10, "Run 2: expected 10 results");
+
+        // Verify doc count is from run 2 only (no leftover from run 1)
+        let count = coll.count_documents(doc! {}).run().expect("count failed");
+        assert_eq!(count, 50, "Run 2: should have exactly 50 docs, not leftovers from run 1");
+    }
+
+    drop_test_collection();
 }
