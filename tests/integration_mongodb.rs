@@ -4,6 +4,9 @@
 //! Start with: docker compose -f tests/docker-compose.test.yml up -d mongodb-search --wait
 //! Run with:   MONGODB_PORT=27018 cargo test --test integration_mongodb --release -- --test-threads=1
 
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -546,4 +549,287 @@ fn test_mongodb_multi_dataset_runs() {
     }
 
     drop_test_collection();
+}
+
+// ---------------------------------------------------------------------------
+// Binary end-to-end tests
+// ---------------------------------------------------------------------------
+
+/// Find the release binary path
+fn binary_path() -> PathBuf {
+    let mut path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    path.push("vector-db-benchmark");
+    if path.exists() {
+        return path;
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/vector-db-benchmark")
+}
+
+/// Create a temporary project directory with dataset + engine config.
+fn create_test_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    vectors: &[Vec<f32>],
+    queries: &[Vec<f32>],
+    neighbors: &[Vec<i64>],
+    distance: &str,
+    dim: usize,
+) -> PathBuf {
+    let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+
+    let dataset_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&dataset_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    let mut vecs_content = String::new();
+    for v in vectors {
+        let line: Vec<f64> = v.iter().map(|x| *x as f64).collect();
+        vecs_content.push_str(&serde_json::to_string(&line).unwrap());
+        vecs_content.push('\n');
+    }
+    fs::write(dataset_dir.join("vectors.jsonl"), &vecs_content).unwrap();
+
+    let mut queries_content = String::new();
+    for q in queries {
+        let line: Vec<f64> = q.iter().map(|x| *x as f64).collect();
+        queries_content.push_str(&serde_json::to_string(&line).unwrap());
+        queries_content.push('\n');
+    }
+    fs::write(dataset_dir.join("queries.jsonl"), &queries_content).unwrap();
+
+    let mut neighbors_content = String::new();
+    for n in neighbors {
+        neighbors_content.push_str(&serde_json::to_string(n).unwrap());
+        neighbors_content.push('\n');
+    }
+    fs::write(dataset_dir.join("neighbours.jsonl"), &neighbors_content).unwrap();
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name,
+        "type": "jsonl",
+        "path": format!("{}/", dataset_name),
+        "distance": distance,
+        "vector_size": dim,
+        "vector_count": vectors.len(),
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    root
+}
+
+/// Parse a search result JSON and return mean_precisions
+fn read_search_precision(results_dir: &PathBuf, engine_name: &str) -> f64 {
+    let pattern = format!("{}-*-search-*.json", engine_name);
+    let mut found = Vec::new();
+    for entry in fs::read_dir(results_dir).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if glob::Pattern::new(&pattern).unwrap().matches(&name) {
+            found.push(entry.path());
+        }
+    }
+    assert!(
+        !found.is_empty(),
+        "No search result files found matching '{}'",
+        pattern
+    );
+
+    let content = fs::read_to_string(&found[0]).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&content).unwrap();
+    result["results"]["mean_precisions"]
+        .as_f64()
+        .expect("mean_precisions not found in result JSON")
+}
+
+/// Brute-force L2 nearest neighbors for building ground truth.
+fn brute_force_neighbors_l2(query: &[f32], vectors: &[Vec<f32>], top: usize) -> Vec<i64> {
+    let mut dists: Vec<(i64, f64)> = vectors
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let d: f64 = query
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| ((*a as f64) - (*b as f64)).powi(2))
+                .sum();
+            (i as i64, d)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    dists.iter().take(top).map(|(id, _)| *id).collect()
+}
+
+/// Run the binary against MongoDB and return (stdout, stderr, success).
+fn run_benchmark(
+    project_root: &PathBuf,
+    engine_name: &str,
+    dataset_name: &str,
+    port: u16,
+) -> (String, String, bool) {
+    let bin = binary_path();
+    assert!(
+        bin.exists(),
+        "Binary not found at {:?}. Run `cargo build --release` first.",
+        bin
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "--engines",
+            engine_name,
+            "--datasets",
+            dataset_name,
+            "--host",
+            MONGODB_HOST,
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("MONGODB_PORT", port.to_string())
+        .env("MONGODB_DB", TEST_DB)
+        .env("MONGODB_COLLECTION", TEST_COLLECTION)
+        .env("MONGODB_INDEX_NAME", TEST_INDEX)
+        .current_dir(project_root)
+        .output()
+        .expect("Failed to run vector-db-benchmark");
+
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.success(),
+    )
+}
+
+/// End-to-end test: runs the actual vector-db-benchmark binary against MongoDB
+/// with two different datasets back-to-back, verifying clean index recreation.
+#[test]
+fn test_binary_mongodb_multi_dataset() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let port: u16 = std::env::var("MONGODB_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MONGODB_PORT);
+
+    let engine_name = "test-mongodb";
+    let engine_config = serde_json::json!([{
+        "name": engine_name,
+        "engine": "mongodb",
+        "connection_params": {},
+        "collection_params": {},
+        "search_params": [{
+            "parallel": 1,
+            "num_candidates": 20,
+        }],
+        "upload_params": {
+            "parallel": 1,
+            "batch_size": 50
+        }
+    }]);
+    let engine_json = serde_json::to_string_pretty(&engine_config).unwrap();
+
+    // ── Run 1: 50 vectors, dim=8, euclidean ─────────────────────
+    println!("=== Binary run 1: dim=8, euclidean ===");
+    let dim1 = 8;
+    let count1 = 50;
+    let top = 5;
+    let (_, vectors1) = generate_test_vectors(count1, dim1);
+    let queries1: Vec<Vec<f32>> = vectors1[..5].to_vec();
+    let neighbors1: Vec<Vec<i64>> = queries1
+        .iter()
+        .map(|q| brute_force_neighbors_l2(q, &vectors1, top))
+        .collect();
+
+    let project1 = create_test_project(
+        "test-euclidean",
+        &engine_json,
+        &vectors1,
+        &queries1,
+        &neighbors1,
+        "l2",
+        dim1,
+    );
+
+    let (stdout, stderr, success) = run_benchmark(&project1, engine_name, "test-euclidean", port);
+    println!("stdout:\n{}", stdout);
+    if !stderr.is_empty() {
+        println!("stderr:\n{}", stderr);
+    }
+    assert!(success, "Run 1 failed.\nstdout: {}\nstderr: {}", stdout, stderr);
+
+    let precision1 = read_search_precision(&project1.join("results"), engine_name);
+    println!("Run 1 precision: {:.4}", precision1);
+    assert!(
+        precision1 >= 0.8,
+        "Run 1 precision should be >= 0.8, got {:.4}",
+        precision1
+    );
+
+    // ── Run 2: 80 vectors, dim=16, cosine (different dataset, same engine) ──
+    // This exercises full cleanup: drop index → wait → drop collection → wait → recreate
+    println!("\n=== Binary run 2: dim=16, cosine ===");
+    let dim2 = 16;
+    let count2 = 80;
+    let (_, vectors2) = generate_test_vectors(count2, dim2);
+    let queries2: Vec<Vec<f32>> = vectors2[..5].to_vec();
+    let neighbors2: Vec<Vec<i64>> = queries2
+        .iter()
+        .map(|q| brute_force_neighbors_l2(q, &vectors2, top))
+        .collect();
+
+    let project2 = create_test_project(
+        "test-cosine",
+        &engine_json,
+        &vectors2,
+        &queries2,
+        &neighbors2,
+        "cosine",
+        dim2,
+    );
+
+    let (stdout, stderr, success) = run_benchmark(&project2, engine_name, "test-cosine", port);
+    println!("stdout:\n{}", stdout);
+    if !stderr.is_empty() {
+        println!("stderr:\n{}", stderr);
+    }
+    assert!(success, "Run 2 failed.\nstdout: {}\nstderr: {}", stdout, stderr);
+
+    // Verify the collection has exactly count2 documents (no leftovers from run 1)
+    let client = mongodb_client();
+    let coll = client
+        .database(TEST_DB)
+        .collection::<Document>(TEST_COLLECTION);
+    // Collection may already be dropped by engine.delete(), which is fine
+    let doc_count = coll.count_documents(doc! {}).run().unwrap_or(0);
+    assert!(
+        doc_count == 0 || doc_count == count2 as u64,
+        "Expected 0 (deleted) or {} docs, got {} — stale data from run 1?",
+        count2,
+        doc_count
+    );
+
+    drop_test_collection();
+
+    // Cleanup temp dirs
+    let _ = fs::remove_dir_all(&project1);
+    let _ = fs::remove_dir_all(&project2);
 }
