@@ -187,7 +187,6 @@ impl MongoDBEngine {
             };
 
             if let Ok(result) = db.run_command(cmd).run() {
-                // The response contains a cursor with firstBatch
                 if let Ok(cursor) = result.get_document("cursor") {
                     if let Ok(batch) = cursor.get_array("firstBatch") {
                         for index in batch {
@@ -210,6 +209,74 @@ impl MongoDBEngine {
                 );
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// Wait for the vector search index to finish indexing all uploaded documents.
+    ///
+    /// After bulk upload, the Atlas index may still be building. We poll with a
+    /// probe `$vectorSearch` query until it returns results, confirming the index
+    /// has caught up with the uploaded data.
+    fn wait_for_index_catchup(&self, expected_count: usize, dim: usize) -> Result<(), String> {
+        println!("Waiting for vector search index to index all {} documents...", expected_count);
+        let coll = self
+            .client
+            .database(&self.db_name)
+            .collection::<Document>(&self.collection_name);
+
+        // Use a zero-vector as a probe query
+        let probe: Vec<f32> = vec![0.0; dim];
+        let probe_top = 1;
+        let probe_candidates = 10i64;
+        let deadline = Instant::now() + std::time::Duration::from_secs(600);
+        let mut last_print = Instant::now();
+
+        loop {
+            match vector_search(&coll, &self.index_name, &probe, probe_top, probe_candidates, None)
+            {
+                Ok(results) if !results.is_empty() => {
+                    // Index is serving results — now verify document count via collection
+                    let doc_count = coll
+                        .estimated_document_count()
+                        .run()
+                        .unwrap_or(0) as usize;
+
+                    if doc_count >= expected_count {
+                        println!(
+                            "Vector search index is caught up ({} documents indexed).",
+                            doc_count
+                        );
+                        return Ok(());
+                    }
+
+                    if last_print.elapsed().as_secs() >= 10 {
+                        println!(
+                            "  index building... collection has {}/{} documents",
+                            doc_count, expected_count
+                        );
+                        last_print = Instant::now();
+                    }
+                }
+                Ok(_) => {
+                    if last_print.elapsed().as_secs() >= 10 {
+                        println!("  index building... probe query returned 0 results");
+                        last_print = Instant::now();
+                    }
+                }
+                Err(_) => {
+                    if last_print.elapsed().as_secs() >= 10 {
+                        println!("  index building... probe query not yet available");
+                        last_print = Instant::now();
+                    }
+                }
+            }
+
+            if Instant::now() > deadline {
+                return Err(
+                    "Vector search index did not finish indexing within 600 seconds".to_string(),
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
         }
     }
 
@@ -611,7 +678,17 @@ impl Engine for MongoDBEngine {
             vectors.len() as f64 / upload_time
         );
 
-        let total_time = read_time + upload_time;
+        // Wait for the search index to finish indexing all uploaded documents
+        let dim = vectors.first().map(|v| v.len()).unwrap_or(1);
+        let index_start = Instant::now();
+        self.wait_for_index_catchup(vectors.len(), dim)?;
+        let index_time = index_start.elapsed().as_secs_f64();
+
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         Ok(UploadStats {
             upload_time,
