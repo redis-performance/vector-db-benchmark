@@ -5,11 +5,15 @@
 use redis::Connection;
 
 /// Reset server command statistics so subsequent checks start from zero.
+/// Non-fatal: warns if the command is not permitted (e.g. Redis Cloud ACLs).
 pub fn reset_commandstats(conn: &mut Connection) -> Result<(), String> {
-    redis::cmd("CONFIG")
+    if let Err(e) = redis::cmd("CONFIG")
         .arg("RESETSTAT")
         .query::<()>(conn)
-        .map_err(|e| format!("CONFIG RESETSTAT failed: {}", e))
+    {
+        eprintln!("Warning: CONFIG RESETSTAT not available ({}), skipping commandstats validation", e);
+    }
+    Ok(())
 }
 
 /// Check `INFO COMMANDSTATS` for failed_calls on the given commands.
@@ -21,10 +25,13 @@ pub fn check_commandstats(
     commands: &[&str],
     context: &str,
 ) -> Result<(), String> {
-    let info: String = redis::cmd("INFO")
+    let info: String = match redis::cmd("INFO")
         .arg("commandstats")
         .query(conn)
-        .map_err(|e| format!("INFO COMMANDSTATS failed: {}", e))?;
+    {
+        Ok(v) => v,
+        Err(_) => return Ok(()), // not available, skip validation
+    };
 
     let mut failures = Vec::new();
 
