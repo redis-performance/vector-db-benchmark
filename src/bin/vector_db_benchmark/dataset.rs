@@ -99,8 +99,14 @@ impl Dataset {
                 // Compound format (vectors.npy + payloads.jsonl)
                 read_compound_data(path_str, normalize)
             }
-            "hdf5" | "h5" | "" => {
-                // HDF5 format - check file extension
+            "hdf5" | "h5" => {
+                // Explicit HDF5 type — trust it regardless of file extension
+                let (ids, vectors) = read_hdf5_vectors(path_str, normalize)?;
+                let metadata: Vec<Option<MetadataItem>> = vec![None; vectors.len()];
+                Ok((ids, vectors, metadata))
+            }
+            "" => {
+                // No type specified — infer from file extension
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                 match ext.to_lowercase().as_str() {
                     "hdf5" | "h5" => {
