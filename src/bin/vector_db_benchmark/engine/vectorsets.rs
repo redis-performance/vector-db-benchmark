@@ -31,18 +31,14 @@ pub struct VectorSetsConfig {
 
 pub struct VectorSetsEngine {
     name: String,
-    host: String,
-    port: u16,
+    redis_url: String,
     config: VectorSetsConfig,
     search_params: Vec<SearchParams>,
 }
 
 impl VectorSetsEngine {
     pub fn new(engine_config: &EngineConfig, host: &str) -> Result<Self, String> {
-        let port: u16 = std::env::var("REDIS_PORT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(6379);
+        let redis_url = crate::engine::build_redis_url(host);
 
         let hnsw_config = engine_config
             .upload_params
@@ -89,8 +85,7 @@ impl VectorSetsEngine {
 
         Ok(Self {
             name: engine_config.name.clone(),
-            host: host.to_string(),
-            port,
+            redis_url,
             config: VectorSetsConfig {
                 quant,
                 m,
@@ -104,15 +99,7 @@ impl VectorSetsEngine {
     }
 
     fn get_connection(&self) -> Result<Connection, String> {
-        let auth = std::env::var("REDIS_AUTH").ok();
-        let user = std::env::var("REDIS_USER").ok();
-        let auth_part = match (&user, &auth) {
-            (Some(u), Some(p)) => format!("{}:{}@", u, p),
-            (None, Some(p)) => format!(":{}@", p),
-            _ => String::new(),
-        };
-        let url = format!("redis://{}{}:{}/", auth_part, self.host, self.port);
-        let client = redis::Client::open(url.as_str()).map_err(|e| e.to_string())?;
+        let client = redis::Client::open(self.redis_url.as_str()).map_err(|e| e.to_string())?;
         client.get_connection().map_err(|e| e.to_string())
     }
 
@@ -159,8 +146,7 @@ impl VectorSetsEngine {
 
         std::thread::scope(|s| {
             for _ in 0..self.config.parallel {
-                let host = self.host.clone();
-                let port = self.port;
+                let redis_url = self.redis_url.clone();
                 let config = self.config.clone();
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
@@ -168,15 +154,7 @@ impl VectorSetsEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let auth = std::env::var("REDIS_AUTH").ok();
-                    let user = std::env::var("REDIS_USER").ok();
-                    let auth_part = match (&user, &auth) {
-                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                        (None, Some(p)) => format!(":{}@", p),
-                        _ => String::new(),
-                    };
-                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
-                    let client = match redis::Client::open(url.as_str()) {
+                    let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
@@ -558,8 +536,7 @@ impl Engine for VectorSetsEngine {
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
-                let host = self.host.clone();
-                let port = self.port;
+                let redis_url = self.redis_url.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let filters = &filters;
@@ -568,15 +545,7 @@ impl Engine for VectorSetsEngine {
                 let query_idx = Arc::clone(&query_idx);
 
                 s.spawn(move || {
-                    let auth = std::env::var("REDIS_AUTH").ok();
-                    let user = std::env::var("REDIS_USER").ok();
-                    let auth_part = match (&user, &auth) {
-                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                        (None, Some(p)) => format!(":{}@", p),
-                        _ => String::new(),
-                    };
-                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
-                    let client = match redis::Client::open(url.as_str()) {
+                    let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -747,8 +716,7 @@ impl Engine for VectorSetsEngine {
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
-                let host = self.host.clone();
-                let port = self.port;
+                let redis_url = self.redis_url.clone();
                 let config = self.config.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
@@ -764,15 +732,7 @@ impl Engine for VectorSetsEngine {
                 let update_idx = Arc::clone(&update_idx);
 
                 s.spawn(move || {
-                    let auth = std::env::var("REDIS_AUTH").ok();
-                    let user = std::env::var("REDIS_USER").ok();
-                    let auth_part = match (&user, &auth) {
-                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                        (None, Some(p)) => format!(":{}@", p),
-                        _ => String::new(),
-                    };
-                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
-                    let client = match redis::Client::open(url.as_str()) {
+                    let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
                         Err(_) => return,
                     };

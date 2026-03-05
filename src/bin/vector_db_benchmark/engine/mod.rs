@@ -134,6 +134,31 @@ pub trait Engine {
     }
 }
 
+/// Build a Redis connection URL.
+///
+/// Priority: `REDIS_URI` env var > `REDIS_USER`/`REDIS_AUTH` env vars + host/port.
+pub fn build_redis_url(host: &str) -> String {
+    if let Ok(uri) = std::env::var("REDIS_URI") {
+        return uri;
+    }
+
+    let port: u16 = std::env::var("REDIS_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6379);
+
+    let auth = std::env::var("REDIS_AUTH").ok();
+    let user = std::env::var("REDIS_USER").ok();
+
+    let auth_part = match (&user, &auth) {
+        (Some(u), Some(p)) => format!("{}:{}@", u, p),
+        (None, Some(p)) => format!(":{}@", p),
+        _ => String::new(),
+    };
+
+    format!("redis://{}{}:{}/", auth_part, host, port)
+}
+
 /// Create an engine based on config
 pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn Engine>, String> {
     let engine_type = engine_config.engine.as_deref().unwrap_or("unknown");
