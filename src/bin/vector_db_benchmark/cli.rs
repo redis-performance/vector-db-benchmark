@@ -73,4 +73,8 @@ pub struct Args {
     /// Show detailed information when using --describe
     #[arg(long, short)]
     pub verbose: bool,
+
+    /// Mixed benchmark: update-to-search ratio (e.g., "1:10" = 1 update per 10 searches)
+    #[arg(long)]
+    pub update_search_ratio: Option<String>,
 }

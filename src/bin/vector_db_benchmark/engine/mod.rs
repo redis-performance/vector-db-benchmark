@@ -45,6 +45,13 @@ pub struct UploadStats {
     pub memory_usage: Option<serde_json::Value>,
 }
 
+/// Update-to-search ratio for mixed workload benchmarks.
+#[derive(Debug, Clone)]
+pub struct UpdateSearchRatio {
+    pub updates: u64,
+    pub searches: u64,
+}
+
 /// Search results — matches Python v0 search result JSON fields
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
@@ -64,6 +71,15 @@ pub struct SearchResults {
     pub top: usize,
     pub num_queries: usize,
     pub parallel: usize,
+    // Mixed benchmark update metrics (None when search-only)
+    pub update_count: Option<usize>,
+    pub update_rps: Option<f64>,
+    pub update_mean_time: Option<f64>,
+    pub update_p50_time: Option<f64>,
+    pub update_p95_time: Option<f64>,
+    pub update_p99_time: Option<f64>,
+    pub update_latencies: Option<Vec<f64>>,
+    pub update_search_ratio: Option<String>,
 }
 
 /// Engine trait - equivalent to Python BaseClient
@@ -100,6 +116,21 @@ pub trait Engine {
     /// Collect memory usage stats after upload (matches Python v0 get_memory_usage)
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         None
+    }
+
+    /// Run mixed benchmark (interleaved search + update).
+    /// Default: not supported. Override in engines that support it.
+    fn search_mixed(
+        &mut self,
+        _dataset: &Dataset,
+        _search_params: &SearchParams,
+        _num_queries: i64,
+        _ratio: &UpdateSearchRatio,
+    ) -> Result<SearchResults, String> {
+        Err(format!(
+            "mixed benchmark not supported for engine '{}'",
+            self.name()
+        ))
     }
 }
 

@@ -7,6 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
+
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 
 use super::redis_utils;
@@ -14,8 +17,8 @@ use redis::Connection;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::{Engine, SearchResults, UploadStats};
-use vector_db_benchmark::readers::metadata::MetadataItem;
+use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
+use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
 
 /// Redis engine configuration
 #[derive(Clone)]
@@ -422,8 +425,6 @@ fn upload_batch_internal(
     vectors: &[Vec<f32>],
     metadata: &[Option<MetadataItem>],
 ) -> Result<(), String> {
-    use vector_db_benchmark::readers::metadata::MetadataValue;
-
     let mut pipe = redis::pipe();
 
     for i in 0..ids.len() {
@@ -882,6 +883,58 @@ fn extract_vector_score(fields: &[redis::Value]) -> f64 {
     0.0
 }
 
+/// Single-record HSET update (for mixed benchmark).
+fn hset_single(
+    conn: &mut Connection,
+    config: &RedisEngineConfig,
+    id: i64,
+    vector: &[f32],
+    metadata: Option<&MetadataItem>,
+) -> Result<(), String> {
+    let key = id.to_string();
+    let vec_bytes: Vec<u8> = match config.data_type.as_str() {
+        "FLOAT64" => vector
+            .iter()
+            .map(|&f| f as f64)
+            .flat_map(|f| f.to_le_bytes())
+            .collect(),
+        "FLOAT16" => vector
+            .iter()
+            .map(|&f| half::f16::from_f32(f).to_bits())
+            .flat_map(|v| v.to_le_bytes())
+            .collect(),
+        "BFLOAT16" => vector
+            .iter()
+            .map(|&f| half::bf16::from_f32(f).to_bits())
+            .flat_map(|v| v.to_le_bytes())
+            .collect(),
+        _ => vector.iter().flat_map(|f| f.to_le_bytes()).collect(),
+    };
+
+    let mut cmd = redis::cmd("HSET");
+    cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
+
+    if let Some(meta) = metadata {
+        for (k, v) in &meta.fields {
+            match v {
+                MetadataValue::String(s) => {
+                    cmd.arg(k.as_str()).arg(s.as_str());
+                }
+                MetadataValue::Labels(labels) => {
+                    cmd.arg(k.as_str()).arg(labels.join(";"));
+                }
+                MetadataValue::Geo { lon, lat } => {
+                    let lat_clamped = lat.clamp(-85.05112878, 85.05112878);
+                    cmd.arg(k.as_str()).arg(format!("{},{}", lon, lat_clamped));
+                }
+            }
+        }
+    }
+
+    cmd.query::<()>(conn)
+        .map_err(|e| format!("HSET update error: {}", e))
+}
+
 // ── Engine trait implementation ──────────────────────────────────────────
 
 impl Engine for RedisEngine {
@@ -1148,6 +1201,268 @@ impl Engine for RedisEngine {
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
+            ..Default::default()
+        })
+    }
+
+    fn search_mixed(
+        &mut self,
+        dataset: &Dataset,
+        params: &SearchParams,
+        num_queries: i64,
+        ratio: &UpdateSearchRatio,
+    ) -> Result<SearchResults, String> {
+        let ef = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.ef)
+            .unwrap_or(64);
+        let parallel = params.parallel.unwrap_or(1) as usize;
+        let hybrid_policy = std::env::var("REDIS_HYBRID_POLICY").unwrap_or_default();
+        let query_timeout: i64 = std::env::var("REDIS_QUERY_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(90_000);
+
+        // Read queries and ground truth
+        let query_path = dataset.get_path()?;
+        println!("\tReading queries from {}...", query_path.display());
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+
+        let parsed_filters: Vec<Option<ParsedFilter>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_conditions))
+            .collect();
+
+        // Read vectors for updates
+        let normalize = dataset.needs_normalization();
+        println!("\tReading vectors for updates...");
+        let (upd_ids, upd_vectors, upd_metadata) = dataset.read_vectors(normalize)?;
+
+        // Create deterministic shuffled update sequence
+        let mut update_seq: Vec<usize> = (0..upd_ids.len()).collect();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        update_seq.shuffle(&mut rng);
+
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(queries.len())
+        } else {
+            queries.len()
+        };
+
+        let search_times: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let update_times: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let search_idx = Arc::new(AtomicUsize::new(0));
+        let update_idx = Arc::new(AtomicUsize::new(0));
+
+        let ratio_searches = ratio.searches as usize;
+        let ratio_updates = ratio.updates as usize;
+        let update_seq_len = update_seq.len();
+
+        let start_time = Instant::now();
+
+        std::thread::scope(|s| {
+            for _ in 0..parallel {
+                let host = self.host.clone();
+                let port = self.port;
+                let config = self.config.clone();
+                let algorithm = self.config.algorithm.clone();
+                let hybrid_policy = hybrid_policy.clone();
+                let queries = &queries;
+                let neighbors = &neighbors;
+                let parsed_filters = &parsed_filters;
+                let upd_ids = &upd_ids;
+                let upd_vectors = &upd_vectors;
+                let upd_metadata = &upd_metadata;
+                let update_seq = &update_seq;
+                let search_times = Arc::clone(&search_times);
+                let update_times = Arc::clone(&update_times);
+                let precisions = Arc::clone(&precisions);
+                let search_idx = Arc::clone(&search_idx);
+                let update_idx = Arc::clone(&update_idx);
+
+                s.spawn(move || {
+                    let auth = std::env::var("REDIS_AUTH").ok();
+                    let user = std::env::var("REDIS_USER").ok();
+                    let auth_part = match (&user, &auth) {
+                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
+                        (None, Some(p)) => format!(":{}@", p),
+                        _ => String::new(),
+                    };
+                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
+                    let client = match redis::Client::open(url.as_str()) {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let mut conn = match client.get_connection() {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+
+                    'outer: loop {
+                        // Search phase: do S searches
+                        for _ in 0..ratio_searches {
+                            let idx = search_idx.fetch_add(1, Ordering::SeqCst);
+                            if idx >= num_to_run {
+                                break 'outer;
+                            }
+
+                            let top = explicit_top.unwrap_or_else(|| {
+                                let n = neighbors[idx].len();
+                                if n > 0 { n } else { 10 }
+                            });
+
+                            let query_start = Instant::now();
+                            let results = ft_search_knn(
+                                &mut conn,
+                                &queries[idx],
+                                top,
+                                ef,
+                                &algorithm,
+                                &hybrid_policy,
+                                query_timeout,
+                                parsed_filters[idx].as_ref(),
+                            );
+                            let query_time = query_start.elapsed().as_secs_f64();
+
+                            search_times.lock().unwrap().push(query_time);
+
+                            if let Ok(result_ids) = results {
+                                let ground_truth: std::collections::HashSet<i64> =
+                                    neighbors[idx].iter().take(top).copied().collect();
+                                let found: std::collections::HashSet<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let hits = ground_truth.intersection(&found).count();
+                                let precision = hits as f64 / top as f64;
+                                precisions.lock().unwrap().push(precision);
+                            } else {
+                                precisions.lock().unwrap().push(0.0);
+                            }
+                        }
+
+                        // Update phase: do U updates
+                        for _ in 0..ratio_updates {
+                            let uidx = update_idx.fetch_add(1, Ordering::SeqCst);
+                            let data_idx = update_seq[uidx % update_seq_len];
+
+                            let update_start = Instant::now();
+                            let _ = hset_single(
+                                &mut conn,
+                                &config,
+                                upd_ids[data_idx],
+                                &upd_vectors[data_idx],
+                                upd_metadata[data_idx].as_ref(),
+                            );
+                            let update_time = update_start.elapsed().as_secs_f64();
+                            update_times.lock().unwrap().push(update_time);
+                        }
+                    }
+                });
+            }
+        });
+
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        let times = search_times.lock().unwrap();
+        let precs = precisions.lock().unwrap();
+        let u_times = update_times.lock().unwrap();
+
+        if times.is_empty() {
+            return Err("No searches completed".to_string());
+        }
+
+        let rps = times.len() as f64 / total_time;
+        let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
+        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
+            / times.len() as f64)
+            .sqrt();
+        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        let mut sorted_times: Vec<f64> = times.clone();
+        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
+        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
+        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
+
+        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
+        let p95_time = sorted_times
+            .get(p95_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+        let p99_time = sorted_times
+            .get(p99_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+
+        // Update latency stats
+        let (update_count, update_rps, update_mean_time, update_p50, update_p95, update_p99) =
+            if !u_times.is_empty() {
+                let u_rps = u_times.len() as f64 / total_time;
+                let u_mean = u_times.iter().sum::<f64>() / u_times.len() as f64;
+                let mut u_sorted: Vec<f64> = u_times.clone();
+                u_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let u_p50 = u_sorted
+                    .get((u_sorted.len() as f64 * 0.50) as usize)
+                    .copied()
+                    .unwrap_or(0.0);
+                let u_p95 = u_sorted
+                    .get(
+                        ((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1),
+                    )
+                    .copied()
+                    .unwrap_or(0.0);
+                let u_p99 = u_sorted
+                    .get(
+                        ((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1),
+                    )
+                    .copied()
+                    .unwrap_or(0.0);
+                (
+                    Some(u_times.len()),
+                    Some(u_rps),
+                    Some(u_mean),
+                    Some(u_p50),
+                    Some(u_p95),
+                    Some(u_p99),
+                )
+            } else {
+                (None, None, None, None, None, None)
+            };
+
+        // Verify no failures occurred
+        let mut check_conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH", "hset"], "mixed")?;
+
+        Ok(SearchResults {
+            total_time,
+            mean_time,
+            mean_precision,
+            std_time,
+            min_time,
+            max_time,
+            rps,
+            p50_time,
+            p95_time,
+            p99_time,
+            precisions: precs.to_vec(),
+            latencies: times.to_vec(),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            num_queries: times.len(),
+            parallel,
+            update_count,
+            update_rps,
+            update_mean_time,
+            update_p50_time: update_p50,
+            update_p95_time: update_p95,
+            update_p99_time: update_p99,
+            update_latencies: Some(u_times.to_vec()),
+            update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
         })
     }
 

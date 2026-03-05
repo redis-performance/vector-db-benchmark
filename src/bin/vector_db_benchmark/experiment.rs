@@ -14,7 +14,7 @@ use crate::config::{
     SearchParams,
 };
 use crate::dataset::Dataset;
-use crate::engine::{create_engine, Engine};
+use crate::engine::{create_engine, Engine, UpdateSearchRatio};
 use crate::summary::{self, SearchEntry};
 
 /// Results directory
@@ -99,6 +99,30 @@ pub fn run(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse "U:S" ratio string into UpdateSearchRatio.
+fn parse_update_search_ratio(s: &str) -> Result<UpdateSearchRatio, String> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "Invalid update-search-ratio format: '{}'. Expected 'U:S' (e.g., '1:10')",
+            s
+        ));
+    }
+    let updates: u64 = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid update count: '{}'", parts[0]))?;
+    let searches: u64 = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid search count: '{}'", parts[1]))?;
+    if searches == 0 {
+        return Err("Search count must be > 0".to_string());
+    }
+    if updates == 0 {
+        return Err("Update count must be > 0".to_string());
+    }
+    Ok(UpdateSearchRatio { updates, searches })
+}
+
 /// Run a single experiment (configure, upload, search)
 fn run_single_experiment(
     engine: &mut dyn Engine,
@@ -134,11 +158,25 @@ fn run_single_experiment(
         save_upload_results(engine.name(), &dataset.config.name, &upload_stats)?;
     }
 
+    // Parse update-search-ratio if specified
+    let update_search_ratio = args
+        .update_search_ratio
+        .as_ref()
+        .map(|s| parse_update_search_ratio(s))
+        .transpose()?;
+
     // Search phase
     let mut search_entries: Vec<SearchEntry> = Vec::new();
 
     if !args.skip_search {
-        println!("Experiment stage: Search");
+        if let Some(ref ratio) = update_search_ratio {
+            println!(
+                "Experiment stage: Mixed Search+Update (ratio {}:{})",
+                ratio.updates, ratio.searches
+            );
+        } else {
+            println!("Experiment stage: Search");
+        }
 
         // Clone search params to avoid borrow conflict
         let all_search_params: Vec<_> = engine.search_params().to_vec();
@@ -225,7 +263,13 @@ fn run_single_experiment(
                 search_id, effective_ef, parallel
             );
 
-            match engine.search(dataset, effective_params, args.queries) {
+            let search_result = if let Some(ref ratio) = update_search_ratio {
+                engine.search_mixed(dataset, effective_params, args.queries, ratio)
+            } else {
+                engine.search(dataset, effective_params, args.queries)
+            };
+
+            match search_result {
                 Ok(results) => {
                     println!(
                         "\t→ QPS: {:.1}, Precision: {:.4}",
@@ -366,7 +410,7 @@ fn save_search_results(
         engine_name, dataset_name, search_id, pid, timestamp
     );
 
-    let result = json!({
+    let mut result = json!({
         "params": {
             "dataset": dataset_name,
             "experiment": engine_name,
@@ -389,6 +433,33 @@ fn save_search_results(
             "latencies": results.latencies,
         }
     });
+
+    // Add update metrics when present (mixed benchmark mode)
+    if let Some(ref ratio) = results.update_search_ratio {
+        let results_obj = result["results"].as_object_mut().unwrap();
+        results_obj.insert("update_search_ratio".to_string(), json!(ratio));
+        if let Some(count) = results.update_count {
+            results_obj.insert("update_count".to_string(), json!(count));
+        }
+        if let Some(rps) = results.update_rps {
+            results_obj.insert("update_rps".to_string(), json!(rps));
+        }
+        if let Some(t) = results.update_mean_time {
+            results_obj.insert("update_mean_time".to_string(), json!(t));
+        }
+        if let Some(t) = results.update_p50_time {
+            results_obj.insert("update_p50_time".to_string(), json!(t));
+        }
+        if let Some(t) = results.update_p95_time {
+            results_obj.insert("update_p95_time".to_string(), json!(t));
+        }
+        if let Some(t) = results.update_p99_time {
+            results_obj.insert("update_p99_time".to_string(), json!(t));
+        }
+        if let Some(ref lats) = results.update_latencies {
+            results_obj.insert("update_latencies".to_string(), json!(lats));
+        }
+    }
 
     let path = results_dir().join(&filename);
     fs::write(&path, serde_json::to_string_pretty(&result).unwrap())

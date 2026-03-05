@@ -901,6 +901,7 @@ impl Engine for OpenSearchEngine {
                 .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
+            ..Default::default()
         })
     }
 

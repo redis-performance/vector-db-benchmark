@@ -601,6 +601,7 @@ impl Engine for TurbopufferEngine {
             top,
             num_queries: num_to_run,
             parallel,
+            ..Default::default()
         })
     }
 
