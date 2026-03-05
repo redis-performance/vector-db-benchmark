@@ -505,9 +505,10 @@ fn search_vectors(
         .insert("searchParams".to_string(), search_params);
 
     if let Some(f) = filter {
-        body.as_object_mut()
-            .unwrap()
-            .insert("filter".to_string(), serde_json::Value::String(f.to_string()));
+        body.as_object_mut().unwrap().insert(
+            "filter".to_string(),
+            serde_json::Value::String(f.to_string()),
+        );
     }
 
     let url = format!("{}/v2/vectordb/entities/search", base_url);
@@ -684,12 +685,7 @@ impl Engine for MilvusEngine {
             "l2" | "euclidean" => "L2".to_string(),
             "dot" | "ip" => "IP".to_string(),
             "cosine" | "angular" => "IP".to_string(), // Milvus uses IP for cosine (normalized vectors)
-            other => {
-                return Err(format!(
-                    "Unsupported distance metric for Milvus: {}",
-                    other
-                ))
-            }
+            other => return Err(format!("Unsupported distance metric for Milvus: {}", other)),
         };
 
         let client = self.create_client()?;
@@ -798,6 +794,7 @@ impl Engine for MilvusEngine {
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -812,6 +809,7 @@ impl Engine for MilvusEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match reqwest::blocking::Client::builder()
@@ -830,7 +828,11 @@ impl Engine for MilvusEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let query_start = Instant::now();
@@ -859,11 +861,13 @@ impl Engine for MilvusEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();

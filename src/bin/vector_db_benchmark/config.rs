@@ -191,7 +191,15 @@ fn format_schema(schema: &serde_json::Value, max_len: usize) -> String {
     // Try to add detail
     let detail = if field_count <= 2 {
         let names: Vec<&String> = obj.keys().collect();
-        format!("{}: {}", base, names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+        format!(
+            "{}: {}",
+            base,
+            names
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     } else {
         let mut types: Vec<String> = obj
             .values()
@@ -219,7 +227,11 @@ pub fn describe_datasets(verbose: bool) -> Result<(), String> {
         let dim_b = b.vector_size.unwrap_or(0);
         dim_a
             .cmp(&dim_b)
-            .then_with(|| a.vector_count.unwrap_or(0).cmp(&b.vector_count.unwrap_or(0)))
+            .then_with(|| {
+                a.vector_count
+                    .unwrap_or(0)
+                    .cmp(&b.vector_count.unwrap_or(0))
+            })
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 

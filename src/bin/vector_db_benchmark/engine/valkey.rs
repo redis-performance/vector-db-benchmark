@@ -142,9 +142,7 @@ impl ValkeyEngine {
         let vector_size = dataset.vector_size();
 
         // Drop existing index if any (Valkey Search does not support DD flag)
-        let _ = redis::cmd("FT.DROPINDEX")
-            .arg("idx")
-            .query::<()>(conn);
+        let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(conn);
         // Flush all keys to clean up data from previous runs
         let _ = redis::cmd("FLUSHALL").query::<()>(conn);
 
@@ -188,10 +186,7 @@ impl ValkeyEngine {
                     let ft = field_type.as_str().unwrap_or("");
                     match ft {
                         "keyword" => {
-                            cmd.arg(field_name)
-                                .arg("TAG")
-                                .arg("SEPARATOR")
-                                .arg(";");
+                            cmd.arg(field_name).arg("TAG").arg("SEPARATOR").arg(";");
                         }
                         "int" | "float" => {
                             cmd.arg(field_name).arg("NUMERIC");
@@ -818,10 +813,7 @@ fn ft_search_knn(
         .map(|(expr, _)| expr.as_str())
         .unwrap_or("*");
 
-    let query_str = format!(
-        "{}=>[KNN $K @vector $vec_param AS vector_score]",
-        prefilter
-    );
+    let query_str = format!("{}=>[KNN $K @vector $vec_param AS vector_score]", prefilter);
 
     // Valkey Search: DIALECT 2 only, no SORTBY on computed fields
     let mut cmd = redis::cmd("FT.SEARCH");
@@ -1085,6 +1077,7 @@ impl Engine for ValkeyEngine {
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -1099,6 +1092,7 @@ impl Engine for ValkeyEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let auth = std::env::var("VALKEY_AUTH").ok();
@@ -1162,11 +1156,13 @@ impl Engine for ValkeyEngine {
                                 precisions.lock().unwrap().push(0.0);
                             }
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -1283,6 +1279,7 @@ impl Engine for ValkeyEngine {
         let ratio_updates = ratio.updates as usize;
         let update_seq_len = update_seq.len();
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -1304,6 +1301,7 @@ impl Engine for ValkeyEngine {
                 let precisions = Arc::clone(&precisions);
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let mut conn = match ValkeyEngine::connect(&host, port) {
@@ -1321,7 +1319,11 @@ impl Engine for ValkeyEngine {
 
                             let top = explicit_top.unwrap_or_else(|| {
                                 let n = neighbors[idx].len();
-                                if n > 0 { n } else { 10 }
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
                             });
 
                             let query_start = Instant::now();
@@ -1353,6 +1355,7 @@ impl Engine for ValkeyEngine {
                                     precisions.lock().unwrap().push(0.0);
                                 }
                             }
+                            pb.inc(1);
                         }
 
                         // Update phase: do U updates
@@ -1376,6 +1379,7 @@ impl Engine for ValkeyEngine {
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -1424,15 +1428,11 @@ impl Engine for ValkeyEngine {
                     .copied()
                     .unwrap_or(0.0);
                 let u_p95 = u_sorted
-                    .get(
-                        ((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1),
-                    )
+                    .get(((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1))
                     .copied()
                     .unwrap_or(0.0);
                 let u_p99 = u_sorted
-                    .get(
-                        ((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1),
-                    )
+                    .get(((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1))
                     .copied()
                     .unwrap_or(0.0);
                 (
@@ -1481,9 +1481,7 @@ impl Engine for ValkeyEngine {
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
         // Valkey Search does not support DD flag on FT.DROPINDEX
-        let _ = redis::cmd("FT.DROPINDEX")
-            .arg("idx")
-            .query::<()>(&mut conn);
+        let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(&mut conn);
         // Flush all keys to clean up uploaded data
         let _ = redis::cmd("FLUSHALL").query::<()>(&mut conn);
         Ok(())
@@ -1492,10 +1490,7 @@ impl Engine for ValkeyEngine {
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
-        let info_str: String = redis::cmd("INFO")
-            .arg("memory")
-            .query(&mut conn)
-            .ok()?;
+        let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = info_str
             .lines()
             .find(|l| l.starts_with("used_memory:"))

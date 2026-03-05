@@ -46,10 +46,7 @@ fn wait_for_milvus() {
             }
         }
         if Instant::now() > deadline {
-            panic!(
-                "Milvus not available on port {} after 120s",
-                MILVUS_PORT
-            );
+            panic!("Milvus not available on port {} after 120s", MILVUS_PORT);
         }
         thread::sleep(Duration::from_millis(1000));
     }
@@ -130,7 +127,10 @@ fn create_collection(dim: usize, metric_type: &str) {
     // Wait for load state
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let url = format!("{}/v2/vectordb/collections/get_load_state", milvus_base_url());
+        let url = format!(
+            "{}/v2/vectordb/collections/get_load_state",
+            milvus_base_url()
+        );
         if let Ok(resp) = client
             .post(&url)
             .json(&serde_json::json!({"collectionName": TEST_COLLECTION}))
@@ -138,10 +138,7 @@ fn create_collection(dim: usize, metric_type: &str) {
         {
             let body: serde_json::Value = resp.json().unwrap_or_default();
             if let Some(data) = body.get("data") {
-                let state = data
-                    .get("loadState")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
+                let state = data.get("loadState").and_then(|s| s.as_str()).unwrap_or("");
                 if state == "LoadStateLoaded" {
                     break;
                 }

@@ -234,12 +234,13 @@ fn run_single_experiment(
                         );
                         // Create a new SearchParams with calibrated value
                         let mut calibrated = search_params.clone();
-                        let inner = calibrated
-                            .search_params
-                            .get_or_insert_with(|| InnerSearchParams {
-                                ef: None,
-                                extra: None,
-                            });
+                        let inner =
+                            calibrated
+                                .search_params
+                                .get_or_insert_with(|| InnerSearchParams {
+                                    ef: None,
+                                    extra: None,
+                                });
                         if cal_param == "ef" {
                             inner.ef = Some(value);
                         } else {

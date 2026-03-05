@@ -51,8 +51,7 @@ impl OpenSearchEngine {
             .and_then(|v| v.parse().ok())
             .unwrap_or(9200);
 
-        let index_name =
-            std::env::var("OPENSEARCH_INDEX").unwrap_or_else(|_| "bench".to_string());
+        let index_name = std::env::var("OPENSEARCH_INDEX").unwrap_or_else(|_| "bench".to_string());
         let timeout: u64 = std::env::var("OPENSEARCH_TIMEOUT")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -569,12 +568,7 @@ fn upload_bulk_batch(
     }
 
     let resp = rt
-        .block_on(
-            client
-                .bulk(BulkParts::Index(index_name))
-                .body(body)
-                .send(),
-        )
+        .block_on(client.bulk(BulkParts::Index(index_name)).body(body).send())
         .map_err(|e| format!("Bulk upload failed: {}", e))?;
 
     if !resp.status_code().is_success() {
@@ -779,10 +773,10 @@ impl Engine for OpenSearchEngine {
 
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
         let base_url = self.base_url.clone();
         let timeout = self.timeout;
@@ -798,6 +792,7 @@ impl Engine for OpenSearchEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let rt = match tokio::runtime::Runtime::new() {
@@ -817,7 +812,11 @@ impl Engine for OpenSearchEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let query_start = Instant::now();
@@ -844,11 +843,13 @@ impl Engine for OpenSearchEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -897,8 +898,7 @@ impl Engine for OpenSearchEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top
-                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
             ..Default::default()

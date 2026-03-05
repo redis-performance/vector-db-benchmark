@@ -12,8 +12,8 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, DeleteCollectionBuilder, Distance, FieldType, Filter,
-    HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct,
-    SearchPointsBuilder, VectorParamsBuilder, VectorsConfig,
+    HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct, SearchPointsBuilder,
+    VectorParamsBuilder, VectorsConfig,
 };
 use qdrant_client::{Payload, Qdrant};
 
@@ -98,15 +98,16 @@ impl QdrantEngine {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
 
-        let client = rt.block_on(async {
-            let mut builder = Qdrant::from_url(&grpc_url)
-                .timeout(std::time::Duration::from_secs(timeout));
-            if let Some(key) = &api_key {
-                builder = builder.api_key(key.clone());
-            }
-            builder.build()
-        })
-        .map_err(|e| format!("Failed to create Qdrant client: {}", e))?;
+        let client = rt
+            .block_on(async {
+                let mut builder =
+                    Qdrant::from_url(&grpc_url).timeout(std::time::Duration::from_secs(timeout));
+                if let Some(key) = &api_key {
+                    builder = builder.api_key(key.clone());
+                }
+                builder.build()
+            })
+            .map_err(|e| format!("Failed to create Qdrant client: {}", e))?;
 
         Ok(Self {
             name: engine_config.name.clone(),
@@ -153,9 +154,7 @@ impl QdrantEngine {
             "l2" | "euclidean" => Distance::Euclid,
             "cosine" | "angular" => Distance::Cosine,
             "dot" | "ip" => Distance::Dot,
-            other => {
-                return Err(format!("Unsupported distance metric for Qdrant: {}", other))
-            }
+            other => return Err(format!("Unsupported distance metric for Qdrant: {}", other)),
         };
 
         // Extract HNSW params from extra config
@@ -194,17 +193,19 @@ impl QdrantEngine {
             .map_err(|e| format!("Failed to create collection: {}", e))?;
 
         // Disable optimization during indexing
-        let _ = self.rt.block_on(self.client.update_collection(
-            qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
-                .optimizers_config(OptimizersConfigDiff {
-                    max_optimization_threads: Some(MaxOptimizationThreads {
-                        variant: Some(
-                            qdrant_client::qdrant::max_optimization_threads::Variant::Value(0),
-                        ),
+        let _ = self.rt.block_on(
+            self.client.update_collection(
+                qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
+                    .optimizers_config(OptimizersConfigDiff {
+                        max_optimization_threads: Some(MaxOptimizationThreads {
+                            variant: Some(
+                                qdrant_client::qdrant::max_optimization_threads::Variant::Value(0),
+                            ),
+                        }),
+                        ..Default::default()
                     }),
-                    ..Default::default()
-                }),
-        ));
+            ),
+        );
 
         // Create payload indexes for schema fields
         if let Some(schema) = &dataset.config.schema {
@@ -359,20 +360,22 @@ impl QdrantEngine {
         println!("Waiting for collection to be GREEN...");
 
         // Re-enable optimization (auto mode)
-        let _ = self.rt.block_on(self.client.update_collection(
-            qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
-                .optimizers_config(OptimizersConfigDiff {
-                    max_optimization_threads: Some(MaxOptimizationThreads {
-                        variant: Some(
-                            qdrant_client::qdrant::max_optimization_threads::Variant::Setting(
-                                qdrant_client::qdrant::max_optimization_threads::Setting::Auto
-                                    as i32,
+        let _ = self.rt.block_on(
+            self.client.update_collection(
+                qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
+                    .optimizers_config(OptimizersConfigDiff {
+                        max_optimization_threads: Some(MaxOptimizationThreads {
+                            variant: Some(
+                                qdrant_client::qdrant::max_optimization_threads::Variant::Setting(
+                                    qdrant_client::qdrant::max_optimization_threads::Setting::Auto
+                                        as i32,
+                                ),
                             ),
-                        ),
+                        }),
+                        ..Default::default()
                     }),
-                    ..Default::default()
-                }),
-        ));
+            ),
+        );
 
         for _ in 0..600 {
             std::thread::sleep(std::time::Duration::from_secs(5));
@@ -579,17 +582,14 @@ impl Engine for QdrantEngine {
         let parallel = params.parallel.unwrap_or(1) as usize;
 
         // Build Qdrant search params
-        let hnsw_ef: Option<u64> = params
-            .search_params
-            .as_ref()
-            .and_then(|sp| {
-                sp.ef.map(|e| e as u64).or_else(|| {
-                    sp.extra
-                        .as_ref()
-                        .and_then(|e| e.get("hnsw_ef"))
-                        .and_then(|v| v.as_u64())
-                })
-            });
+        let hnsw_ef: Option<u64> = params.search_params.as_ref().and_then(|sp| {
+            sp.ef.map(|e| e as u64).or_else(|| {
+                sp.extra
+                    .as_ref()
+                    .and_then(|e| e.get("hnsw_ef"))
+                    .and_then(|v| v.as_u64())
+            })
+        });
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
@@ -609,10 +609,10 @@ impl Engine for QdrantEngine {
 
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
         let client = Arc::clone(&self.client);
         let collection_name = self.collection_name.clone();
@@ -627,6 +627,7 @@ impl Engine for QdrantEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let rt = match tokio::runtime::Runtime::new() {
@@ -642,7 +643,11 @@ impl Engine for QdrantEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let mut search_builder = SearchPointsBuilder::new(
@@ -677,7 +682,11 @@ impl Engine for QdrantEngine {
                                 .result
                                 .iter()
                                 .filter_map(|p| {
-                                    if let Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) = &p.id.as_ref().and_then(|id| id.point_id_options.as_ref()) {
+                                    if let Some(
+                                        qdrant_client::qdrant::point_id::PointIdOptions::Num(n),
+                                    ) =
+                                        &p.id.as_ref().and_then(|id| id.point_id_options.as_ref())
+                                    {
                                         Some(*n as i64)
                                     } else {
                                         None
@@ -690,11 +699,13 @@ impl Engine for QdrantEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -743,8 +754,7 @@ impl Engine for QdrantEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top
-                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
             ..Default::default()

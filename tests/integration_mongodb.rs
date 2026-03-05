@@ -29,10 +29,7 @@ fn mongodb_uri() -> String {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(MONGODB_PORT);
-    format!(
-        "mongodb://{}:{}/?directConnection=true",
-        MONGODB_HOST, port
-    )
+    format!("mongodb://{}:{}/?directConnection=true", MONGODB_HOST, port)
 }
 
 fn mongodb_client() -> Client {
@@ -49,10 +46,7 @@ fn wait_for_mongodb() {
             }
         }
         if Instant::now() > deadline {
-            panic!(
-                "MongoDB not available on port {} after 120s",
-                MONGODB_PORT
-            );
+            panic!("MongoDB not available on port {} after 120s", MONGODB_PORT);
         }
         thread::sleep(Duration::from_millis(1000));
     }
@@ -157,7 +151,9 @@ fn create_vector_index(client: &Client, dim: usize, similarity: &str) {
     let coll = db.collection::<Document>(TEST_COLLECTION);
     let dummy: Vec<mongodb::bson::Bson> =
         (0..dim).map(|_| mongodb::bson::Bson::Double(0.0)).collect();
-    let _ = coll.insert_one(doc! { "_id": -1i64, "vector": dummy }).run();
+    let _ = coll
+        .insert_one(doc! { "_id": -1i64, "vector": dummy })
+        .run();
 
     // Create search index
     let index_def = doc! {
@@ -238,7 +234,10 @@ fn test_mongodb_collection_crud() {
         .expect("Failed to insert");
 
     // Count documents
-    let count = coll.count_documents(doc! {}).run().expect("Failed to count");
+    let count = coll
+        .count_documents(doc! {})
+        .run()
+        .expect("Failed to count");
     assert_eq!(count, 1);
 
     // Drop
@@ -497,7 +496,10 @@ fn test_mongodb_multi_dataset_runs() {
         let results: Vec<Document> = cursor.filter_map(|r| r.ok()).collect();
         assert_eq!(results.len(), 5, "Run 1: expected 5 results");
         let first_id = results[0].get_i64("_id").unwrap();
-        assert_eq!(first_id, ids[0], "Run 1: first result should be query vector");
+        assert_eq!(
+            first_id, ids[0],
+            "Run 1: first result should be query vector"
+        );
     }
 
     // ── Cleanup between runs (mirrors engine configure()) ─────────
@@ -545,7 +547,10 @@ fn test_mongodb_multi_dataset_runs() {
 
         // Verify doc count is from run 2 only (no leftover from run 1)
         let count = coll.count_documents(doc! {}).run().expect("count failed");
-        assert_eq!(count, 50, "Run 2: should have exactly 50 docs, not leftovers from run 1");
+        assert_eq!(
+            count, 50,
+            "Run 2: should have exactly 50 docs, not leftovers from run 1"
+        );
     }
 
     drop_test_collection();
@@ -774,7 +779,11 @@ fn test_binary_mongodb_multi_dataset() {
     if !stderr.is_empty() {
         println!("stderr:\n{}", stderr);
     }
-    assert!(success, "Run 1 failed.\nstdout: {}\nstderr: {}", stdout, stderr);
+    assert!(
+        success,
+        "Run 1 failed.\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
 
     let precision1 = read_search_precision(&project1.join("results"), engine_name);
     println!("Run 1 precision: {:.4}", precision1);
@@ -811,7 +820,11 @@ fn test_binary_mongodb_multi_dataset() {
     if !stderr.is_empty() {
         println!("stderr:\n{}", stderr);
     }
-    assert!(success, "Run 2 failed.\nstdout: {}\nstderr: {}", stdout, stderr);
+    assert!(
+        success,
+        "Run 2 failed.\nstdout: {}\nstderr: {}",
+        stdout, stderr
+    );
 
     // Verify the collection has exactly count2 documents (no leftovers from run 1)
     let client = mongodb_client();

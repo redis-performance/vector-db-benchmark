@@ -75,6 +75,20 @@ impl TurbopufferEngine {
         })
     }
 
+    fn create_progress_bar(&self, total: usize) -> ProgressBar {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec_int}/s)")
+                .unwrap()
+                .with_key("per_sec_int", |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                    write!(w, "{}", HumanCount(state.per_sec() as u64)).unwrap()
+                })
+                .progress_chars("#>-"),
+        );
+        pb
+    }
+
     /// Upload a batch of vectors with metadata
     fn upload_batch(
         client: &Client,
@@ -386,18 +400,13 @@ impl Engine for TurbopufferEngine {
                     s.spawn(move |_| {
                         let rt = tokio::runtime::Runtime::new().unwrap();
                         if let Err(e) = Self::upload_batch(
-                            &client,
-                            &namespace,
-                            batch_ids,
-                            batch_vecs,
-                            batch_meta,
-                            &rt,
+                            &client, &namespace, batch_ids, batch_vecs, batch_meta, &rt,
                         ) {
                             errors.lock().unwrap().push(e);
                             return;
                         }
-                        let done = counter.fetch_add(batch_ids.len(), Ordering::Relaxed)
-                            + batch_ids.len();
+                        let done =
+                            counter.fetch_add(batch_ids.len(), Ordering::Relaxed) + batch_ids.len();
                         pb.set_position(done as u64);
                     });
                 }
@@ -455,12 +464,7 @@ impl Engine for TurbopufferEngine {
             queries.len()
         };
 
-        let top = explicit_top.unwrap_or_else(|| {
-            neighbors
-                .first()
-                .map(|n| n.len())
-                .unwrap_or(10)
-        });
+        let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
 
         println!(
             "\tRunning {} queries (top={}, parallel={})...",
@@ -472,6 +476,7 @@ impl Engine for TurbopufferEngine {
         let latencies = Arc::new(Mutex::new(vec![0.0f64; num_to_run]));
         let precisions = Arc::new(Mutex::new(vec![0.0f64; num_to_run]));
 
+        let pb = self.create_progress_bar(num_to_run);
         let total_start = Instant::now();
 
         if parallel <= 1 {
@@ -502,6 +507,7 @@ impl Engine for TurbopufferEngine {
 
                 latencies.lock().unwrap()[i] = elapsed;
                 precisions.lock().unwrap()[i] = precision;
+                pb.inc(1);
             }
         } else {
             let client = Arc::clone(&self.client);
@@ -523,6 +529,7 @@ impl Engine for TurbopufferEngine {
                     let neighbor = neighbors[i].clone();
                     let latencies = Arc::clone(&latencies);
                     let precisions = Arc::clone(&precisions);
+                    let pb = &pb;
 
                     s.spawn(move |_| {
                         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -553,11 +560,13 @@ impl Engine for TurbopufferEngine {
                             latencies.lock().unwrap()[i] = elapsed;
                             precisions.lock().unwrap()[i] = precision;
                         }
+                        pb.inc(1);
                     });
                 }
             });
         }
 
+        pb.finish_and_clear();
         let total_time = total_start.elapsed().as_secs_f64();
 
         let latencies = latencies.lock().unwrap().clone();
@@ -566,15 +575,15 @@ impl Engine for TurbopufferEngine {
         let mean_time = latencies.iter().sum::<f64>() / num_to_run as f64;
         let mean_precision = precisions.iter().sum::<f64>() / num_to_run as f64;
 
-        let variance =
-            latencies.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>() / num_to_run as f64;
+        let variance = latencies
+            .iter()
+            .map(|t| (t - mean_time).powi(2))
+            .sum::<f64>()
+            / num_to_run as f64;
         let std_time = variance.sqrt();
 
         let min_time = latencies.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_time = latencies
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
+        let max_time = latencies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
         let mut sorted_latencies = latencies.clone();
         sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());

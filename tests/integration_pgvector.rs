@@ -34,10 +34,7 @@ fn wait_for_postgres() {
             return;
         }
         if Instant::now() > deadline {
-            panic!(
-                "PostgreSQL not available on port {} after 60s",
-                PG_PORT
-            );
+            panic!("PostgreSQL not available on port {} after 60s", PG_PORT);
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -97,7 +94,11 @@ fn brute_force_neighbors_l2(query: &[f32], vectors: &[Vec<f32>], top: usize) -> 
 }
 
 fn brute_force_neighbors_cosine(query: &[f32], vectors: &[Vec<f32>], top: usize) -> Vec<i64> {
-    let q_norm: f64 = query.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    let q_norm: f64 = query
+        .iter()
+        .map(|x| (*x as f64).powi(2))
+        .sum::<f64>()
+        .sqrt();
     let mut dists: Vec<(i64, f64)> = vectors
         .iter()
         .enumerate()
@@ -179,9 +180,7 @@ fn test_pgvector_copy_upload() {
     }
 
     // Verify count
-    let row = conn
-        .query_one("SELECT COUNT(*) FROM items", &[])
-        .unwrap();
+    let row = conn.query_one("SELECT COUNT(*) FROM items", &[]).unwrap();
     let db_count: i64 = row.get(0);
     assert_eq!(db_count, count as i64, "All vectors should be uploaded");
 
@@ -287,7 +286,10 @@ fn test_pgvector_knn_cosine_search() {
         .unwrap();
 
     let result_ids: Vec<i64> = rows.iter().map(|r| r.get::<_, i32>(0) as i64).collect();
-    assert!(!result_ids.is_empty(), "Cosine search should return results");
+    assert!(
+        !result_ids.is_empty(),
+        "Cosine search should return results"
+    );
     assert_eq!(result_ids[0], 0, "Self should be top-1 for cosine");
 
     cleanup(&mut conn);
@@ -453,9 +455,7 @@ fn test_pgvector_full_cycle() {
     }
 
     // Verify count
-    let row = conn
-        .query_one("SELECT COUNT(*) FROM items", &[])
-        .unwrap();
+    let row = conn.query_one("SELECT COUNT(*) FROM items", &[]).unwrap();
     let db_count: i64 = row.get(0);
     assert_eq!(db_count, count as i64);
 

@@ -7,11 +7,11 @@ use redis::Connection;
 /// Reset server command statistics so subsequent checks start from zero.
 /// Non-fatal: warns if the command is not permitted (e.g. Redis Cloud ACLs).
 pub fn reset_commandstats(conn: &mut Connection) -> Result<(), String> {
-    if let Err(e) = redis::cmd("CONFIG")
-        .arg("RESETSTAT")
-        .query::<()>(conn)
-    {
-        eprintln!("Warning: CONFIG RESETSTAT not available ({}), skipping commandstats validation", e);
+    if let Err(e) = redis::cmd("CONFIG").arg("RESETSTAT").query::<()>(conn) {
+        eprintln!(
+            "Warning: CONFIG RESETSTAT not available ({}), skipping commandstats validation",
+            e
+        );
     }
     Ok(())
 }
@@ -25,10 +25,7 @@ pub fn check_commandstats(
     commands: &[&str],
     context: &str,
 ) -> Result<(), String> {
-    let info: String = match redis::cmd("INFO")
-        .arg("commandstats")
-        .query(conn)
-    {
+    let info: String = match redis::cmd("INFO").arg("commandstats").query(conn) {
         Ok(v) => v,
         Err(_) => return Ok(()), // not available, skip validation
     };
@@ -45,9 +42,7 @@ pub fn check_commandstats(
         let cmd_name = cmd_part.strip_prefix("cmdstat_").unwrap_or(cmd_part);
 
         // Case-insensitive match against the commands we care about
-        let matches = commands
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(cmd_name));
+        let matches = commands.iter().any(|c| c.eq_ignore_ascii_case(cmd_name));
         if !matches {
             continue;
         }

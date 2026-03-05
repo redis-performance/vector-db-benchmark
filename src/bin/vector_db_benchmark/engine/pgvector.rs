@@ -37,24 +37,16 @@ impl PgVectorEngine {
             .and_then(|v| v.parse().ok())
             .unwrap_or(5432);
 
-        let dbname =
-            std::env::var("PGVECTOR_DB").unwrap_or_else(|_| "postgres".to_string());
-        let user =
-            std::env::var("PGVECTOR_USER").unwrap_or_else(|_| "postgres".to_string());
-        let password =
-            std::env::var("PGVECTOR_PASSWORD").unwrap_or_else(|_| "passwd".to_string());
+        let dbname = std::env::var("PGVECTOR_DB").unwrap_or_else(|_| "postgres".to_string());
+        let user = std::env::var("PGVECTOR_USER").unwrap_or_else(|_| "postgres".to_string());
+        let password = std::env::var("PGVECTOR_PASSWORD").unwrap_or_else(|_| "passwd".to_string());
 
         // Extract HNSW config
         let (m, ef_construction) = engine_config
             .collection_params
             .as_ref()
             .and_then(|cp| cp.hnsw_config.as_ref())
-            .map(|h| {
-                (
-                    h.m.unwrap_or(16),
-                    h.ef_construction.unwrap_or(128),
-                )
-            })
+            .map(|h| (h.m.unwrap_or(16), h.ef_construction.unwrap_or(128)))
             .unwrap_or((16, 128));
 
         let parallel = engine_config
@@ -356,6 +348,7 @@ impl Engine for PgVectorEngine {
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
         let conn_str = self.connection_string();
         let distance_op = self.distance_op.clone();
@@ -370,6 +363,7 @@ impl Engine for PgVectorEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let mut conn = match postgres::Client::connect(&conn_str, postgres::NoTls) {
@@ -428,11 +422,13 @@ impl Engine for PgVectorEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -537,11 +533,7 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                 "match" => {
                     if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
-                            parts.push(format!(
-                                "{} = '{}'",
-                                field_name,
-                                s.replace('\'', "''")
-                            ));
+                            parts.push(format!("{} = '{}'", field_name, s.replace('\'', "''")));
                         } else {
                             parts.push(format!("{} = {}", field_name, value));
                         }

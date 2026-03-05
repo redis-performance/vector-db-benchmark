@@ -44,10 +44,7 @@ fn wait_for_opensearch() {
             }
         }
         if Instant::now() > deadline {
-            panic!(
-                "OpenSearch not available on port {} after 60s",
-                OS_PORT
-            );
+            panic!("OpenSearch not available on port {} after 60s", OS_PORT);
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -287,7 +284,10 @@ fn test_opensearch_knn_search() {
     // First result should be id=0 (exact match)
     let first_id = hits[0]["_id"].as_str().unwrap();
     let expected_id = id_to_uuid_hex(0);
-    assert_eq!(first_id, expected_id, "First result should be the exact match vector");
+    assert_eq!(
+        first_id, expected_id,
+        "First result should be the exact match vector"
+    );
 
     delete_test_index();
 }

@@ -264,10 +264,7 @@ fn vadd_batch(
                             );
                         }
                         MetadataValue::Geo { lon, lat } => {
-                            map.insert(
-                                k.clone(),
-                                serde_json::json!({"lon": lon, "lat": lat}),
-                            );
+                            map.insert(k.clone(), serde_json::json!({"lon": lon, "lat": lat}));
                         }
                     }
                 }
@@ -320,9 +317,7 @@ fn vsim_search(
         cmd.arg("FILTER-EF").arg(fe);
     }
 
-    let response: Vec<redis::Value> = cmd
-        .query(conn)
-        .map_err(|e| format!("VSIM error: {}", e))?;
+    let response: Vec<redis::Value> = cmd.query(conn).map_err(|e| format!("VSIM error: {}", e))?;
 
     // Parse alternating [id, score, id, score, ...]
     let mut results = Vec::new();
@@ -532,6 +527,7 @@ impl Engine for VectorSetsEngine {
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -543,6 +539,7 @@ impl Engine for VectorSetsEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match redis::Client::open(redis_url.as_str()) {
@@ -590,11 +587,13 @@ impl Engine for VectorSetsEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -712,6 +711,7 @@ impl Engine for VectorSetsEngine {
         let ratio_updates = ratio.updates as usize;
         let update_seq_len = update_seq.len();
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -730,6 +730,7 @@ impl Engine for VectorSetsEngine {
                 let precisions = Arc::clone(&precisions);
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match redis::Client::open(redis_url.as_str()) {
@@ -751,7 +752,11 @@ impl Engine for VectorSetsEngine {
 
                             let top = explicit_top.unwrap_or_else(|| {
                                 let n = neighbors[idx].len();
-                                if n > 0 { n } else { 10 }
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
                             });
 
                             let filter_ref = filters[idx].as_deref();
@@ -779,6 +784,7 @@ impl Engine for VectorSetsEngine {
                             } else {
                                 precisions.lock().unwrap().push(0.0);
                             }
+                            pb.inc(1);
                         }
 
                         // Update phase: do U updates
@@ -802,6 +808,7 @@ impl Engine for VectorSetsEngine {
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -850,15 +857,11 @@ impl Engine for VectorSetsEngine {
                     .copied()
                     .unwrap_or(0.0);
                 let u_p95 = u_sorted
-                    .get(
-                        ((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1),
-                    )
+                    .get(((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1))
                     .copied()
                     .unwrap_or(0.0);
                 let u_p99 = u_sorted
-                    .get(
-                        ((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1),
-                    )
+                    .get(((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1))
                     .copied()
                     .unwrap_or(0.0);
                 (
@@ -913,10 +916,7 @@ impl Engine for VectorSetsEngine {
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
-        let info_str: String = redis::cmd("INFO")
-            .arg("memory")
-            .query(&mut conn)
-            .ok()?;
+        let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = info_str
             .lines()
             .find(|l| l.starts_with("used_memory:"))

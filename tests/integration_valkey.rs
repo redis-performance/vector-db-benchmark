@@ -57,9 +57,7 @@ fn flush_db(conn: &mut Connection) {
     // Drop all FT indexes first (Valkey Search does not support DD flag)
     if let Ok(indexes) = redis::cmd("FT._LIST").query::<Vec<String>>(conn) {
         for idx_name in indexes {
-            let _ = redis::cmd("FT.DROPINDEX")
-                .arg(&idx_name)
-                .query::<()>(conn);
+            let _ = redis::cmd("FT.DROPINDEX").arg(&idx_name).query::<()>(conn);
         }
     }
     let _: () = redis::cmd("FLUSHALL").query(conn).unwrap();
@@ -216,8 +214,7 @@ fn test_valkey_parallel_pipeline_upload_keyspace() {
                 let mut t_conn = client.get_connection().unwrap();
 
                 loop {
-                    let idx =
-                        batch_idx.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let idx = batch_idx.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     if idx >= total_batches {
                         break;
                     }
@@ -441,7 +438,11 @@ fn test_valkey_knn_search() {
         for i in chunk_start..chunk_end {
             let key = ids[i].to_string();
             let vec_bytes = vec_to_bytes(&vectors[i]);
-            pipe.cmd("HSET").arg(key).arg("vector").arg(vec_bytes).ignore();
+            pipe.cmd("HSET")
+                .arg(key)
+                .arg("vector")
+                .arg(vec_bytes)
+                .ignore();
         }
         pipe.query::<()>(&mut conn).expect("Pipeline HSET failed");
     }
@@ -537,7 +538,11 @@ fn test_valkey_knn_precision() {
         for i in chunk_start..chunk_end {
             let key = ids[i].to_string();
             let vec_bytes = vec_to_bytes(&vectors[i]);
-            pipe.cmd("HSET").arg(key).arg("vector").arg(vec_bytes).ignore();
+            pipe.cmd("HSET")
+                .arg(key)
+                .arg("vector")
+                .arg(vec_bytes)
+                .ignore();
         }
         pipe.query::<()>(&mut conn).expect("Pipeline HSET failed");
     }
@@ -780,7 +785,11 @@ fn test_valkey_ft_info() {
         for i in 0..ids.len() {
             let key = ids[i].to_string();
             let vec_bytes = vec_to_bytes(&vectors[i]);
-            pipe.cmd("HSET").arg(key).arg("vector").arg(vec_bytes).ignore();
+            pipe.cmd("HSET")
+                .arg(key)
+                .arg("vector")
+                .arg(vec_bytes)
+                .ignore();
         }
         pipe.query::<()>(&mut conn).expect("Pipeline HSET failed");
     }
@@ -793,10 +802,7 @@ fn test_valkey_ft_info() {
         .expect("FT.INFO failed");
 
     let num_docs = extract_ft_info_value(&info, "num_docs");
-    assert!(
-        num_docs.is_some(),
-        "FT.INFO should contain num_docs field"
-    );
+    assert!(num_docs.is_some(), "FT.INFO should contain num_docs field");
     assert_eq!(
         num_docs.unwrap(),
         count as i64,
@@ -1062,17 +1068,15 @@ fn test_valkey_sub_batched_pipeline_upload_high_dim() {
             }
 
             let mut hset_cmd = redis::cmd("HSET");
-            hset_cmd
-                .arg(key.as_str())
-                .arg("vector")
-                .arg(&vec_bytes[..]);
+            hset_cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
             pipe.add_command(hset_cmd).ignore();
             pipe_bytes += cmd_bytes;
         }
 
         if pipe_bytes > 0 {
-            pipe.query::<()>(&mut conn)
-                .unwrap_or_else(|e| panic!("Final sub-batch failed at chunk {}: {}", chunk_start, e));
+            pipe.query::<()>(&mut conn).unwrap_or_else(|e| {
+                panic!("Final sub-batch failed at chunk {}: {}", chunk_start, e)
+            });
         }
     }
 

@@ -80,11 +80,7 @@ fn analyze_precision_performance(entries: &[SearchEntry]) -> Vec<PrecisionBucket
 }
 
 /// Display a results summary table and ASCII scatter plot.
-pub fn display_results_summary(
-    engine_name: &str,
-    dataset_name: &str,
-    entries: &[SearchEntry],
-) {
+pub fn display_results_summary(engine_name: &str, dataset_name: &str, entries: &[SearchEntry]) {
     if entries.is_empty() {
         return;
     }
@@ -198,19 +194,10 @@ fn create_ascii_scatter_plot(engine_name: &str, dataset_name: &str, buckets: &[P
     let precisions: Vec<f64> = buckets.iter().map(|b| b.precision).collect();
     let qps_values: Vec<f64> = buckets.iter().map(|b| b.qps).collect();
 
-    let min_prec = precisions
-        .iter()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
-    let max_prec = precisions
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let min_prec = precisions.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_prec = precisions.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let min_qps = 0.0_f64;
-    let max_qps = qps_values
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let max_qps = qps_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
     // Add padding to ranges
     let prec_range = if (max_prec - min_prec).abs() < 1e-9 {
@@ -263,10 +250,7 @@ fn create_ascii_scatter_plot(engine_name: &str, dataset_name: &str, buckets: &[P
         print!("{:<width$.3}", val, width = label_spacing);
     }
     println!();
-    println!(
-        "{}Precision (0.0 = 0%, 1.0 = 100%)",
-        " ".repeat(8)
-    );
+    println!("{}Precision (0.0 = 0%, 1.0 = 100%)", " ".repeat(8));
 }
 
 #[cfg(test)]

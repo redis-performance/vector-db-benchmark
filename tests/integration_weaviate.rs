@@ -43,10 +43,7 @@ fn wait_for_weaviate() {
             }
         }
         if Instant::now() > deadline {
-            panic!(
-                "Weaviate not available on port {} after 60s",
-                WEAVIATE_PORT
-            );
+            panic!("Weaviate not available on port {} after 60s", WEAVIATE_PORT);
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -268,10 +265,7 @@ fn test_weaviate_near_vector_search() {
     // First result should be id=0 (exact match, distance=0)
     let first_id = results[0]["_additional"]["id"].as_str().unwrap();
     let expected_id = id_from_int(0);
-    assert_eq!(
-        first_id, expected_id,
-        "First result should be exact match"
-    );
+    assert_eq!(first_id, expected_id, "First result should be exact match");
 
     delete_test_class();
 }
@@ -463,11 +457,7 @@ fn test_weaviate_full_cycle() {
     // Delete
     delete_test_class();
     let resp = client
-        .get(&format!(
-            "{}/v1/schema/{}",
-            weaviate_base_url(),
-            TEST_CLASS
-        ))
+        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);

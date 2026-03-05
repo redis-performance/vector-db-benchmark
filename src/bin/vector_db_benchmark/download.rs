@@ -167,12 +167,11 @@ fn extract_bz2(bz2_path: &Path, target_path: &Path) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {}", e))?;
     }
 
-    let file =
-        fs::File::open(bz2_path).map_err(|e| format!("Failed to open bz2 file: {}", e))?;
+    let file = fs::File::open(bz2_path).map_err(|e| format!("Failed to open bz2 file: {}", e))?;
     let mut decoder = bzip2::read::BzDecoder::new(io::BufReader::new(file));
 
-    let mut out_file =
-        fs::File::create(target_path).map_err(|e| format!("Failed to create output file: {}", e))?;
+    let mut out_file = fs::File::create(target_path)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
     io::copy(&mut decoder, &mut out_file)
         .map_err(|e| format!("Failed to decompress bz2: {}", e))?;
 

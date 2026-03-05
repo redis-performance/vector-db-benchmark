@@ -224,10 +224,7 @@ impl ElasticsearchEngine {
             .map_err(|e| format!("Failed to create index: {}", e))?;
 
         if !resp.status_code().is_success() {
-            let body = self
-                .rt
-                .block_on(resp.text())
-                .unwrap_or_default();
+            let body = self.rt.block_on(resp.text()).unwrap_or_default();
             return Err(format!("Failed to create index: {}", body));
         }
 
@@ -336,13 +333,16 @@ impl ElasticsearchEngine {
                     if attempt < max_retries {
                         println!(
                             "Force merge retry {}/{}: status {}",
-                            attempt, max_retries, resp.status_code()
+                            attempt,
+                            max_retries,
+                            resp.status_code()
                         );
                         continue;
                     }
                     return Err(format!(
                         "Force merge failed after {} retries: {}",
-                        max_retries, resp.status_code()
+                        max_retries,
+                        resp.status_code()
                     ));
                 }
                 Err(e) => {
@@ -534,7 +534,9 @@ fn upload_bulk_batch(
         let uuid_hex = id_to_uuid_hex(ids[i]);
 
         // Action line
-        body.push(JsonBody::new(serde_json::json!({"index": {"_id": uuid_hex}})));
+        body.push(JsonBody::new(
+            serde_json::json!({"index": {"_id": uuid_hex}}),
+        ));
 
         // Document line
         let mut doc = serde_json::Map::new();
@@ -566,12 +568,7 @@ fn upload_bulk_batch(
     }
 
     let resp = rt
-        .block_on(
-            client
-                .bulk(BulkParts::Index(index_name))
-                .body(body)
-                .send(),
-        )
+        .block_on(client.bulk(BulkParts::Index(index_name)).body(body).send())
         .map_err(|e| format!("Bulk upload failed: {}", e))?;
 
     if !resp.status_code().is_success() {
@@ -774,10 +771,10 @@ impl Engine for ElasticsearchEngine {
 
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
         let base_url = self.base_url.clone();
         let timeout = self.timeout;
@@ -793,6 +790,7 @@ impl Engine for ElasticsearchEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let rt = match tokio::runtime::Runtime::new() {
@@ -812,7 +810,11 @@ impl Engine for ElasticsearchEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let query_start = Instant::now();
@@ -840,11 +842,13 @@ impl Engine for ElasticsearchEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -893,8 +897,7 @@ impl Engine for ElasticsearchEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top
-                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
             ..Default::default()

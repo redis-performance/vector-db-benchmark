@@ -50,8 +50,8 @@ impl MongoDBEngine {
         let db_name = std::env::var("MONGODB_DB").unwrap_or_else(|_| DEFAULT_DB.to_string());
         let collection_name =
             std::env::var("MONGODB_COLLECTION").unwrap_or_else(|_| DEFAULT_COLLECTION.to_string());
-        let index_name = std::env::var("MONGODB_INDEX_NAME")
-            .unwrap_or_else(|_| DEFAULT_INDEX_NAME.to_string());
+        let index_name =
+            std::env::var("MONGODB_INDEX_NAME").unwrap_or_else(|_| DEFAULT_INDEX_NAME.to_string());
 
         let parallel = engine_config
             .upload_params
@@ -154,15 +154,13 @@ impl MongoDBEngine {
 
         // 2. Drop the collection and verify it's gone.
         let coll = db.collection::<Document>(&self.collection_name);
-        coll.drop().run()
+        coll.drop()
+            .run()
             .map_err(|e| format!("Failed to drop collection: {}", e))?;
 
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
         loop {
-            let names = db
-                .list_collection_names()
-                .run()
-                .unwrap_or_default();
+            let names = db.list_collection_names().run().unwrap_or_default();
             if !names.contains(&self.collection_name.to_string()) {
                 break;
             }
@@ -229,7 +227,8 @@ impl MongoDBEngine {
             "indexes": [index_def],
         };
 
-        db.run_command(cmd).run()
+        db.run_command(cmd)
+            .run()
             .map_err(|e| format!("Failed to create vector search index: {}", e))?;
 
         // Wait for index to become ready
@@ -287,7 +286,10 @@ impl MongoDBEngine {
     /// Polls `listSearchIndexes` until the index reports `queryable=true` and
     /// `status` is READY or ACTIVE, matching the Python v0 post_upload approach.
     fn wait_for_index_catchup(&self, expected_count: usize, _dim: usize) -> Result<(), String> {
-        println!("Waiting for vector search index to index all {} documents...", expected_count);
+        println!(
+            "Waiting for vector search index to index all {} documents...",
+            expected_count
+        );
         let db = self.client.database(&self.db_name);
         let start = Instant::now();
         let deadline = start + std::time::Duration::from_secs(600);
@@ -306,8 +308,7 @@ impl MongoDBEngine {
                                     continue;
                                 }
                                 let status = index_doc.get_str("status").unwrap_or("");
-                                let queryable =
-                                    index_doc.get_bool("queryable").unwrap_or(false);
+                                let queryable = index_doc.get_bool("queryable").unwrap_or(false);
 
                                 if (status == "READY" || status == "ACTIVE") && queryable {
                                     println!(
@@ -429,7 +430,10 @@ fn build_uri(host: &str, port: u16) -> String {
 
     match (user, password) {
         (Some(u), Some(p)) => {
-            format!("mongodb://{}:{}@{}:{}/?directConnection=true", u, p, host_part, port)
+            format!(
+                "mongodb://{}:{}@{}:{}/?directConnection=true",
+                u, p, host_part, port
+            )
         }
         _ => format!("mongodb://{}:{}/?directConnection=true", host_part, port),
     }
@@ -469,12 +473,10 @@ fn insert_batch(
                                 .collect();
                             mongodb::bson::Bson::Array(arr)
                         }
-                        MetadataValue::Geo { lon, lat } => {
-                            mongodb::bson::Bson::Document(doc! {
-                                "type": "Point",
-                                "coordinates": [*lon, *lat],
-                            })
-                        }
+                        MetadataValue::Geo { lon, lat } => mongodb::bson::Bson::Document(doc! {
+                            "type": "Point",
+                            "coordinates": [*lon, *lat],
+                        }),
                     };
                     doc.insert(k.clone(), bson_val);
                 }
@@ -484,7 +486,8 @@ fn insert_batch(
         })
         .collect();
 
-    coll.insert_many(docs).run()
+    coll.insert_many(docs)
+        .run()
         .map_err(|e| format!("Insert batch failed: {}", e))?;
 
     Ok(())
@@ -527,7 +530,8 @@ fn vector_search(
     ];
 
     let cursor = coll
-        .aggregate(pipeline).run()
+        .aggregate(pipeline)
+        .run()
         .map_err(|e| format!("Vector search failed: {}", e))?;
 
     let mut results = Vec::with_capacity(top);
@@ -594,10 +598,7 @@ fn build_mongo_filter_entry(entry: &serde_json::Value) -> Option<Document> {
             match condition_type.as_str() {
                 "match" => {
                     if let Some(value) = criteria.get("value") {
-                        clauses.insert(
-                            field_name.clone(),
-                            json_to_bson(value),
-                        );
+                        clauses.insert(field_name.clone(), json_to_bson(value));
                     }
                 }
                 "range" => {
@@ -683,7 +684,8 @@ impl Engine for MongoDBEngine {
 
         // Create the collection explicitly so we can add the index
         let db = self.client.database(&self.db_name);
-        db.create_collection(&self.collection_name).run()
+        db.create_collection(&self.collection_name)
+            .run()
             .map_err(|e| format!("Failed to create collection: {}", e))?;
 
         println!(
@@ -696,14 +698,16 @@ impl Engine for MongoDBEngine {
         let dim = dataset.vector_size();
         let dummy_vec: Vec<mongodb::bson::Bson> =
             (0..dim).map(|_| mongodb::bson::Bson::Double(0.0)).collect();
-        coll.insert_one(doc! { "_id": -1i64, "vector": dummy_vec }).run()
+        coll.insert_one(doc! { "_id": -1i64, "vector": dummy_vec })
+            .run()
             .map_err(|e| format!("Failed to insert dummy document: {}", e))?;
 
         println!("Creating vector search index '{}'...", self.index_name);
         self.create_vector_index(dataset)?;
 
         // Remove dummy document
-        coll.delete_one(doc! { "_id": -1i64 }).run()
+        coll.delete_one(doc! { "_id": -1i64 })
+            .run()
             .map_err(|e| format!("Failed to remove dummy document: {}", e))?;
 
         Ok(())
@@ -789,9 +793,10 @@ impl Engine for MongoDBEngine {
 
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
+
+        let pb = self.create_progress_bar(num_to_run);
 
         let start_time = Instant::now();
         let uri = self.uri.clone();
@@ -811,6 +816,7 @@ impl Engine for MongoDBEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match Client::with_uri_str(&uri) {
@@ -829,7 +835,11 @@ impl Engine for MongoDBEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let num_candidates = (top as i64) * num_candidates_factor;
@@ -858,11 +868,13 @@ impl Engine for MongoDBEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -911,8 +923,7 @@ impl Engine for MongoDBEngine {
             p99_time,
             precisions: precs.to_vec(),
             latencies: times.to_vec(),
-            top: explicit_top
-                .unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
             parallel,
             ..Default::default()

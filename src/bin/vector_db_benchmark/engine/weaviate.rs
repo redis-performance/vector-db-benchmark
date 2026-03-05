@@ -38,8 +38,8 @@ impl WeaviateEngine {
             .and_then(|v| v.parse().ok())
             .unwrap_or(8080);
 
-        let class_name = std::env::var("WEAVIATE_CLASS_NAME")
-            .unwrap_or_else(|_| DEFAULT_CLASS_NAME.to_string());
+        let class_name =
+            std::env::var("WEAVIATE_CLASS_NAME").unwrap_or_else(|_| DEFAULT_CLASS_NAME.to_string());
 
         let api_key = std::env::var("WEAVIATE_API_KEY").ok();
 
@@ -816,6 +816,7 @@ impl Engine for WeaviateEngine {
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -830,6 +831,7 @@ impl Engine for WeaviateEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match reqwest::blocking::Client::builder()
@@ -848,7 +850,11 @@ impl Engine for WeaviateEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let query_start = Instant::now();
@@ -876,11 +882,13 @@ impl Engine for WeaviateEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();

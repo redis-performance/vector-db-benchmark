@@ -318,7 +318,9 @@ impl RedisEngine {
 
             fn extract_f64(val: &redis::Value) -> f64 {
                 match val {
-                    redis::Value::BulkString(s) => String::from_utf8_lossy(s).parse().unwrap_or(1.0),
+                    redis::Value::BulkString(s) => {
+                        String::from_utf8_lossy(s).parse().unwrap_or(1.0)
+                    }
                     redis::Value::Int(n) => *n as f64,
                     redis::Value::Double(f) => *f,
                     redis::Value::SimpleString(s) => s.parse().unwrap_or(1.0),
@@ -490,12 +492,10 @@ fn redis_value_to_json(val: &redis::Value) -> serde_json::Value {
         redis::Value::Double(f) => serde_json::json!(f),
         redis::Value::Boolean(b) => serde_json::json!(b),
         redis::Value::SimpleString(s) => serde_json::json!(s),
-        redis::Value::BulkString(bytes) => {
-            match String::from_utf8(bytes.clone()) {
-                Ok(s) => serde_json::json!(s),
-                Err(_) => serde_json::json!(format!("<{} bytes>", bytes.len())),
-            }
-        }
+        redis::Value::BulkString(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(s) => serde_json::json!(s),
+            Err(_) => serde_json::json!(format!("<{} bytes>", bytes.len())),
+        },
         redis::Value::Array(arr) => {
             serde_json::Value::Array(arr.iter().map(redis_value_to_json).collect())
         }
@@ -1064,6 +1064,7 @@ impl Engine for RedisEngine {
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -1077,6 +1078,7 @@ impl Engine for RedisEngine {
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
                 let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match redis::Client::open(redis_url.as_str()) {
@@ -1132,11 +1134,13 @@ impl Engine for RedisEngine {
                         } else {
                             precisions.lock().unwrap().push(0.0);
                         }
+                        pb.inc(1);
                     }
                 });
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         // Calculate statistics
@@ -1255,6 +1259,7 @@ impl Engine for RedisEngine {
         let ratio_updates = ratio.updates as usize;
         let update_seq_len = update_seq.len();
 
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -1275,6 +1280,7 @@ impl Engine for RedisEngine {
                 let precisions = Arc::clone(&precisions);
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
+                let pb = &pb;
 
                 s.spawn(move || {
                     let client = match redis::Client::open(redis_url.as_str()) {
@@ -1296,7 +1302,11 @@ impl Engine for RedisEngine {
 
                             let top = explicit_top.unwrap_or_else(|| {
                                 let n = neighbors[idx].len();
-                                if n > 0 { n } else { 10 }
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
                             });
 
                             let query_start = Instant::now();
@@ -1325,6 +1335,7 @@ impl Engine for RedisEngine {
                             } else {
                                 precisions.lock().unwrap().push(0.0);
                             }
+                            pb.inc(1);
                         }
 
                         // Update phase: do U updates
@@ -1348,6 +1359,7 @@ impl Engine for RedisEngine {
             }
         });
 
+        pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
         let times = search_times.lock().unwrap();
@@ -1396,15 +1408,11 @@ impl Engine for RedisEngine {
                     .copied()
                     .unwrap_or(0.0);
                 let u_p95 = u_sorted
-                    .get(
-                        ((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1),
-                    )
+                    .get(((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1))
                     .copied()
                     .unwrap_or(0.0);
                 let u_p99 = u_sorted
-                    .get(
-                        ((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1),
-                    )
+                    .get(((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1))
                     .copied()
                     .unwrap_or(0.0);
                 (
@@ -1463,10 +1471,7 @@ impl Engine for RedisEngine {
         let mut conn = self.get_connection().ok()?;
 
         // Get used_memory from INFO memory (returns bulk string, parse key:value lines)
-        let info_str: String = redis::cmd("INFO")
-            .arg("memory")
-            .query(&mut conn)
-            .ok()?;
+        let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = info_str
             .lines()
             .find(|l| l.starts_with("used_memory:"))

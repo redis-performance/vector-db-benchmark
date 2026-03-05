@@ -111,13 +111,13 @@ fn test_qdrant_collection_crud() {
     };
 
     rt.block_on(
-        client.create_collection(
-            CreateCollectionBuilder::new(COLLECTION).vectors_config(VectorsConfig {
+        client.create_collection(CreateCollectionBuilder::new(COLLECTION).vectors_config(
+            VectorsConfig {
                 config: Some(Config::Params(
                     VectorParamsBuilder::new(4, Distance::Euclid).build(),
                 )),
-            }),
-        ),
+            },
+        )),
     )
     .expect("Failed to create collection");
 
@@ -129,9 +129,9 @@ fn test_qdrant_collection_crud() {
 
     // Delete
     rt.block_on(
-        client.delete_collection(
-            qdrant_client::qdrant::DeleteCollectionBuilder::new(COLLECTION),
-        ),
+        client.delete_collection(qdrant_client::qdrant::DeleteCollectionBuilder::new(
+            COLLECTION,
+        )),
     )
     .expect("Failed to delete collection");
 }
@@ -150,13 +150,13 @@ fn test_qdrant_upsert_and_search() {
 
     // Create collection
     rt.block_on(
-        client.create_collection(
-            CreateCollectionBuilder::new(COLLECTION).vectors_config(VectorsConfig {
+        client.create_collection(CreateCollectionBuilder::new(COLLECTION).vectors_config(
+            VectorsConfig {
                 config: Some(Config::Params(
                     VectorParamsBuilder::new(4, Distance::Euclid).build(),
                 )),
-            }),
-        ),
+            },
+        )),
     )
     .unwrap();
 
@@ -165,13 +165,7 @@ fn test_qdrant_upsert_and_search() {
     let points: Vec<PointStruct> = ids
         .iter()
         .zip(vectors.iter())
-        .map(|(id, vec)| {
-            PointStruct::new(
-                *id as u64,
-                vec.clone(),
-                qdrant_client::Payload::new(),
-            )
-        })
+        .map(|(id, vec)| PointStruct::new(*id as u64, vec.clone(), qdrant_client::Payload::new()))
         .collect();
 
     rt.block_on(client.upsert_points(
@@ -181,11 +175,9 @@ fn test_qdrant_upsert_and_search() {
 
     // Search
     let results = rt
-        .block_on(
-            client.search_points(
-                SearchPointsBuilder::new(COLLECTION, vectors[0].clone(), 5).with_payload(false),
-            ),
-        )
+        .block_on(client.search_points(
+            SearchPointsBuilder::new(COLLECTION, vectors[0].clone(), 5).with_payload(false),
+        ))
         .expect("Failed to search");
 
     assert!(!results.result.is_empty(), "Search should return results");
@@ -221,13 +213,13 @@ fn test_qdrant_precision() {
     let top = 10;
 
     rt.block_on(
-        client.create_collection(
-            CreateCollectionBuilder::new(COLLECTION).vectors_config(VectorsConfig {
+        client.create_collection(CreateCollectionBuilder::new(COLLECTION).vectors_config(
+            VectorsConfig {
                 config: Some(Config::Params(
                     VectorParamsBuilder::new(dim as u64, Distance::Euclid).build(),
                 )),
-            }),
-        ),
+            },
+        )),
     )
     .unwrap();
 
@@ -235,13 +227,7 @@ fn test_qdrant_precision() {
     let points: Vec<PointStruct> = ids
         .iter()
         .zip(vectors.iter())
-        .map(|(id, vec)| {
-            PointStruct::new(
-                *id as u64,
-                vec.clone(),
-                qdrant_client::Payload::new(),
-            )
-        })
+        .map(|(id, vec)| PointStruct::new(*id as u64, vec.clone(), qdrant_client::Payload::new()))
         .collect();
 
     rt.block_on(client.upsert_points(
@@ -304,13 +290,13 @@ fn test_qdrant_payload_filter() {
     };
 
     rt.block_on(
-        client.create_collection(
-            CreateCollectionBuilder::new(COLLECTION).vectors_config(VectorsConfig {
+        client.create_collection(CreateCollectionBuilder::new(COLLECTION).vectors_config(
+            VectorsConfig {
                 config: Some(Config::Params(
                     VectorParamsBuilder::new(4, Distance::Euclid).build(),
                 )),
-            }),
-        ),
+            },
+        )),
     )
     .unwrap();
 
@@ -331,10 +317,7 @@ fn test_qdrant_payload_filter() {
         .zip(vectors.iter())
         .map(|(id, vec)| {
             let mut payload = qdrant_client::Payload::new();
-            payload.insert(
-                "category",
-                if *id % 2 == 0 { "A" } else { "B" },
-            );
+            payload.insert("category", if *id % 2 == 0 { "A" } else { "B" });
             PointStruct::new(*id as u64, vec.clone(), payload)
         })
         .collect();
@@ -360,7 +343,10 @@ fn test_qdrant_payload_filter() {
         )
         .unwrap();
 
-    assert!(!results.result.is_empty(), "Filtered search should return results");
+    assert!(
+        !results.result.is_empty(),
+        "Filtered search should return results"
+    );
 
     // Verify all results have even IDs (category A)
     for p in &results.result {

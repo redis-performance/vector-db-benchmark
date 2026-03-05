@@ -1613,10 +1613,7 @@ fn test_binary_vectorsets_end_to_end() {
 
 /// Parse INFO COMMANDSTATS output and return call count for a given command.
 fn commandstats_calls(conn: &mut Connection, cmd_name: &str) -> u64 {
-    let info: String = redis::cmd("INFO")
-        .arg("COMMANDSTATS")
-        .query(conn)
-        .unwrap();
+    let info: String = redis::cmd("INFO").arg("COMMANDSTATS").query(conn).unwrap();
     // Lines look like: cmdstat_FT.SEARCH:calls=10,usec=1234,...
     let needle = format!("cmdstat_{}:", cmd_name);
     for line in info.lines() {
@@ -1634,7 +1631,11 @@ fn commandstats_calls(conn: &mut Connection, cmd_name: &str) -> u64 {
 }
 
 /// Read a search result JSON and return a specific field from "results".
-fn read_search_result_field(results_dir: &PathBuf, engine_name: &str, field: &str) -> Option<serde_json::Value> {
+fn read_search_result_field(
+    results_dir: &PathBuf,
+    engine_name: &str,
+    field: &str,
+) -> Option<serde_json::Value> {
     let pattern = format!("{}-*-search-*.json", engine_name);
     for entry in fs::read_dir(results_dir).unwrap() {
         let entry = entry.unwrap();
