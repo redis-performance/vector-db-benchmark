@@ -1,6 +1,8 @@
 # Makefile for vector-db-benchmark Rust implementation
 #
 # Targets:
+#   make setup               - Install system deps and Rust toolchain
+#   make install             - Build and install binary to PREFIX (/usr/local)
 #   make vector-db-benchmark - Build the main CLI binary
 #   make test                - Run Rust unit tests (no docker needed)
 #   make integration-test    - Run integration tests (requires redis:8.6.0 docker)
@@ -23,6 +25,35 @@ IMAGE_TAG ?= latest
 # Default target
 .PHONY: all
 all: check build test
+
+# ============================================================
+# SETUP - Install system dependencies and Rust toolchain
+# ============================================================
+
+.PHONY: setup
+setup:
+	@echo "=== Setting up development environment ==="
+	@OS=$$(uname -s); \
+	if [ "$$OS" = "Linux" ]; then \
+		echo "Detected Linux — installing libhdf5-dev and pkg-config via apt..."; \
+		sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config; \
+	elif [ "$$OS" = "Darwin" ]; then \
+		echo "Detected macOS — installing hdf5 and pkg-config via brew..."; \
+		brew install hdf5 pkg-config; \
+	else \
+		echo "Unsupported OS: $$OS (expected Linux or Darwin)"; \
+		exit 1; \
+	fi
+	@if ! command -v cargo >/dev/null 2>&1; then \
+		echo "Rust not found — installing via rustup..."; \
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
+		echo "NOTE: Run 'source $$HOME/.cargo/env' to add cargo to your current shell."; \
+	else \
+		echo "Rust already installed — running rustup update..."; \
+		rustup update; \
+	fi
+	@echo ""
+	@echo "=== Setup complete! Next step: make build ==="
 
 # ============================================================
 # BUILD
@@ -50,6 +81,19 @@ vector-db-benchmark:
 	@echo "  ./target/release/vector-db-benchmark --help"
 	@echo "  ./target/release/vector-db-benchmark --describe datasets"
 	@echo "  ./target/release/vector-db-benchmark --engines 'redis-rs*' --datasets 'glove*' --skip-search"
+
+# ============================================================
+# INSTALL - Install binary to system path
+# ============================================================
+
+PREFIX ?= /usr/local
+
+.PHONY: install
+install: build
+	@echo "=== Installing vector-db-benchmark to $(PREFIX)/bin ==="
+	install -d $(PREFIX)/bin
+	install -m 755 target/release/vector-db-benchmark $(PREFIX)/bin/vector-db-benchmark
+	@echo "Installed: $(PREFIX)/bin/vector-db-benchmark"
 
 # ============================================================
 # TEST - Run Rust unit tests with dataset coverage
@@ -298,8 +342,12 @@ clean:
 help:
 	@echo "Available targets:"
 	@echo ""
+	@echo "  Setup:"
+	@echo "  make setup             - Install system deps (libhdf5, pkg-config) and Rust toolchain"
+	@echo ""
 	@echo "  Build & Test:"
 	@echo "  make build             - Build Rust code in release mode"
+	@echo "  make install           - Build and install binary to PREFIX (default: /usr/local)"
 	@echo "  make test              - Run Rust unit tests (no docker needed)"
 	@echo "  make check             - Run linting (clippy) and formatting checks"
 	@echo "  make check-strict      - Run linting with warnings as errors"

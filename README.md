@@ -121,10 +121,51 @@ Options:
     --skip-if-exists           Skip if results already exist
     --exit-on-error            Stop on first error
     --timeout <SECS>           Timeout in seconds [default: 86400]
+    --update-search-ratio <U:S> Mixed benchmark: interleave U updates per S searches
     --describe <TYPE>          Describe available 'datasets' or 'engines'
     -v, --verbose              Verbose output for --describe
     -h, --help                 Print help
 ```
+
+## Mixed Benchmarks (Update + Search)
+
+The `--update-search-ratio` flag enables mixed workload benchmarks that interleave vector updates with searches. This measures how search performance is affected by concurrent write operations.
+
+```bash
+# 1 update per 10 searches
+vector-db-benchmark --engines redis-docker-test --datasets random-100 \
+  --update-search-ratio 1:10
+
+# 1 update per 5 searches (heavier write load)
+vector-db-benchmark --engines vectorsets-docker-test --datasets h-and-m-2048-angular \
+  --update-search-ratio 1:5
+```
+
+The ratio format is `U:S` where U = number of updates and S = number of searches per cycle. Each worker thread performs S searches followed by U updates in a loop.
+
+**Supported engines**: Redis, VectorSets, Valkey
+
+Results JSON includes separate metrics for both operation types:
+
+```json
+{
+  "results": {
+    "rps": 5891.2,
+    "precision": 0.9785,
+    "p50_time": 0.00032,
+    "p95_time": 0.00089,
+    "p99_time": 0.00142,
+    "update_rps": 589.1,
+    "update_mean_time": 0.00045,
+    "update_p50_time": 0.00041,
+    "update_p95_time": 0.00098,
+    "update_p99_time": 0.00156,
+    "update_search_ratio": "1:10"
+  }
+}
+```
+
+Omitting the flag preserves the standard search-only benchmark behavior.
 
 ## Datasets
 
@@ -225,6 +266,14 @@ Datasets are configured in [`datasets/datasets.json`](./datasets/datasets.json).
 ## Development
 
 ### Prerequisites
+
+The quickest way to install all dependencies (Linux/macOS):
+
+```bash
+make setup    # installs libhdf5, pkg-config, and Rust toolchain
+```
+
+Or install manually:
 
 - **Rust toolchain** (install via [rustup](https://rustup.rs/))
 - **libhdf5-dev** and **pkg-config**
