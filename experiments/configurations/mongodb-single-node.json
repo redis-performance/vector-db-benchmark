@@ -1,7 +1,7 @@
 [
   {
-    "name": "redis-m-16-ef-64",
-    "engine": "redis",
+    "name": "mongodb-m-16-ef-64",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 64 }
@@ -14,8 +14,8 @@
 
   },
   {
-    "name": "redis-m-16-ef-128",
-    "engine": "redis",
+    "name": "mongodb-m-16-ef-128",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 }
@@ -28,8 +28,8 @@
 
   },
   {
-    "name": "redis-m-16-ef-256",
-    "engine": "redis",
+    "name": "mongodb-m-16-ef-256",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 256 }
@@ -42,8 +42,8 @@
 
   },
   {
-    "name": "redis-m-16-ef-512",
-    "engine": "redis",
+    "name": "mongodb-m-16-ef-512",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 512 }
@@ -56,8 +56,8 @@
 
   },
   {
-    "name": "redis-m-32-ef-64",
-    "engine": "redis",
+    "name": "mongodb-m-32-ef-64",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 32, "EF_CONSTRUCTION": 64 }
@@ -70,8 +70,8 @@
 
   },
   {
-    "name": "redis-m-32-ef-128",
-    "engine": "redis",
+    "name": "mongodb-m-32-ef-128",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 32, "EF_CONSTRUCTION": 128 }
@@ -84,8 +84,8 @@
 
   },
   {
-    "name": "redis-m-32-ef-256",
-    "engine": "redis",
+    "name": "mongodb-m-32-ef-256",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 32, "EF_CONSTRUCTION": 256 }
@@ -98,8 +98,8 @@
 
   },
   {
-    "name": "redis-m-32-ef-512",
-    "engine": "redis",
+    "name": "mongodb-m-32-ef-512",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 32, "EF_CONSTRUCTION": 512 }
@@ -112,8 +112,8 @@
 
   },
   {
-    "name": "redis-m-64-ef-64",
-    "engine": "redis",
+    "name": "mongodb-m-64-ef-64",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 64 }
@@ -126,8 +126,8 @@
 
   },
   {
-    "name": "redis-m-64-ef-128",
-    "engine": "redis",
+    "name": "mongodb-m-64-ef-128",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 128 }
@@ -140,8 +140,8 @@
 
   },
   {
-    "name": "redis-m-64-ef-256",
-    "engine": "redis",
+    "name": "mongodb-m-64-ef-256",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 256 }
@@ -154,8 +154,8 @@
 
   },
   {
-    "name": "redis-m-64-ef-512",
-    "engine": "redis",
+    "name": "mongodb-m-64-ef-512",
+    "engine": "mongodb",
     "connection_params": {},
     "collection_params": {
       "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 512 }

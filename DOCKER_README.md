@@ -57,10 +57,27 @@ docker run --rm --network host \
 | `--skip-if-exists` | Skip if results already exist | — |
 | `--parallels <N,N,...>` | Filter by parallel thread counts | — |
 | `--ef-runtime <N,N,...>` | Filter by ef runtime values | — |
+| `--update-search-ratio <U:S>` | Mixed benchmark: interleave U updates per S searches | — |
 | `--describe <TYPE>` | Describe `datasets` or `engines` | — |
 | `-v, --verbose` | Verbose output for `--describe` | — |
 | `--exit-on-error` | Stop on first error | — |
 | `--timeout <SECS>` | Timeout in seconds | `86400` |
+
+## Mixed Benchmarks (Update + Search)
+
+Interleave vector updates with searches to measure write impact on search performance:
+
+```bash
+# 1 update per 10 searches against Redis
+docker run --rm --network host \
+  -v $(pwd)/datasets:/code/datasets \
+  -v $(pwd)/results:/code/results \
+  redis/vector-db-benchmark \
+  --host localhost --engines redis-docker-test --datasets random-100 \
+  --update-search-ratio 1:10
+```
+
+The ratio format is `U:S` (e.g., `1:10` = 1 update per 10 searches per cycle). Supported engines: Redis, VectorSets, Valkey. Results include separate search and update metrics (RPS, latencies). Omitting the flag runs standard search-only benchmarks.
 
 ## Volume Mounts
 

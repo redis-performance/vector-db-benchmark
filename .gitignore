@@ -16,8 +16,8 @@ dist/
 .claude/
 
 
-memory-bank/*
-.specsmd/
+#memory-bank/*
+#.specsmd/
 target/
 
 

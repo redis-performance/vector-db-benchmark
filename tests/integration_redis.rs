@@ -1339,7 +1339,6 @@ fn create_test_project(
     // Create directory structure
     let dataset_dir = root.join("datasets").join(dataset_name);
     fs::create_dir_all(&dataset_dir).unwrap();
-    fs::create_dir_all(root.join("v0/datasets")).unwrap();
     fs::create_dir_all(root.join("experiments/configurations")).unwrap();
     fs::create_dir_all(root.join("results")).unwrap();
 
@@ -1379,7 +1378,7 @@ fn create_test_project(
         "vector_count": vectors.len(),
     }]);
     fs::write(
-        root.join("v0/datasets/datasets.json"),
+        root.join("datasets/datasets.json"),
         serde_json::to_string_pretty(&datasets_json).unwrap(),
     )
     .unwrap();
@@ -1606,6 +1605,186 @@ fn test_binary_vectorsets_end_to_end() {
     assert!(
         precision >= 0.8,
         "Binary VectorSets precision should be >= 0.8, got {}",
+        precision
+    );
+
+    fs::remove_dir_all(&project_root).ok();
+}
+
+/// Parse INFO COMMANDSTATS output and return call count for a given command.
+fn commandstats_calls(conn: &mut Connection, cmd_name: &str) -> u64 {
+    let info: String = redis::cmd("INFO")
+        .arg("COMMANDSTATS")
+        .query(conn)
+        .unwrap();
+    // Lines look like: cmdstat_FT.SEARCH:calls=10,usec=1234,...
+    let needle = format!("cmdstat_{}:", cmd_name);
+    for line in info.lines() {
+        if line.starts_with(&needle) {
+            if let Some(rest) = line.strip_prefix(&needle) {
+                for part in rest.split(',') {
+                    if let Some(val) = part.strip_prefix("calls=") {
+                        return val.parse().unwrap_or(0);
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Read a search result JSON and return a specific field from "results".
+fn read_search_result_field(results_dir: &PathBuf, engine_name: &str, field: &str) -> Option<serde_json::Value> {
+    let pattern = format!("{}-*-search-*.json", engine_name);
+    for entry in fs::read_dir(results_dir).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if glob::Pattern::new(&pattern).unwrap().matches(&name) {
+            let content = fs::read_to_string(entry.path()).unwrap();
+            let result: serde_json::Value = serde_json::from_str(&content).unwrap();
+            return result["results"].get(field).cloned();
+        }
+    }
+    None
+}
+
+#[test]
+fn test_binary_redis_mixed_benchmark() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([{
+        "name": "test-redis-mixed",
+        "engine": "redis",
+        "algorithm": "hnsw",
+        "collection_params": {
+            "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 }
+        },
+        "search_params": [{
+            "parallel": 1,
+            "search_params": { "ef": 256 },
+            "top": top,
+        }],
+        "upload_params": {
+            "data_type": "FLOAT32",
+            "parallel": 1,
+            "batch_size": 64
+        }
+    }]);
+
+    let project_root = create_test_project(
+        "test-mixed",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+
+    let bin = binary_path();
+    assert!(bin.exists(), "Binary not found at {:?}", bin);
+
+    // Reset commandstats before running
+    let _: String = redis::cmd("CONFIG")
+        .arg("RESETSTAT")
+        .query(&mut conn)
+        .unwrap();
+
+    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles)
+    let output = Command::new(&bin)
+        .args([
+            "--engines",
+            "test-redis-mixed",
+            "--datasets",
+            "test-mixed",
+            "--host",
+            "localhost",
+            "--update-search-ratio",
+            "1:5",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .current_dir(&project_root)
+        .output()
+        .expect("Failed to run vector-db-benchmark");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "Binary failed.\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // Verify stdout mentions mixed mode
+    assert!(
+        stdout.contains("Mixed Search+Update"),
+        "Expected 'Mixed Search+Update' in output.\nstdout: {}",
+        stdout,
+    );
+
+    // Check INFO COMMANDSTATS
+    let ft_search_calls = commandstats_calls(&mut conn, "FT.SEARCH");
+    let hset_calls = commandstats_calls(&mut conn, "hset");
+
+    // 10 queries → FT.SEARCH should have exactly 10 calls
+    assert_eq!(
+        ft_search_calls, 10,
+        "Expected 10 FT.SEARCH calls, got {}",
+        ft_search_calls
+    );
+
+    // 100 uploads + 2 mixed updates (10 queries / 5 per cycle = 2 updates)
+    assert_eq!(
+        hset_calls, 102,
+        "Expected 102 HSET calls (100 upload + 2 mixed updates), got {}",
+        hset_calls
+    );
+
+    // Verify results JSON has update metrics
+    let results_dir = project_root.join("results");
+
+    let update_count = read_search_result_field(&results_dir, "test-redis-mixed", "update_count");
+    assert_eq!(
+        update_count,
+        Some(serde_json::json!(2)),
+        "Expected update_count=2 in results JSON, got {:?}",
+        update_count
+    );
+
+    let ratio = read_search_result_field(&results_dir, "test-redis-mixed", "update_search_ratio");
+    assert_eq!(
+        ratio,
+        Some(serde_json::json!("1:5")),
+        "Expected update_search_ratio='1:5' in results JSON, got {:?}",
+        ratio
+    );
+
+    let update_rps = read_search_result_field(&results_dir, "test-redis-mixed", "update_rps");
+    assert!(
+        update_rps.is_some() && update_rps.unwrap().as_f64().unwrap() > 0.0,
+        "Expected update_rps > 0 in results JSON"
+    );
+
+    // Precision should still be valid
+    let precision = read_search_precision(&results_dir, "test-redis-mixed");
+    assert!(
+        precision >= 0.8,
+        "Mixed benchmark precision should be >= 0.8, got {}",
         precision
     );
 
