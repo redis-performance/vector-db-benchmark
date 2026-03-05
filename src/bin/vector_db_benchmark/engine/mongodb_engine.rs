@@ -284,59 +284,49 @@ impl MongoDBEngine {
 
     /// Wait for the vector search index to finish indexing all uploaded documents.
     ///
-    /// After bulk upload, the Atlas index may still be building. We poll with a
-    /// probe `$vectorSearch` query until it returns results, confirming the index
-    /// has caught up with the uploaded data.
-    fn wait_for_index_catchup(&self, expected_count: usize, dim: usize) -> Result<(), String> {
+    /// Polls `listSearchIndexes` until the index reports `queryable=true` and
+    /// `status` is READY or ACTIVE, matching the Python v0 post_upload approach.
+    fn wait_for_index_catchup(&self, expected_count: usize, _dim: usize) -> Result<(), String> {
         println!("Waiting for vector search index to index all {} documents...", expected_count);
-        let coll = self
-            .client
-            .database(&self.db_name)
-            .collection::<Document>(&self.collection_name);
-
-        // Use a zero-vector as a probe query
-        let probe: Vec<f32> = vec![0.0; dim];
-        let probe_top = 1;
-        let probe_candidates = 10i64;
-        let deadline = Instant::now() + std::time::Duration::from_secs(600);
+        let db = self.client.database(&self.db_name);
+        let start = Instant::now();
+        let deadline = start + std::time::Duration::from_secs(600);
         let mut last_print = Instant::now();
 
         loop {
-            match vector_search(&coll, &self.index_name, &probe, probe_top, probe_candidates, None)
-            {
-                Ok(results) if !results.is_empty() => {
-                    // Index is serving results — now verify document count via collection
-                    let doc_count = coll
-                        .estimated_document_count()
-                        .run()
-                        .unwrap_or(0) as usize;
+            let cmd = doc! { "listSearchIndexes": &self.collection_name };
 
-                    if doc_count >= expected_count {
-                        println!(
-                            "Vector search index is caught up ({} documents indexed).",
-                            doc_count
-                        );
-                        return Ok(());
-                    }
+            if let Ok(result) = db.run_command(cmd).run() {
+                if let Ok(cursor) = result.get_document("cursor") {
+                    if let Ok(batch) = cursor.get_array("firstBatch") {
+                        for index in batch {
+                            if let Some(index_doc) = index.as_document() {
+                                let name = index_doc.get_str("name").unwrap_or("");
+                                if name != self.index_name {
+                                    continue;
+                                }
+                                let status = index_doc.get_str("status").unwrap_or("");
+                                let queryable =
+                                    index_doc.get_bool("queryable").unwrap_or(false);
 
-                    if last_print.elapsed().as_secs() >= 10 {
-                        println!(
-                            "  index building... collection has {}/{} documents",
-                            doc_count, expected_count
-                        );
-                        last_print = Instant::now();
-                    }
-                }
-                Ok(_) => {
-                    if last_print.elapsed().as_secs() >= 10 {
-                        println!("  index building... probe query returned 0 results");
-                        last_print = Instant::now();
-                    }
-                }
-                Err(_) => {
-                    if last_print.elapsed().as_secs() >= 10 {
-                        println!("  index building... probe query not yet available");
-                        last_print = Instant::now();
+                                if (status == "READY" || status == "ACTIVE") && queryable {
+                                    println!(
+                                        "Index ready (status={}, queryable=true) after {:.1}s.",
+                                        status,
+                                        start.elapsed().as_secs_f64()
+                                    );
+                                    return Ok(());
+                                }
+
+                                if last_print.elapsed().as_secs() >= 10 {
+                                    println!(
+                                        "  index building... status={}, queryable={}",
+                                        status, queryable
+                                    );
+                                    last_print = Instant::now();
+                                }
+                            }
+                        }
                     }
                 }
             }
