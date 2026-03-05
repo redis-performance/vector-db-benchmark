@@ -14,7 +14,8 @@
 #   make clean               - Clean build artifacts
 
 # Environment variables
-export HDF5_DIR ?= /usr/lib/x86_64-linux-gnu/hdf5/serial
+ARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)
+export HDF5_DIR ?= /usr/lib/$(ARCH)/hdf5/serial
 
 # Directories
 DATASETS_DIR := datasets
@@ -376,5 +377,5 @@ help:
 	@echo "  make clean             - Clean build artifacts"
 	@echo ""
 	@echo "Environment variables:"
-	@echo "  HDF5_DIR          - Path to HDF5 library (default: /usr/lib/x86_64-linux-gnu/hdf5/serial)"
+	@echo "  HDF5_DIR          - Path to HDF5 library (default: /usr/lib/<arch>/hdf5/serial)"
 
