@@ -26,6 +26,8 @@ fn results_dir() -> PathBuf {
 
 /// Run all matching experiments
 pub fn run(args: &Args) -> Result<(), String> {
+    println!("vector-db-benchmark v{}", env!("CARGO_PKG_VERSION"));
+
     let dataset_configs = read_dataset_configs()?;
     let engine_configs = read_engine_configs()?;
 

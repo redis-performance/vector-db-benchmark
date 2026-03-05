@@ -8,7 +8,7 @@ use clap::Parser;
 /// Supports redis and vectorsets engines.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "vector-db-benchmark")]
-#[command(about = "Run vector database benchmarks", long_about = None)]
+#[command(version, about = "Run vector database benchmarks", long_about = None)]
 pub struct Args {
     /// Engine patterns to run (supports wildcards like "redis*")
     #[arg(long, default_value = "*")]
