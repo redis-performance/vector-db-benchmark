@@ -10,17 +10,17 @@ use clap::Parser;
 #[command(name = "vector-db-benchmark")]
 #[command(version, about = "Run vector database benchmarks", long_about = None)]
 pub struct Args {
-    /// Engine patterns to run (supports wildcards like "redis*")
+    /// Engine patterns to run (supports wildcards like "redis*", repeatable)
     #[arg(long, default_value = "*")]
-    pub engines: String,
+    pub engines: Vec<String>,
 
     /// Path to JSON file containing engine configurations
     #[arg(long)]
     pub engines_file: Option<String>,
 
-    /// Dataset patterns to run (supports wildcards)
+    /// Dataset patterns to run (supports wildcards, repeatable)
     #[arg(long, default_value = "*")]
-    pub datasets: String,
+    pub datasets: Vec<String>,
 
     /// Filter by parallel thread counts (comma-separated)
     #[arg(long, value_delimiter = ',')]

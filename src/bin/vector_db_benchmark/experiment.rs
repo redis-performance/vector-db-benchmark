@@ -34,11 +34,14 @@ pub fn run(args: &Args) -> Result<(), String> {
     // Filter datasets by pattern
     let datasets: Vec<_> = dataset_configs
         .iter()
-        .filter(|(name, _)| matches_pattern(name, &args.datasets))
+        .filter(|(name, _)| args.datasets.iter().any(|p| matches_pattern(name, p)))
         .collect();
 
     if datasets.is_empty() {
-        return Err(format!("No datasets match pattern: '{}'", args.datasets));
+        return Err(format!(
+            "No datasets match pattern: '{}'",
+            args.datasets.join(", ")
+        ));
     }
 
     // Filter engines by pattern
@@ -59,14 +62,16 @@ pub fn run(args: &Args) -> Result<(), String> {
         .iter()
         .filter(|(name, config)| {
             let engine_type = config.engine.as_deref().unwrap_or("");
-            supported_engines.contains(&engine_type) && matches_pattern(name, &args.engines)
+            supported_engines.contains(&engine_type)
+                && args.engines.iter().any(|p| matches_pattern(name, p))
         })
         .collect();
 
     if engines.is_empty() {
         return Err(format!(
             "No engines match pattern: '{}'. Supported: {:?}.",
-            args.engines, supported_engines
+            args.engines.join(", "),
+            supported_engines
         ));
     }
 
