@@ -149,7 +149,8 @@ impl RedisEngine {
                                 .arg("TAG")
                                 .arg("SEPARATOR")
                                 .arg(";")
-                                .arg("SORTABLE");
+                                .arg("SORTABLE")
+                                .arg("UNF");
                         }
                         "int" | "float" => {
                             cmd.arg(field_name).arg("NUMERIC").arg("SORTABLE");
