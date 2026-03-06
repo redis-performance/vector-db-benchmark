@@ -286,8 +286,13 @@ impl MongoDBEngine {
     /// Wait for the vector search index to finish indexing all uploaded documents.
     ///
     /// Polls `listSearchIndexes` until the index reports `queryable=true` and
-    /// `status` is READY or ACTIVE, matching the Python v0 post_upload approach.
-    fn wait_for_index_catchup(&self, expected_count: usize, dim: usize) -> Result<(), String> {
+    /// `status` is READY or ACTIVE, then verifies with a probe search using
+    /// the first uploaded vector to confirm the index has actually ingested docs.
+    fn wait_for_index_catchup(
+        &self,
+        expected_count: usize,
+        probe_vector: &[f32],
+    ) -> Result<(), String> {
         println!(
             "Waiting for vector search index to index all {} documents...",
             expected_count
@@ -302,7 +307,6 @@ impl MongoDBEngine {
         loop {
             if !index_ready {
                 let cmd = doc! { "listSearchIndexes": &self.collection_name };
-
                 if let Ok(result) = db.run_command(cmd).run() {
                     if let Ok(cursor) = result.get_document("cursor") {
                         if let Ok(batch) = cursor.get_array("firstBatch") {
@@ -317,15 +321,8 @@ impl MongoDBEngine {
                                         index_doc.get_bool("queryable").unwrap_or(false);
 
                                     if (status == "READY" || status == "ACTIVE") && queryable {
-                                        println!(
-                                            "Index ready (status={}, queryable=true) after {:.1}s.",
-                                            status,
-                                            start.elapsed().as_secs_f64()
-                                        );
                                         index_ready = true;
-                                    }
-
-                                    if last_print.elapsed().as_secs() >= 10 {
+                                    } else if last_print.elapsed().as_secs() >= 10 {
                                         println!(
                                             "  index building... status={}, queryable={}",
                                             status, queryable
@@ -339,54 +336,24 @@ impl MongoDBEngine {
                 }
             }
 
-            // After index reports ready, verify documents are actually searchable
-            // via a probe query (Atlas may report READY before ingestion completes).
-            if index_ready && expected_count > 0 {
-                let probe_vec: Vec<mongodb::bson::Bson> =
-                    vec![mongodb::bson::Bson::Double(0.0); dim];
-                // For small datasets require all docs; for large ones just need 1 result
-                let probe_limit = expected_count.min(10) as i64;
-                let probe_threshold = if expected_count <= 10 {
-                    probe_limit as usize
-                } else {
-                    1
-                };
-                let pipeline = vec![
-                    doc! {
-                        "$vectorSearch": {
-                            "index": &self.index_name,
-                            "path": "vector",
-                            "queryVector": probe_vec,
-                            "numCandidates": probe_limit * 10,
-                            "limit": probe_limit,
-                        }
-                    },
-                    doc! { "$project": { "_id": 1 } },
-                ];
-
-                if let Ok(cursor) = coll.aggregate(pipeline).run() {
-                    let count = cursor.filter_map(|r| r.ok()).count();
-                    if count >= probe_threshold {
+            // Once the index reports ready, do a probe search to verify ingestion
+            if index_ready {
+                match vector_search(&coll, &self.index_name, probe_vector, 1, 10, None) {
+                    Ok(results) if !results.is_empty() => {
                         println!(
-                            "Probe search returned {} results, index caught up after {:.1}s.",
-                            count,
+                            "Index ready (probe search returned results) after {:.1}s.",
                             start.elapsed().as_secs_f64()
                         );
                         return Ok(());
                     }
-                    if last_print.elapsed().as_secs() >= 10 {
-                        println!(
-                            "  probe search returned {}/{} results, waiting...",
-                            count, probe_limit
-                        );
-                        last_print = Instant::now();
+                    _ => {
+                        if last_print.elapsed().as_secs() >= 10 {
+                            println!(
+                                "  index ready but probe search returned no results, waiting..."
+                            );
+                            last_print = Instant::now();
+                        }
                     }
-                } else if last_print.elapsed().as_secs() >= 10 {
-                    println!(
-                        "  probe search failed, retrying... ({:.0}s elapsed)",
-                        start.elapsed().as_secs_f64()
-                    );
-                    last_print = Instant::now();
                 }
             }
 
@@ -844,9 +811,10 @@ impl Engine for MongoDBEngine {
         );
 
         // Wait for the search index to finish indexing all uploaded documents
-        let dim = vectors.first().map(|v| v.len()).unwrap_or(1);
+        // Use the first vector as a probe query to verify actual search readiness
+        let probe_vector = vectors.first().ok_or("No vectors uploaded")?;
         let index_start = Instant::now();
-        self.wait_for_index_catchup(vectors.len(), dim)?;
+        self.wait_for_index_catchup(vectors.len(), probe_vector)?;
         let index_time = index_start.elapsed().as_secs_f64();
 
         let total_time = read_time + upload_time + index_time;
