@@ -340,11 +340,17 @@ impl MongoDBEngine {
             }
 
             // After index reports ready, verify documents are actually searchable
-            // via a probe query (Atlas Local may report READY before ingestion completes).
+            // via a probe query (Atlas may report READY before ingestion completes).
             if index_ready && expected_count > 0 {
                 let probe_vec: Vec<mongodb::bson::Bson> =
                     vec![mongodb::bson::Bson::Double(0.0); dim];
+                // For small datasets require all docs; for large ones just need 1 result
                 let probe_limit = expected_count.min(10) as i64;
+                let probe_threshold = if expected_count <= 10 {
+                    probe_limit as usize
+                } else {
+                    1
+                };
                 let pipeline = vec![
                     doc! {
                         "$vectorSearch": {
@@ -360,9 +366,9 @@ impl MongoDBEngine {
 
                 if let Ok(cursor) = coll.aggregate(pipeline).run() {
                     let count = cursor.filter_map(|r| r.ok()).count();
-                    if count >= probe_limit as usize {
+                    if count >= probe_threshold {
                         println!(
-                            "Probe search returned {} results, index fully caught up after {:.1}s.",
+                            "Probe search returned {} results, index caught up after {:.1}s.",
                             count,
                             start.elapsed().as_secs_f64()
                         );
@@ -375,6 +381,12 @@ impl MongoDBEngine {
                         );
                         last_print = Instant::now();
                     }
+                } else if last_print.elapsed().as_secs() >= 10 {
+                    println!(
+                        "  probe search failed, retrying... ({:.0}s elapsed)",
+                        start.elapsed().as_secs_f64()
+                    );
+                    last_print = Instant::now();
                 }
             }
 
