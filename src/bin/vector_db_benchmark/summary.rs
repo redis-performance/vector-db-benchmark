@@ -110,6 +110,88 @@ pub fn display_results_summary(engine_name: &str, dataset_name: &str, entries: &
     create_ascii_scatter_plot(engine_name, dataset_name, &buckets);
 }
 
+/// Display a mixed benchmark summary table with one row per update-search ratio.
+/// Only called when multiple phases (ratios) were used.
+pub fn display_mixed_summary(entries: &[SearchEntry]) {
+    // Group entries by ratio (None = pure search, Some("U:S") = mixed)
+    let mut by_ratio: BTreeMap<String, Vec<&SearchEntry>> = BTreeMap::new();
+    for entry in entries {
+        let key = entry
+            .results
+            .update_search_ratio
+            .clone()
+            .unwrap_or_else(|| "search".to_string());
+        by_ratio.entry(key).or_default().push(entry);
+    }
+
+    if by_ratio.len() < 2 {
+        return;
+    }
+
+    println!("\n{}", "-".repeat(90));
+    println!(
+        "{:<14} {:<10} {:<10} {:<12} {:<12} {:<10} {:<12}",
+        "Ratio", "Precision", "QPS", "P50 (ms)", "P95 (ms)", "Upd QPS", "Upd P50 (ms)"
+    );
+    println!("{}", "-".repeat(90));
+
+    // Sort: "search" first, then ratios by ascending numeric value
+    let mut keys: Vec<String> = by_ratio.keys().cloned().collect();
+    keys.sort_by(|a, b| {
+        let ra = ratio_sort_key(a);
+        let rb = ratio_sort_key(b);
+        ra.partial_cmp(&rb).unwrap()
+    });
+
+    for key in &keys {
+        let group = &by_ratio[key];
+        // Pick the entry with the highest QPS in this group
+        let best = group
+            .iter()
+            .max_by(|a, b| a.results.rps.partial_cmp(&b.results.rps).unwrap())
+            .unwrap();
+
+        let upd_qps = best
+            .results
+            .update_rps
+            .map(|v| format!("{:.1}", v))
+            .unwrap_or_else(|| "-".to_string());
+        let upd_p50 = best
+            .results
+            .update_p50_time
+            .map(|v| format!("{:.3}", v * 1000.0))
+            .unwrap_or_else(|| "-".to_string());
+
+        println!(
+            "{:<14} {:<10.4} {:<10.1} {:<12.3} {:<12.3} {:<10} {:<12}",
+            key,
+            best.results.mean_precision,
+            best.results.rps,
+            best.results.p50_time * 1000.0,
+            best.results.p95_time * 1000.0,
+            upd_qps,
+            upd_p50,
+        );
+    }
+    println!();
+}
+
+/// Return a sort key for ratio strings: "search" → -1, "U:S" → U/S.
+fn ratio_sort_key(key: &str) -> f64 {
+    if key == "search" {
+        return -1.0;
+    }
+    let parts: Vec<&str> = key.split(':').collect();
+    if parts.len() == 2 {
+        if let (Ok(u), Ok(s)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+            if s > 0.0 {
+                return u / s;
+            }
+        }
+    }
+    0.0
+}
+
 /// Save summary JSON matching Python v0 format.
 pub fn save_summary(
     engine_name: &str,

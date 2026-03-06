@@ -354,6 +354,9 @@ fn run_single_experiment(
     // Display precision summary and save summary JSON
     if !search_entries.is_empty() {
         summary::display_results_summary(engine.name(), &dataset.config.name, &search_entries);
+        if search_phases.len() > 1 {
+            summary::display_mixed_summary(&search_entries);
+        }
         summary::save_summary(
             engine.name(),
             &dataset.config.name,
