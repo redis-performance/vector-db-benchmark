@@ -46,7 +46,7 @@ pub struct UploadStats {
 }
 
 /// Update-to-search ratio for mixed workload benchmarks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UpdateSearchRatio {
     pub updates: u64,
     pub searches: u64,

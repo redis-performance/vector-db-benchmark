@@ -74,7 +74,8 @@ pub struct Args {
     #[arg(long, short)]
     pub verbose: bool,
 
-    /// Mixed benchmark: update-to-search ratio (e.g., "1:10" = 1 update per 10 searches)
+    /// Mixed benchmark: update-to-search ratio (e.g., "1:10" = 1 update per 10 searches).
+    /// Can be specified multiple times. "0:S" means pure search.
     #[arg(long)]
-    pub update_search_ratio: Option<String>,
+    pub update_search_ratio: Vec<String>,
 }

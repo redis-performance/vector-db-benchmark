@@ -97,14 +97,12 @@ pub fn run(args: &Args) -> Result<(), String> {
 
     for (engine_name, engine_config) in &engines {
         for (dataset_name, dataset_config) in &datasets {
+            let experiment_num = pb.position() + 1;
             pb.suspend(|| {
                 println!("\n{}", "=".repeat(60));
                 println!(
                     "Running experiment ({}/{}): {} - {}",
-                    pb.position() + 1,
-                    total_experiments,
-                    engine_name,
-                    dataset_name
+                    experiment_num, total_experiments, engine_name, dataset_name
                 );
                 println!("{}", "=".repeat(60));
             });
@@ -148,9 +146,6 @@ fn parse_update_search_ratio(s: &str) -> Result<UpdateSearchRatio, String> {
     if searches == 0 {
         return Err("Search count must be > 0".to_string());
     }
-    if updates == 0 {
-        return Err("Update count must be > 0".to_string());
-    }
     Ok(UpdateSearchRatio { updates, searches })
 }
 
@@ -189,141 +184,168 @@ fn run_single_experiment(
         save_upload_results(engine.name(), &dataset.config.name, &upload_stats)?;
     }
 
-    // Parse update-search-ratio if specified
-    let update_search_ratio = args
-        .update_search_ratio
-        .as_ref()
-        .map(|s| parse_update_search_ratio(s))
-        .transpose()?;
+    // Build ordered search phases: pure search first, then mixed ratios ascending
+    let search_phases: Vec<Option<UpdateSearchRatio>> = if args.update_search_ratio.is_empty() {
+        vec![None]
+    } else {
+        let mut phases = Vec::new();
+        let mut ratios: Vec<UpdateSearchRatio> = Vec::new();
+
+        for s in &args.update_search_ratio {
+            let ratio = parse_update_search_ratio(s)?;
+            if ratio.updates == 0 {
+                // 0:S means pure search
+                if !phases.contains(&None) {
+                    phases.push(None);
+                }
+            } else {
+                ratios.push(ratio);
+            }
+        }
+
+        // Sort mixed ratios ascending by updates/searches
+        ratios.sort_by(|a, b| {
+            let ra = a.updates as f64 / a.searches as f64;
+            let rb = b.updates as f64 / b.searches as f64;
+            ra.partial_cmp(&rb).unwrap()
+        });
+
+        for r in ratios {
+            phases.push(Some(r));
+        }
+        phases
+    };
 
     // Search phase
     let mut search_entries: Vec<SearchEntry> = Vec::new();
 
     if !args.skip_search {
-        if let Some(ref ratio) = update_search_ratio {
-            println!(
-                "Experiment stage: Mixed Search+Update (ratio {}:{})",
-                ratio.updates, ratio.searches
-            );
-        } else {
-            println!("Experiment stage: Search");
-        }
-
         // Clone search params to avoid borrow conflict
         let all_search_params: Vec<_> = engine.search_params().to_vec();
 
-        for (search_id, search_params) in all_search_params.iter().enumerate() {
-            // Filter by parallel if specified
-            if !args.parallels.is_empty() {
-                let parallel = search_params.parallel.unwrap_or(1) as i32;
-                if !args.parallels.contains(&parallel) {
-                    continue;
-                }
+        for phase in &search_phases {
+            match phase {
+                Some(ratio) => println!(
+                    "Experiment stage: Mixed Search+Update (ratio {}:{})",
+                    ratio.updates, ratio.searches
+                ),
+                None => println!("Experiment stage: Search"),
             }
 
-            // Filter by ef_runtime if specified
-            if !args.ef_runtime.is_empty() {
-                if let Some(ref inner) = search_params.search_params {
-                    if let Some(ef) = inner.ef {
-                        if !args.ef_runtime.contains(&ef) {
-                            continue;
+            for (search_id, search_params) in all_search_params.iter().enumerate() {
+                // Filter by parallel if specified
+                if !args.parallels.is_empty() {
+                    let parallel = search_params.parallel.unwrap_or(1) as i32;
+                    if !args.parallels.contains(&parallel) {
+                        continue;
+                    }
+                }
+
+                // Filter by ef_runtime if specified
+                if !args.ef_runtime.is_empty() {
+                    if let Some(ref inner) = search_params.search_params {
+                        if let Some(ef) = inner.ef {
+                            if !args.ef_runtime.contains(&ef) {
+                                continue;
+                            }
                         }
                     }
                 }
-            }
 
-            let parallel = search_params.parallel.unwrap_or(1);
+                let parallel = search_params.parallel.unwrap_or(1);
 
-            // Check if this search_params requires calibration
-            let calibrated_params = if let (Some(cal_param), Some(cal_precision)) = (
-                &search_params.calibration_param,
-                search_params.calibration_precision,
-            ) {
-                println!(
-                    "\tCalibrating {}: target precision={:.4}, parallel={}",
-                    cal_param, cal_precision, parallel
-                );
-                match calibrate(
-                    engine,
-                    dataset,
-                    search_params,
-                    cal_param,
-                    cal_precision,
-                    args.queries,
+                // Check if this search_params requires calibration
+                let calibrated_params = if let (Some(cal_param), Some(cal_precision)) = (
+                    &search_params.calibration_param,
+                    search_params.calibration_precision,
                 ) {
-                    Ok((value, precision)) => {
-                        println!(
-                            "\tCalibrated {}={} → precision={:.4}",
-                            cal_param, value, precision
-                        );
-                        // Create a new SearchParams with calibrated value
-                        let mut calibrated = search_params.clone();
-                        let inner =
-                            calibrated
-                                .search_params
-                                .get_or_insert_with(|| InnerSearchParams {
-                                    ef: None,
-                                    extra: None,
-                                });
-                        if cal_param == "ef" {
-                            inner.ef = Some(value);
-                        } else {
-                            let extras = inner.extra.get_or_insert_with(Default::default);
-                            extras.insert(cal_param.clone(), serde_json::json!(value));
+                    println!(
+                        "\tCalibrating {}: target precision={:.4}, parallel={}",
+                        cal_param, cal_precision, parallel
+                    );
+                    match calibrate(
+                        engine,
+                        dataset,
+                        search_params,
+                        cal_param,
+                        cal_precision,
+                        args.queries,
+                    ) {
+                        Ok((value, precision)) => {
+                            println!(
+                                "\tCalibrated {}={} → precision={:.4}",
+                                cal_param, value, precision
+                            );
+                            // Create a new SearchParams with calibrated value
+                            let mut calibrated = search_params.clone();
+                            let inner =
+                                calibrated
+                                    .search_params
+                                    .get_or_insert_with(|| InnerSearchParams {
+                                        ef: None,
+                                        extra: None,
+                                    });
+                            if cal_param == "ef" {
+                                inner.ef = Some(value);
+                            } else {
+                                let extras = inner.extra.get_or_insert_with(Default::default);
+                                extras.insert(cal_param.clone(), serde_json::json!(value));
+                            }
+                            Some(calibrated)
                         }
-                        Some(calibrated)
+                        Err(e) => {
+                            eprintln!("\tCalibration failed: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let effective_params = calibrated_params.as_ref().unwrap_or(search_params);
+                let effective_ef = effective_params
+                    .search_params
+                    .as_ref()
+                    .and_then(|p| p.ef)
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "default".to_string());
+
+                println!(
+                    "\tRunning search {}: ef={}, parallel={}",
+                    search_id, effective_ef, parallel
+                );
+
+                let search_result = match phase {
+                    Some(ratio) => {
+                        engine.search_mixed(dataset, effective_params, args.queries, ratio)
+                    }
+                    None => engine.search(dataset, effective_params, args.queries),
+                };
+
+                match search_result {
+                    Ok(results) => {
+                        println!(
+                            "\t→ QPS: {:.1}, Precision: {:.4}",
+                            results.rps, results.mean_precision
+                        );
+                        save_search_results(
+                            engine.name(),
+                            &dataset.config.name,
+                            search_id,
+                            effective_params,
+                            &results,
+                        )?;
+
+                        search_entries.push(SearchEntry {
+                            search_id,
+                            ef: effective_ef.clone(),
+                            parallel,
+                            results,
+                        });
                     }
                     Err(e) => {
-                        eprintln!("\tCalibration failed: {}", e);
-                        None
+                        eprintln!("\tSearch failed: {}", e);
                     }
-                }
-            } else {
-                None
-            };
-
-            let effective_params = calibrated_params.as_ref().unwrap_or(search_params);
-            let effective_ef = effective_params
-                .search_params
-                .as_ref()
-                .and_then(|p| p.ef)
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "default".to_string());
-
-            println!(
-                "\tRunning search {}: ef={}, parallel={}",
-                search_id, effective_ef, parallel
-            );
-
-            let search_result = if let Some(ref ratio) = update_search_ratio {
-                engine.search_mixed(dataset, effective_params, args.queries, ratio)
-            } else {
-                engine.search(dataset, effective_params, args.queries)
-            };
-
-            match search_result {
-                Ok(results) => {
-                    println!(
-                        "\t→ QPS: {:.1}, Precision: {:.4}",
-                        results.rps, results.mean_precision
-                    );
-                    save_search_results(
-                        engine.name(),
-                        &dataset.config.name,
-                        search_id,
-                        effective_params,
-                        &results,
-                    )?;
-
-                    search_entries.push(SearchEntry {
-                        search_id,
-                        ef: effective_ef.clone(),
-                        parallel,
-                        results,
-                    });
-                }
-                Err(e) => {
-                    eprintln!("\tSearch failed: {}", e);
                 }
             }
         }
