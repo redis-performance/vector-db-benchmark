@@ -413,9 +413,14 @@ fn save_search_results(
 ) -> Result<(), String> {
     let timestamp = Local::now().format("%Y-%m-%d-%H-%M-%S");
     let pid = std::process::id();
+    let mixed_tag = results
+        .update_search_ratio
+        .as_ref()
+        .map(|r| format!("-mixed-{}", r.replace(':', "x")))
+        .unwrap_or_default();
     let filename = format!(
-        "{}-{}-search-{}-{}-{}.json",
-        engine_name, dataset_name, search_id, pid, timestamp
+        "{}-{}-search-{}{}-{}-{}.json",
+        engine_name, dataset_name, search_id, mixed_tag, pid, timestamp
     );
 
     let mut result = json!({
