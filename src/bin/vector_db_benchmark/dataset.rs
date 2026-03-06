@@ -159,6 +159,12 @@ impl Dataset {
                 // Compound format: tests.jsonl includes conditions
                 read_compound_queries(path_str, normalize)
             }
+            "hdf5" | "h5" => {
+                // Explicit HDF5 type — trust it regardless of file extension
+                let (queries, neighbors) = self.read_hdf5_queries(path_str)?;
+                let conditions = vec![None; queries.len()];
+                Ok((queries, neighbors, conditions))
+            }
             "jsonl" => {
                 let dir = if path.is_dir() {
                     path.clone()
