@@ -82,10 +82,16 @@ pub fn run(args: &Args) -> Result<(), String> {
     );
 
     // Run experiments
+    let total_experiments = engines.len() * datasets.len();
+    let mut experiment_num = 0;
     for (engine_name, engine_config) in &engines {
         for (dataset_name, dataset_config) in &datasets {
+            experiment_num += 1;
             println!("\n{}", "=".repeat(60));
-            println!("Running experiment: {} - {}", engine_name, dataset_name);
+            println!(
+                "Running experiment ({}/{}): {} - {}",
+                experiment_num, total_experiments, engine_name, dataset_name
+            );
             println!("{}", "=".repeat(60));
 
             let dataset = Dataset::new((*dataset_config).clone());
