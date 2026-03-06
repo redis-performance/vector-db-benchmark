@@ -11,9 +11,11 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use mongodb::bson::{doc, Document};
 use mongodb::sync::Client;
 
+use rand::{seq::SliceRandom, SeedableRng};
+
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::{Engine, SearchResults, UploadStats};
+use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
 use vector_db_benchmark::readers::metadata::MetadataItem;
 
 const DEFAULT_DB: &str = "bench";
@@ -285,49 +287,93 @@ impl MongoDBEngine {
     ///
     /// Polls `listSearchIndexes` until the index reports `queryable=true` and
     /// `status` is READY or ACTIVE, matching the Python v0 post_upload approach.
-    fn wait_for_index_catchup(&self, expected_count: usize, _dim: usize) -> Result<(), String> {
+    fn wait_for_index_catchup(&self, expected_count: usize, dim: usize) -> Result<(), String> {
         println!(
             "Waiting for vector search index to index all {} documents...",
             expected_count
         );
         let db = self.client.database(&self.db_name);
+        let coll = db.collection::<Document>(&self.collection_name);
         let start = Instant::now();
         let deadline = start + std::time::Duration::from_secs(600);
         let mut last_print = Instant::now();
+        let mut index_ready = false;
 
         loop {
-            let cmd = doc! { "listSearchIndexes": &self.collection_name };
+            if !index_ready {
+                let cmd = doc! { "listSearchIndexes": &self.collection_name };
 
-            if let Ok(result) = db.run_command(cmd).run() {
-                if let Ok(cursor) = result.get_document("cursor") {
-                    if let Ok(batch) = cursor.get_array("firstBatch") {
-                        for index in batch {
-                            if let Some(index_doc) = index.as_document() {
-                                let name = index_doc.get_str("name").unwrap_or("");
-                                if name != self.index_name {
-                                    continue;
-                                }
-                                let status = index_doc.get_str("status").unwrap_or("");
-                                let queryable = index_doc.get_bool("queryable").unwrap_or(false);
+                if let Ok(result) = db.run_command(cmd).run() {
+                    if let Ok(cursor) = result.get_document("cursor") {
+                        if let Ok(batch) = cursor.get_array("firstBatch") {
+                            for index in batch {
+                                if let Some(index_doc) = index.as_document() {
+                                    let name = index_doc.get_str("name").unwrap_or("");
+                                    if name != self.index_name {
+                                        continue;
+                                    }
+                                    let status = index_doc.get_str("status").unwrap_or("");
+                                    let queryable =
+                                        index_doc.get_bool("queryable").unwrap_or(false);
 
-                                if (status == "READY" || status == "ACTIVE") && queryable {
-                                    println!(
-                                        "Index ready (status={}, queryable=true) after {:.1}s.",
-                                        status,
-                                        start.elapsed().as_secs_f64()
-                                    );
-                                    return Ok(());
-                                }
+                                    if (status == "READY" || status == "ACTIVE") && queryable {
+                                        println!(
+                                            "Index ready (status={}, queryable=true) after {:.1}s.",
+                                            status,
+                                            start.elapsed().as_secs_f64()
+                                        );
+                                        index_ready = true;
+                                    }
 
-                                if last_print.elapsed().as_secs() >= 10 {
-                                    println!(
-                                        "  index building... status={}, queryable={}",
-                                        status, queryable
-                                    );
-                                    last_print = Instant::now();
+                                    if last_print.elapsed().as_secs() >= 10 {
+                                        println!(
+                                            "  index building... status={}, queryable={}",
+                                            status, queryable
+                                        );
+                                        last_print = Instant::now();
+                                    }
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // After index reports ready, verify documents are actually searchable
+            // via a probe query (Atlas Local may report READY before ingestion completes).
+            if index_ready && expected_count > 0 {
+                let probe_vec: Vec<mongodb::bson::Bson> =
+                    vec![mongodb::bson::Bson::Double(0.0); dim];
+                let probe_limit = expected_count.min(10) as i64;
+                let pipeline = vec![
+                    doc! {
+                        "$vectorSearch": {
+                            "index": &self.index_name,
+                            "path": "vector",
+                            "queryVector": probe_vec,
+                            "numCandidates": probe_limit * 10,
+                            "limit": probe_limit,
+                        }
+                    },
+                    doc! { "$project": { "_id": 1 } },
+                ];
+
+                if let Ok(cursor) = coll.aggregate(pipeline).run() {
+                    let count = cursor.filter_map(|r| r.ok()).count();
+                    if count >= probe_limit as usize {
+                        println!(
+                            "Probe search returned {} results, index fully caught up after {:.1}s.",
+                            count,
+                            start.elapsed().as_secs_f64()
+                        );
+                        return Ok(());
+                    }
+                    if last_print.elapsed().as_secs() >= 10 {
+                        println!(
+                            "  probe search returned {}/{} results, waiting...",
+                            count, probe_limit
+                        );
+                        last_print = Instant::now();
                     }
                 }
             }
@@ -489,6 +535,49 @@ fn insert_batch(
     coll.insert_many(docs)
         .run()
         .map_err(|e| format!("Insert batch failed: {}", e))?;
+
+    Ok(())
+}
+
+/// Update a single document's vector and metadata.
+fn update_one_doc(
+    coll: &mongodb::sync::Collection<Document>,
+    id: i64,
+    vector: &[f32],
+    metadata: Option<&MetadataItem>,
+) -> Result<(), String> {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+
+    let bson_vec: Vec<mongodb::bson::Bson> = vector
+        .iter()
+        .map(|&f| mongodb::bson::Bson::Double(f as f64))
+        .collect();
+
+    let mut set_doc = doc! { "vector": bson_vec };
+
+    if let Some(meta) = metadata {
+        for (k, v) in &meta.fields {
+            let bson_val = match v {
+                MetadataValue::String(s) => mongodb::bson::Bson::String(s.clone()),
+                MetadataValue::Labels(labels) => {
+                    let arr: Vec<mongodb::bson::Bson> = labels
+                        .iter()
+                        .map(|l| mongodb::bson::Bson::String(l.clone()))
+                        .collect();
+                    mongodb::bson::Bson::Array(arr)
+                }
+                MetadataValue::Geo { lon, lat } => mongodb::bson::Bson::Document(doc! {
+                    "type": "Point",
+                    "coordinates": [*lon, *lat],
+                }),
+            };
+            set_doc.insert(k.clone(), bson_val);
+        }
+    }
+
+    coll.update_one(doc! { "_id": id }, doc! { "$set": set_doc })
+        .run()
+        .map_err(|e| format!("Update failed for id {}: {}", id, e))?;
 
     Ok(())
 }
@@ -927,6 +1016,254 @@ impl Engine for MongoDBEngine {
             num_queries: times.len(),
             parallel,
             ..Default::default()
+        })
+    }
+
+    fn search_mixed(
+        &mut self,
+        dataset: &Dataset,
+        params: &SearchParams,
+        num_queries: i64,
+        ratio: &UpdateSearchRatio,
+    ) -> Result<SearchResults, String> {
+        let parallel = params.parallel.unwrap_or(1) as usize;
+        let num_candidates_factor = params
+            .num_candidates
+            .unwrap_or(self.config.num_candidates_factor);
+
+        // Read queries and ground truth
+        let query_path = dataset.get_path()?;
+        println!("\tReading queries from {}...", query_path.display());
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+
+        let parsed_filters: Vec<Option<Document>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_mongo_conditions))
+            .collect();
+
+        // Read vectors for updates
+        let normalize = dataset.needs_normalization();
+        println!("\tReading vectors for updates...");
+        let (upd_ids, upd_vectors, upd_metadata) = dataset.read_vectors(normalize)?;
+
+        // Create deterministic shuffled update sequence
+        let mut update_seq: Vec<usize> = (0..upd_ids.len()).collect();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        update_seq.shuffle(&mut rng);
+
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(queries.len())
+        } else {
+            queries.len()
+        };
+
+        let search_times: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let update_times: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let search_idx = Arc::new(AtomicUsize::new(0));
+        let update_idx = Arc::new(AtomicUsize::new(0));
+
+        let ratio_searches = ratio.searches as usize;
+        let ratio_updates = ratio.updates as usize;
+        let update_seq_len = update_seq.len();
+
+        let pb = self.create_progress_bar(num_to_run);
+        let start_time = Instant::now();
+
+        let uri = self.uri.clone();
+        let db_name = self.db_name.clone();
+        let collection_name = self.collection_name.clone();
+        let index_name = self.index_name.clone();
+
+        std::thread::scope(|s| {
+            for _ in 0..parallel {
+                let uri = uri.clone();
+                let db_name = db_name.clone();
+                let collection_name = collection_name.clone();
+                let index_name = index_name.clone();
+                let queries = &queries;
+                let neighbors = &neighbors;
+                let parsed_filters = &parsed_filters;
+                let upd_ids = &upd_ids;
+                let upd_vectors = &upd_vectors;
+                let upd_metadata = &upd_metadata;
+                let update_seq = &update_seq;
+                let search_times = Arc::clone(&search_times);
+                let update_times = Arc::clone(&update_times);
+                let precisions = Arc::clone(&precisions);
+                let search_idx = Arc::clone(&search_idx);
+                let update_idx = Arc::clone(&update_idx);
+                let pb = &pb;
+
+                s.spawn(move || {
+                    let client = match Client::with_uri_str(&uri) {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let coll = client
+                        .database(&db_name)
+                        .collection::<Document>(&collection_name);
+
+                    'outer: loop {
+                        // Search phase: do S searches
+                        for _ in 0..ratio_searches {
+                            let idx = search_idx.fetch_add(1, Ordering::SeqCst);
+                            if idx >= num_to_run {
+                                break 'outer;
+                            }
+
+                            let top = explicit_top.unwrap_or_else(|| {
+                                let n = neighbors[idx].len();
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
+                            });
+
+                            let num_candidates = (top as i64) * num_candidates_factor;
+
+                            let query_start = Instant::now();
+                            let results = vector_search(
+                                &coll,
+                                &index_name,
+                                &queries[idx],
+                                top,
+                                num_candidates,
+                                parsed_filters[idx].as_ref(),
+                            );
+                            let query_time = query_start.elapsed().as_secs_f64();
+
+                            search_times.lock().unwrap().push(query_time);
+
+                            if let Ok(result_ids) = results {
+                                let ground_truth: std::collections::HashSet<i64> =
+                                    neighbors[idx].iter().take(top).copied().collect();
+                                let found: std::collections::HashSet<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let hits = ground_truth.intersection(&found).count();
+                                let precision = hits as f64 / top as f64;
+                                precisions.lock().unwrap().push(precision);
+                            } else {
+                                precisions.lock().unwrap().push(0.0);
+                            }
+                            pb.inc(1);
+                        }
+
+                        // Update phase: do U updates
+                        for _ in 0..ratio_updates {
+                            let uidx = update_idx.fetch_add(1, Ordering::SeqCst);
+                            let data_idx = update_seq[uidx % update_seq_len];
+
+                            let update_start = Instant::now();
+                            let _ = update_one_doc(
+                                &coll,
+                                upd_ids[data_idx],
+                                &upd_vectors[data_idx],
+                                upd_metadata[data_idx].as_ref(),
+                            );
+                            let update_time = update_start.elapsed().as_secs_f64();
+                            update_times.lock().unwrap().push(update_time);
+                        }
+                    }
+                });
+            }
+        });
+
+        pb.finish_and_clear();
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        let times = search_times.lock().unwrap();
+        let precs = precisions.lock().unwrap();
+        let u_times = update_times.lock().unwrap();
+
+        if times.is_empty() {
+            return Err("No searches completed".to_string());
+        }
+
+        let rps = times.len() as f64 / total_time;
+        let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
+        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
+            / times.len() as f64)
+            .sqrt();
+        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        let mut sorted_times: Vec<f64> = times.clone();
+        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
+        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
+        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
+
+        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
+        let p95_time = sorted_times
+            .get(p95_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+        let p99_time = sorted_times
+            .get(p99_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+
+        // Update latency stats
+        let (update_count, update_rps, update_mean_time, update_p50, update_p95, update_p99) =
+            if !u_times.is_empty() {
+                let u_rps = u_times.len() as f64 / total_time;
+                let u_mean = u_times.iter().sum::<f64>() / u_times.len() as f64;
+                let mut u_sorted: Vec<f64> = u_times.clone();
+                u_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let u_p50 = u_sorted
+                    .get((u_sorted.len() as f64 * 0.50) as usize)
+                    .copied()
+                    .unwrap_or(0.0);
+                let u_p95 = u_sorted
+                    .get(((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1))
+                    .copied()
+                    .unwrap_or(0.0);
+                let u_p99 = u_sorted
+                    .get(((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1))
+                    .copied()
+                    .unwrap_or(0.0);
+                (
+                    Some(u_times.len()),
+                    Some(u_rps),
+                    Some(u_mean),
+                    Some(u_p50),
+                    Some(u_p95),
+                    Some(u_p99),
+                )
+            } else {
+                (None, None, None, None, None, None)
+            };
+
+        Ok(SearchResults {
+            total_time,
+            mean_time,
+            mean_precision,
+            std_time,
+            min_time,
+            max_time,
+            rps,
+            p50_time,
+            p95_time,
+            p99_time,
+            precisions: precs.to_vec(),
+            latencies: times.to_vec(),
+            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
+            num_queries: times.len(),
+            parallel,
+            update_count,
+            update_rps,
+            update_mean_time,
+            update_p50_time: update_p50,
+            update_p95_time: update_p95,
+            update_p99_time: update_p99,
+            update_latencies: Some(u_times.to_vec()),
+            update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
         })
     }
 

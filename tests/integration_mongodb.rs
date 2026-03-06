@@ -846,3 +846,153 @@ fn test_binary_mongodb_multi_dataset() {
     let _ = fs::remove_dir_all(&project1);
     let _ = fs::remove_dir_all(&project2);
 }
+
+/// Read a specific field from the search results JSON.
+fn read_search_result_field(
+    results_dir: &PathBuf,
+    engine_name: &str,
+    field: &str,
+) -> Option<serde_json::Value> {
+    let pattern = format!("{}-*-search-*.json", engine_name);
+    for entry in fs::read_dir(results_dir).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if glob::Pattern::new(&pattern).unwrap().matches(&name) {
+            let content = fs::read_to_string(entry.path()).unwrap();
+            let result: serde_json::Value = serde_json::from_str(&content).unwrap();
+            return result["results"].get(field).cloned();
+        }
+    }
+    None
+}
+
+/// End-to-end test: runs the binary with --update-search-ratio against MongoDB.
+#[test]
+fn test_binary_mongodb_mixed_benchmark() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let port: u16 = std::env::var("MONGODB_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MONGODB_PORT);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors_l2(q, &vectors, top))
+        .collect();
+
+    let engine_name = "test-mongodb-mixed";
+    let engine_config = serde_json::json!([{
+        "name": engine_name,
+        "engine": "mongodb",
+        "connection_params": {},
+        "collection_params": {},
+        "search_params": [{
+            "parallel": 1,
+            "num_candidates": 20,
+            "top": top,
+        }],
+        "upload_params": {
+            "parallel": 1,
+            "batch_size": 50
+        }
+    }]);
+
+    let project_root = create_test_project(
+        "test-mixed",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+
+    let bin = binary_path();
+    assert!(bin.exists(), "Binary not found at {:?}", bin);
+
+    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles)
+    let output = Command::new(&bin)
+        .args([
+            "--engines",
+            engine_name,
+            "--datasets",
+            "test-mixed",
+            "--host",
+            MONGODB_HOST,
+            "--update-search-ratio",
+            "1:5",
+        ])
+        .env("MONGODB_PORT", port.to_string())
+        .env("MONGODB_DB", TEST_DB)
+        .env("MONGODB_COLLECTION", TEST_COLLECTION)
+        .env("MONGODB_INDEX_NAME", TEST_INDEX)
+        .current_dir(&project_root)
+        .output()
+        .expect("Failed to run vector-db-benchmark");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    println!("stdout:\n{}", stdout);
+    if !stderr.is_empty() {
+        println!("stderr:\n{}", stderr);
+    }
+
+    assert!(
+        output.status.success(),
+        "Binary failed.\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // Verify stdout mentions mixed mode
+    assert!(
+        stdout.contains("Mixed Search+Update"),
+        "Expected 'Mixed Search+Update' in output.\nstdout: {}",
+        stdout,
+    );
+
+    // Verify results JSON has update metrics
+    let results_dir = project_root.join("results");
+
+    let update_count = read_search_result_field(&results_dir, engine_name, "update_count");
+    assert_eq!(
+        update_count,
+        Some(serde_json::json!(2)),
+        "Expected update_count=2 in results JSON, got {:?}",
+        update_count
+    );
+
+    let ratio = read_search_result_field(&results_dir, engine_name, "update_search_ratio");
+    assert_eq!(
+        ratio,
+        Some(serde_json::json!("1:5")),
+        "Expected update_search_ratio='1:5' in results JSON, got {:?}",
+        ratio
+    );
+
+    let update_rps = read_search_result_field(&results_dir, engine_name, "update_rps");
+    assert!(
+        update_rps.is_some() && update_rps.unwrap().as_f64().unwrap() > 0.0,
+        "Expected update_rps > 0 in results JSON"
+    );
+
+    // Precision should still be valid
+    let precision = read_search_precision(&results_dir, engine_name);
+    assert!(
+        precision >= 0.8,
+        "Mixed benchmark precision should be >= 0.8, got {}",
+        precision
+    );
+
+    drop_test_collection();
+    fs::remove_dir_all(&project_root).ok();
+}
