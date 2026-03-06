@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use chrono::Local;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::json;
 
 use crate::cli::Args;
@@ -83,16 +84,30 @@ pub fn run(args: &Args) -> Result<(), String> {
 
     // Run experiments
     let total_experiments = engines.len() * datasets.len();
-    let mut experiment_num = 0;
+    let pb = ProgressBar::new(total_experiments as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} Overall: [{elapsed_precise}] [{bar:30.cyan/blue}] {pos}/{len} experiments (ETA: {eta})",
+            )
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.enable_steady_tick(std::time::Duration::from_secs(1));
+
     for (engine_name, engine_config) in &engines {
         for (dataset_name, dataset_config) in &datasets {
-            experiment_num += 1;
-            println!("\n{}", "=".repeat(60));
-            println!(
-                "Running experiment ({}/{}): {} - {}",
-                experiment_num, total_experiments, engine_name, dataset_name
-            );
-            println!("{}", "=".repeat(60));
+            pb.suspend(|| {
+                println!("\n{}", "=".repeat(60));
+                println!(
+                    "Running experiment ({}/{}): {} - {}",
+                    pb.position() + 1,
+                    total_experiments,
+                    engine_name,
+                    dataset_name
+                );
+                println!("{}", "=".repeat(60));
+            });
 
             let dataset = Dataset::new((*dataset_config).clone());
 
@@ -103,12 +118,15 @@ pub fn run(args: &Args) -> Result<(), String> {
             if let Err(e) = run_single_experiment(&mut *engine, &dataset, args) {
                 eprintln!("Experiment failed: {}", e);
                 if args.exit_on_error {
+                    pb.finish_and_clear();
                     return Err(e);
                 }
             }
+            pb.inc(1);
         }
     }
 
+    pb.finish_and_clear();
     Ok(())
 }
 
