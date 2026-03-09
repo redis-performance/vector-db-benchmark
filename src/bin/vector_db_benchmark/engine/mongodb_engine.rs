@@ -27,6 +27,7 @@ struct MongoConfig {
     batch_size: usize,
     parallel: usize,
     num_candidates_factor: i64,
+    skip_vector_index: bool,
 }
 
 pub struct MongoDBEngine {
@@ -90,10 +91,156 @@ impl MongoDBEngine {
                 batch_size,
                 parallel,
                 num_candidates_factor,
+                skip_vector_index: engine_config.skip_vector_index,
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             uri,
             client,
+        })
+    }
+
+    /// Filter-only search: run collection.find(filter).limit(top) with no vector search.
+    fn search_filter_only(
+        &self,
+        dataset: &Dataset,
+        params: &SearchParams,
+        num_queries: i64,
+    ) -> Result<SearchResults, String> {
+        let parallel = params.parallel.unwrap_or(1) as usize;
+
+        let query_path = dataset.get_path()?;
+        println!("\tReading queries from {}...", query_path.display());
+        let (_queries, neighbors, conditions) = dataset.read_queries()?;
+
+        let parsed_filters: Vec<Option<Document>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_mongo_conditions))
+            .collect();
+
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(parsed_filters.len())
+        } else {
+            parsed_filters.len()
+        };
+
+        let runnable_indices: Vec<usize> = (0..num_to_run)
+            .filter(|&i| parsed_filters[i].is_some())
+            .collect();
+
+        if runnable_indices.is_empty() {
+            return Err(
+                "No queries with filter conditions for filter-only search".to_string(),
+            );
+        }
+
+        let search_times: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(runnable_indices.len())));
+        let query_idx = Arc::new(AtomicUsize::new(0));
+
+        let pb = self.create_progress_bar(runnable_indices.len());
+        let start_time = Instant::now();
+
+        let uri = self.uri.clone();
+        let db_name = self.db_name.clone();
+        let collection_name = self.collection_name.clone();
+
+        std::thread::scope(|s| {
+            for _ in 0..parallel {
+                let uri = uri.clone();
+                let db_name = db_name.clone();
+                let collection_name = collection_name.clone();
+                let parsed_filters = &parsed_filters;
+                let runnable_indices = &runnable_indices;
+                let neighbors = &neighbors;
+                let search_times = Arc::clone(&search_times);
+                let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
+
+                s.spawn(move || {
+                    let client = match Client::with_uri_str(&uri) {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let coll = client
+                        .database(&db_name)
+                        .collection::<Document>(&collection_name);
+
+                    loop {
+                        let seq = query_idx.fetch_add(1, Ordering::SeqCst);
+                        if seq >= runnable_indices.len() {
+                            break;
+                        }
+                        let idx = runnable_indices[seq];
+
+                        let top = explicit_top.unwrap_or_else(|| {
+                            let n = neighbors[idx].len();
+                            if n > 0 { n } else { 10 }
+                        });
+
+                        let filter = parsed_filters[idx].as_ref().unwrap();
+
+                        let query_start = Instant::now();
+                        let _ = filter_only_find(&coll, filter, top);
+                        let query_time = query_start.elapsed().as_secs_f64();
+
+                        search_times.lock().unwrap().push(query_time);
+                        pb.inc(1);
+                    }
+                });
+            }
+        });
+
+        pb.finish_and_clear();
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        let times = search_times.lock().unwrap();
+        if times.is_empty() {
+            return Err("No filter-only searches completed".to_string());
+        }
+
+        let rps = times.len() as f64 / total_time;
+        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
+        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
+            / times.len() as f64)
+            .sqrt();
+        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        let mut sorted_times: Vec<f64> = times.clone();
+        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
+        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
+        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
+
+        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
+        let p95_time = sorted_times
+            .get(p95_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+        let p99_time = sorted_times
+            .get(p99_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+
+        Ok(SearchResults {
+            total_time,
+            mean_time,
+            mean_precision: -1.0,
+            std_time,
+            min_time,
+            max_time,
+            rps,
+            p50_time,
+            p95_time,
+            p99_time,
+            precisions: vec![],
+            latencies: times.to_vec(),
+            top: 0,
+            num_queries: times.len(),
+            parallel,
+            ..Default::default()
         })
     }
 
@@ -561,6 +708,27 @@ fn update_one_doc(
     Ok(())
 }
 
+/// Execute a filter-only find (no vector search).
+fn filter_only_find(
+    coll: &mongodb::sync::Collection<Document>,
+    filter: &Document,
+    top: usize,
+) -> Result<usize, String> {
+    let cursor = coll
+        .find(filter.clone())
+        .limit(top as i64)
+        .projection(doc! { "_id": 1 })
+        .run()
+        .map_err(|e| format!("Filter-only find failed: {}", e))?;
+
+    let mut count = 0usize;
+    for result in cursor {
+        let _ = result.map_err(|e| format!("Failed to read result: {}", e))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// Execute a vector search using $vectorSearch aggregation pipeline.
 fn vector_search(
     coll: &mongodb::sync::Collection<Document>,
@@ -761,6 +929,11 @@ impl Engine for MongoDBEngine {
             self.db_name, self.collection_name
         );
 
+        if self.config.skip_vector_index {
+            println!("Skipping vector index (filter-only mode)");
+            return Ok(());
+        }
+
         // Insert a dummy document so the index has something to build on
         let coll = db.collection::<Document>(&self.collection_name);
         let dim = dataset.vector_size();
@@ -810,18 +983,24 @@ impl Engine for MongoDBEngine {
             vectors.len() as f64 / upload_time
         );
 
-        // Wait for the search index to finish indexing all uploaded documents
-        // Use the first vector as a probe query to verify actual search readiness
-        let probe_vector = vectors.first().ok_or("No vectors uploaded")?;
-        let index_start = Instant::now();
-        self.wait_for_index_catchup(vectors.len(), probe_vector)?;
-        let index_time = index_start.elapsed().as_secs_f64();
+        let total_time;
+        if self.config.skip_vector_index {
+            total_time = read_time + upload_time;
+            println!("Total time (read+upload): {:.3}s (no vector index)", total_time);
+        } else {
+            // Wait for the search index to finish indexing all uploaded documents
+            // Use the first vector as a probe query to verify actual search readiness
+            let probe_vector = vectors.first().ok_or("No vectors uploaded")?;
+            let index_start = Instant::now();
+            self.wait_for_index_catchup(vectors.len(), probe_vector)?;
+            let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time + index_time;
-        println!(
-            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
-            index_time, total_time
-        );
+            total_time = read_time + upload_time + index_time;
+            println!(
+                "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+                index_time, total_time
+            );
+        }
 
         Ok(UploadStats {
             upload_time,
@@ -839,6 +1018,10 @@ impl Engine for MongoDBEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        if self.config.skip_vector_index {
+            return self.search_filter_only(dataset, params, num_queries);
+        }
+
         let parallel = params.parallel.unwrap_or(1) as usize;
         let num_candidates_factor = params
             .num_candidates

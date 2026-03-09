@@ -85,6 +85,31 @@ pub fn display_results_summary(engine_name: &str, dataset_name: &str, entries: &
         return;
     }
 
+    // Filter-only mode: precision is not applicable (mean_precision == -1.0)
+    let filter_only = entries
+        .iter()
+        .all(|e| e.results.mean_precision < 0.0);
+
+    if filter_only {
+        println!("{}", "-".repeat(40));
+        println!(
+            "{:<10} {:<12} {:<12}",
+            "QPS", "P50 (ms)", "P95 (ms)"
+        );
+        println!("{}", "-".repeat(40));
+
+        for e in entries {
+            println!(
+                "{:<10.1} {:<12.3} {:<12.3}",
+                e.results.rps,
+                e.results.p50_time * 1000.0,
+                e.results.p95_time * 1000.0,
+            );
+        }
+        println!();
+        return;
+    }
+
     let buckets = analyze_precision_performance(entries);
     if buckets.is_empty() {
         return;

@@ -970,6 +970,7 @@ mod tests {
             collection_params: None,
             search_params: None,
             upload_params: None,
+            skip_vector_index: false,
         };
         let engine = ElasticsearchEngine::new(&config, "localhost").unwrap();
         assert_eq!(engine.name, "test-es");
@@ -999,6 +1000,7 @@ mod tests {
                 "parallel": 8,
                 "batch_size": 1000
             })),
+            skip_vector_index: false,
         };
         let engine = ElasticsearchEngine::new(&config, "localhost").unwrap();
         assert_eq!(engine.config.m, 32);

@@ -59,7 +59,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "valkey",
         "turbopuffer",
     ];
-    let engines: Vec<_> = engine_configs
+    let mut engines: Vec<_> = engine_configs
         .iter()
         .filter(|(name, config)| {
             let engine_type = config.engine.as_deref().unwrap_or("");
@@ -74,6 +74,21 @@ pub fn run(args: &Args) -> Result<(), String> {
             args.engines.join(", "),
             supported_engines
         ));
+    }
+
+    // --skip-vector-index: deduplicate engine configs by engine type.
+    // Multiple M/EF variants (e.g. redis-m-16-ef-64, redis-m-32-ef-128) collapse
+    // into a single "<engine_type>-no-vector" experiment.
+    if args.skip_vector_index {
+        let mut seen_engine_types = std::collections::HashSet::new();
+        engines.retain(|(_, config)| {
+            let engine_type = config.engine.as_deref().unwrap_or("unknown");
+            seen_engine_types.insert(engine_type.to_string())
+        });
+        println!(
+            "--skip-vector-index: deduplicated to {} engine(s)",
+            engines.len()
+        );
     }
 
     println!(
@@ -95,14 +110,31 @@ pub fn run(args: &Args) -> Result<(), String> {
     );
     pb.enable_steady_tick(std::time::Duration::from_secs(1));
 
-    for (engine_name, engine_config) in &engines {
+    let skip_vector_engines = ["redis", "valkey", "mongodb"];
+
+    for (_engine_name, engine_config) in &engines {
+        // Apply --skip-vector-index: override name and set flag on config
+        let mut engine_config = (*engine_config).clone();
+        if args.skip_vector_index {
+            let engine_type = engine_config.engine.as_deref().unwrap_or("unknown");
+            if !skip_vector_engines.contains(&engine_type) {
+                eprintln!(
+                    "WARNING: --skip-vector-index not implemented for engine '{}', skipping",
+                    engine_type
+                );
+                continue;
+            }
+            engine_config.name = format!("{}-no-vector", engine_type);
+            engine_config.skip_vector_index = true;
+        }
+
         for (dataset_name, dataset_config) in &datasets {
             let experiment_num = pb.position() + 1;
             pb.suspend(|| {
                 println!("\n{}", "=".repeat(60));
                 println!(
                     "Running experiment ({}/{}): {} - {}",
-                    experiment_num, total_experiments, engine_name, dataset_name
+                    experiment_num, total_experiments, engine_config.name, dataset_name
                 );
                 println!("{}", "=".repeat(60));
             });
@@ -110,7 +142,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             let dataset = Dataset::new((*dataset_config).clone());
 
             // Create engine
-            let mut engine = create_engine(engine_config, &args.host)?;
+            let mut engine = create_engine(&engine_config, &args.host)?;
 
             // Run experiment phases
             if let Err(e) = run_single_experiment(&mut *engine, &dataset, args) {
@@ -218,21 +250,70 @@ fn run_single_experiment(
 
     // Search phase
     let mut search_entries: Vec<SearchEntry> = Vec::new();
+    let skip_vector_index = args.skip_vector_index;
 
     if !args.skip_search {
+        // --skip-vector-index + no query conditions = nothing to search for
+        if skip_vector_index {
+            let has_schema = dataset
+                .config
+                .schema
+                .as_ref()
+                .and_then(|s| s.as_object())
+                .map(|o| !o.is_empty())
+                .unwrap_or(false);
+            if !has_schema {
+                println!(
+                    "WARNING: --skip-vector-index with no schema fields on dataset '{}' — \
+                     skipping search (no filter conditions possible)",
+                    dataset.config.name
+                );
+                engine.delete()?;
+                println!("Experiment stage: Done");
+                return Ok(());
+            }
+        }
+
         // Clone search params to avoid borrow conflict
         let all_search_params: Vec<_> = engine.search_params().to_vec();
 
+        // --skip-vector-index: dedup search params by parallel level only
+        // (ef values are irrelevant for filter-only queries)
+        let effective_search_params: Vec<(usize, SearchParams)> = if skip_vector_index {
+            let mut seen_parallels = std::collections::HashSet::new();
+            all_search_params
+                .into_iter()
+                .enumerate()
+                .filter(|(_, sp)| {
+                    let p = sp.parallel.unwrap_or(1);
+                    seen_parallels.insert(p)
+                })
+                .collect()
+        } else {
+            all_search_params.into_iter().enumerate().collect()
+        };
+
         for phase in &search_phases {
+            // --skip-vector-index: skip mixed phases (no vector updates to benchmark)
+            if skip_vector_index && phase.is_some() {
+                continue;
+            }
+
             match phase {
                 Some(ratio) => println!(
                     "Experiment stage: Mixed Search+Update (ratio {}:{})",
                     ratio.updates, ratio.searches
                 ),
-                None => println!("Experiment stage: Search"),
+                None => {
+                    if skip_vector_index {
+                        println!("Experiment stage: Filter-only Search (no vector index)");
+                    } else {
+                        println!("Experiment stage: Search");
+                    }
+                }
             }
 
-            for (search_id, search_params) in all_search_params.iter().enumerate() {
+            for (search_id, search_params) in &effective_search_params {
                 // Filter by parallel if specified
                 if !args.parallels.is_empty() {
                     let parallel = search_params.parallel.unwrap_or(1) as i32;
@@ -241,8 +322,8 @@ fn run_single_experiment(
                     }
                 }
 
-                // Filter by ef_runtime if specified
-                if !args.ef_runtime.is_empty() {
+                // Filter by ef_runtime if specified (irrelevant for skip_vector_index)
+                if !skip_vector_index && !args.ef_runtime.is_empty() {
                     if let Some(ref inner) = search_params.search_params {
                         if let Some(ef) = inner.ef {
                             if !args.ef_runtime.contains(&ef) {
@@ -254,8 +335,10 @@ fn run_single_experiment(
 
                 let parallel = search_params.parallel.unwrap_or(1);
 
-                // Check if this search_params requires calibration
-                let calibrated_params = if let (Some(cal_param), Some(cal_precision)) = (
+                // Calibration is skipped for filter-only mode (no vector search to tune)
+                let calibrated_params = if skip_vector_index {
+                    None
+                } else if let (Some(cal_param), Some(cal_precision)) = (
                     &search_params.calibration_param,
                     search_params.calibration_precision,
                 ) {
@@ -303,17 +386,28 @@ fn run_single_experiment(
                 };
 
                 let effective_params = calibrated_params.as_ref().unwrap_or(search_params);
-                let effective_ef = effective_params
-                    .search_params
-                    .as_ref()
-                    .and_then(|p| p.ef)
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "default".to_string());
+                let effective_ef = if skip_vector_index {
+                    "n/a".to_string()
+                } else {
+                    effective_params
+                        .search_params
+                        .as_ref()
+                        .and_then(|p| p.ef)
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "default".to_string())
+                };
 
-                println!(
-                    "\tRunning search {}: ef={}, parallel={}",
-                    search_id, effective_ef, parallel
-                );
+                if skip_vector_index {
+                    println!(
+                        "\tRunning filter-only search {}: parallel={}",
+                        search_id, parallel
+                    );
+                } else {
+                    println!(
+                        "\tRunning search {}: ef={}, parallel={}",
+                        search_id, effective_ef, parallel
+                    );
+                }
 
                 let search_result = match phase {
                     Some(ratio) => {
@@ -324,20 +418,24 @@ fn run_single_experiment(
 
                 match search_result {
                     Ok(results) => {
-                        println!(
-                            "\t→ QPS: {:.1}, Precision: {:.4}",
-                            results.rps, results.mean_precision
-                        );
+                        if skip_vector_index {
+                            println!("\t→ QPS: {:.1} (filter-only, no precision)", results.rps);
+                        } else {
+                            println!(
+                                "\t→ QPS: {:.1}, Precision: {:.4}",
+                                results.rps, results.mean_precision
+                            );
+                        }
                         save_search_results(
                             engine.name(),
                             &dataset.config.name,
-                            search_id,
+                            *search_id,
                             effective_params,
                             &results,
                         )?;
 
                         search_entries.push(SearchEntry {
-                            search_id,
+                            search_id: *search_id,
                             ef: effective_ef.clone(),
                             parallel,
                             results,

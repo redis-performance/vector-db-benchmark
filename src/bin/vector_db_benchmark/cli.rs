@@ -78,4 +78,9 @@ pub struct Args {
     /// Can be specified multiple times. "0:S" means pure search.
     #[arg(long)]
     pub update_search_ratio: Vec<String>,
+
+    /// Skip vector indexing: upload vectors but don't index them, run filter-only queries.
+    /// Collapses all M/EF variants of the same engine into a single "<engine>-no-vector" experiment.
+    #[arg(long, default_value = "false")]
+    pub skip_vector_index: bool,
 }

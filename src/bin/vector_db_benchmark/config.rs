@@ -82,6 +82,9 @@ pub struct EngineConfig {
     pub collection_params: Option<CollectionParams>,
     pub search_params: Option<Vec<SearchParams>>,
     pub upload_params: Option<serde_json::Value>,
+    /// When true, vectors are uploaded but not indexed; search is filter-only.
+    #[serde(default)]
+    pub skip_vector_index: bool,
 }
 
 /// Get the project root directory

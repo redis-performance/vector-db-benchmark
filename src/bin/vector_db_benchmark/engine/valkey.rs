@@ -45,6 +45,7 @@ pub struct ValkeyEngineConfig {
     pub algorithm: String,
     pub batch_size: usize,
     pub parallel: usize,
+    pub skip_vector_index: bool,
 }
 
 pub struct ValkeyEngine {
@@ -108,6 +109,7 @@ impl ValkeyEngine {
                 algorithm,
                 batch_size,
                 parallel,
+                skip_vector_index: engine_config.skip_vector_index,
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
         })
@@ -166,16 +168,19 @@ impl ValkeyEngine {
         cmd.arg("SCHEMA");
 
         // Vector field with HNSW params
-        let num_attrs = 6 + 2 + 2; // TYPE+DIM+DISTANCE_METRIC + M + EF_CONSTRUCTION
-        cmd.arg("vector")
-            .arg("VECTOR")
-            .arg(self.config.algorithm.to_uppercase())
-            .arg(num_attrs);
-        cmd.arg("TYPE").arg(&self.config.data_type);
-        cmd.arg("DIM").arg(vector_size);
-        cmd.arg("DISTANCE_METRIC").arg(distance_metric);
-        cmd.arg("M").arg(self.config.m);
-        cmd.arg("EF_CONSTRUCTION").arg(self.config.ef_construction);
+        // Skipped when skip_vector_index is set (filter-only benchmark)
+        if !self.config.skip_vector_index {
+            let num_attrs = 6 + 2 + 2; // TYPE+DIM+DISTANCE_METRIC + M + EF_CONSTRUCTION
+            cmd.arg("vector")
+                .arg("VECTOR")
+                .arg(self.config.algorithm.to_uppercase())
+                .arg(num_attrs);
+            cmd.arg("TYPE").arg(&self.config.data_type);
+            cmd.arg("DIM").arg(vector_size);
+            cmd.arg("DISTANCE_METRIC").arg(distance_metric);
+            cmd.arg("M").arg(self.config.m);
+            cmd.arg("EF_CONSTRUCTION").arg(self.config.ef_construction);
+        }
 
         // Add schema fields from dataset config for filtering.
         // Note: Valkey Search does not support SORTABLE, TEXT, or GEO field types.
@@ -436,6 +441,165 @@ impl ValkeyEngine {
 
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
+    }
+
+    /// Filter-only search: run FT.SEARCH with filter conditions only (no KNN).
+    fn search_filter_only(
+        &mut self,
+        dataset: &Dataset,
+        params: &SearchParams,
+        num_queries: i64,
+    ) -> Result<SearchResults, String> {
+        let parallel = params.parallel.unwrap_or(1) as usize;
+        let query_timeout: i64 = std::env::var("VALKEY_QUERY_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60_000);
+
+        let query_path = dataset.get_path()?;
+        println!("\tReading queries from {}...", query_path.display());
+        let (_queries, neighbors, conditions) = dataset.read_queries()?;
+
+        let parsed_filters: Vec<Option<ParsedFilter>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_conditions))
+            .collect();
+
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(parsed_filters.len())
+        } else {
+            parsed_filters.len()
+        };
+
+        let runnable_indices: Vec<usize> = (0..num_to_run)
+            .filter(|&i| parsed_filters[i].is_some())
+            .collect();
+
+        if runnable_indices.is_empty() {
+            return Err(
+                "No queries with filter conditions for filter-only search".to_string()
+            );
+        }
+
+        let search_times: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(runnable_indices.len())));
+        let query_idx = Arc::new(AtomicUsize::new(0));
+
+        let pb = self.create_progress_bar(runnable_indices.len());
+        let start_time = Instant::now();
+
+        std::thread::scope(|s| {
+            for _ in 0..parallel {
+                let host = self.host.clone();
+                let port = self.port;
+                let parsed_filters = &parsed_filters;
+                let runnable_indices = &runnable_indices;
+                let neighbors = &neighbors;
+                let search_times = Arc::clone(&search_times);
+                let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
+
+                s.spawn(move || {
+                    let auth = std::env::var("VALKEY_AUTH").ok();
+                    let user = std::env::var("VALKEY_USER").ok();
+                    let auth_part = match (&user, &auth) {
+                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
+                        (None, Some(p)) => format!(":{}@", p),
+                        _ => String::new(),
+                    };
+                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
+                    let client = match redis::Client::open(url.as_str()) {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let mut conn = match client.get_connection() {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+
+                    loop {
+                        let seq = query_idx.fetch_add(1, Ordering::SeqCst);
+                        if seq >= runnable_indices.len() {
+                            break;
+                        }
+                        let idx = runnable_indices[seq];
+
+                        let top = explicit_top.unwrap_or_else(|| {
+                            let n = neighbors[idx].len();
+                            if n > 0 { n } else { 10 }
+                        });
+
+                        let query_start = Instant::now();
+                        let _ = ft_search_filter_only(
+                            &mut conn,
+                            top,
+                            query_timeout,
+                            parsed_filters[idx].as_ref().unwrap(),
+                        );
+                        let query_time = query_start.elapsed().as_secs_f64();
+
+                        search_times.lock().unwrap().push(query_time);
+                        pb.inc(1);
+                    }
+                });
+            }
+        });
+
+        pb.finish_and_clear();
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        let times = search_times.lock().unwrap();
+        if times.is_empty() {
+            return Err("No filter-only searches completed".to_string());
+        }
+
+        let rps = times.len() as f64 / total_time;
+        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
+        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
+            / times.len() as f64)
+            .sqrt();
+        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        let mut sorted_times: Vec<f64> = times.clone();
+        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
+        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
+        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
+
+        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
+        let p95_time = sorted_times
+            .get(p95_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+        let p99_time = sorted_times
+            .get(p99_idx.min(sorted_times.len() - 1))
+            .copied()
+            .unwrap_or(0.0);
+
+        let mut check_conn = self.get_connection()?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search")?;
+
+        Ok(SearchResults {
+            total_time,
+            mean_time,
+            mean_precision: -1.0,
+            std_time,
+            min_time,
+            max_time,
+            rps,
+            p50_time,
+            p95_time,
+            p99_time,
+            precisions: vec![],
+            latencies: times.to_vec(),
+            top: 0,
+            num_queries: times.len(),
+            parallel,
+            ..Default::default()
+        })
     }
 
     fn create_progress_bar(&self, total: usize) -> ProgressBar {
@@ -793,6 +957,56 @@ fn build_condition(
 
 // ── FT.SEARCH ────────────────────────────────────────────────────────────
 
+/// Execute filter-only FT.SEARCH (no KNN vector query).
+fn ft_search_filter_only(
+    conn: &mut Connection,
+    top: usize,
+    query_timeout: i64,
+    filter: &ParsedFilter,
+) -> Result<usize, String> {
+    let (filter_expr, params) = filter;
+
+    let mut cmd = redis::cmd("FT.SEARCH");
+    cmd.arg("idx")
+        .arg(filter_expr.as_str())
+        .arg("LIMIT")
+        .arg(0)
+        .arg(top)
+        .arg("DIALECT")
+        .arg(2) // Valkey uses DIALECT 2
+        .arg("TIMEOUT")
+        .arg(query_timeout);
+
+    if !params.is_empty() {
+        cmd.arg("PARAMS").arg(params.len() * 2);
+        for (name, value) in params {
+            cmd.arg(name.as_str());
+            match value {
+                FilterParamValue::Int(i) => {
+                    cmd.arg(*i);
+                }
+                FilterParamValue::Float(f) => {
+                    cmd.arg(*f);
+                }
+            }
+        }
+    }
+
+    let response: Vec<redis::Value> = cmd
+        .query(conn)
+        .map_err(|e| format!("FT.SEARCH filter-only error: {}", e))?;
+
+    if let Some(first) = response.first() {
+        match first {
+            redis::Value::Int(n) => Ok(*n as usize),
+            redis::Value::BulkString(s) => Ok(String::from_utf8_lossy(s).parse().unwrap_or(0)),
+            _ => Ok(0),
+        }
+    } else {
+        Ok(0)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ft_search_knn(
     conn: &mut Connection,
@@ -970,10 +1184,14 @@ impl Engine for ValkeyEngine {
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
         let mut conn = self.get_connection()?;
 
-        println!(
-            "Using algorithm {} with config {{'M': {}, 'EF_CONSTRUCTION': {}}}",
-            self.config.algorithm, self.config.m, self.config.ef_construction
-        );
+        if self.config.skip_vector_index {
+            println!("Skipping vector index (filter-only mode)");
+        } else {
+            println!(
+                "Using algorithm {} with config {{'M': {}, 'EF_CONSTRUCTION': {}}}",
+                self.config.algorithm, self.config.m, self.config.ef_construction
+            );
+        }
 
         self.create_index(&mut conn, dataset)?;
         redis_utils::reset_commandstats(&mut conn)?;
@@ -1043,6 +1261,10 @@ impl Engine for ValkeyEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        if self.config.skip_vector_index {
+            return self.search_filter_only(dataset, params, num_queries);
+        }
+
         let ef = params
             .search_params
             .as_ref()
