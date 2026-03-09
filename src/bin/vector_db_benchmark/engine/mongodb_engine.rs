@@ -118,13 +118,8 @@ impl MongoDBEngine {
             .collect();
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
-        let num_to_run = if num_queries > 0 {
-            (num_queries as usize).min(parsed_filters.len())
-        } else {
-            parsed_filters.len()
-        };
 
-        let runnable_indices: Vec<usize> = (0..num_to_run)
+        let runnable_indices: Vec<usize> = (0..parsed_filters.len())
             .filter(|&i| parsed_filters[i].is_some())
             .collect();
 
@@ -134,11 +129,19 @@ impl MongoDBEngine {
             );
         }
 
+        // Round-robin: if num_queries > available queries, cycle through them
+        let num_to_run = if num_queries > 0 {
+            num_queries as usize
+        } else {
+            runnable_indices.len()
+        };
+
         let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(runnable_indices.len())));
+            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
-        let pb = self.create_progress_bar(runnable_indices.len());
+        let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
         let uri = self.uri.clone();
@@ -154,6 +157,7 @@ impl MongoDBEngine {
                 let runnable_indices = &runnable_indices;
                 let neighbors = &neighbors;
                 let search_times = Arc::clone(&search_times);
+                let errors = Arc::clone(&errors);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -168,10 +172,10 @@ impl MongoDBEngine {
 
                     loop {
                         let seq = query_idx.fetch_add(1, Ordering::SeqCst);
-                        if seq >= runnable_indices.len() {
+                        if seq >= num_to_run {
                             break;
                         }
-                        let idx = runnable_indices[seq];
+                        let idx = runnable_indices[seq % runnable_indices.len()];
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
@@ -181,8 +185,15 @@ impl MongoDBEngine {
                         let filter = parsed_filters[idx].as_ref().unwrap();
 
                         let query_start = Instant::now();
-                        let _ = filter_only_find(&coll, filter, top);
+                        let result = filter_only_find(&coll, filter, top);
                         let query_time = query_start.elapsed().as_secs_f64();
+
+                        if let Err(e) = result {
+                            let mut errs = errors.lock().unwrap();
+                            if errs.len() < 3 {
+                                errs.push(e);
+                            }
+                        }
 
                         search_times.lock().unwrap().push(query_time);
                         pb.inc(1);
@@ -190,6 +201,13 @@ impl MongoDBEngine {
                 });
             }
         });
+
+        let logged_errors = errors.lock().unwrap();
+        if !logged_errors.is_empty() {
+            for e in logged_errors.iter() {
+                eprintln!("\tFilter-only search error: {}", e);
+            }
+        }
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
