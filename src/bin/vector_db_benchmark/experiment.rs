@@ -214,6 +214,11 @@ fn run_single_experiment(
 
         // Save upload results
         save_upload_results(engine.name(), &dataset.config.name, &upload_stats)?;
+    } else if args.skip_vector_index {
+        // --skip-upload + --skip-vector-index: data already uploaded, but we need
+        // a schema-only index (previous run's index was dropped by delete()).
+        println!("Experiment stage: Configure (creating schema-only index for filter-only search)");
+        engine.configure(dataset)?;
     }
 
     // Build ordered search phases: pure search first, then mixed ratios ascending
@@ -268,6 +273,7 @@ fn run_single_experiment(
                      skipping search (no filter conditions possible)",
                     dataset.config.name
                 );
+                println!("Experiment stage: Cleanup (deleting index and data)");
                 engine.delete()?;
                 println!("Experiment stage: Done");
                 return Ok(());
@@ -465,6 +471,7 @@ fn run_single_experiment(
     }
 
     // Cleanup
+    println!("Experiment stage: Cleanup (deleting index and data)");
     engine.delete()?;
 
     println!("Experiment stage: Done");

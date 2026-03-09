@@ -3,59 +3,87 @@
 //! Provides `INFO COMMANDSTATS` validation to detect silent command failures.
 
 use redis::Connection;
+use std::collections::HashMap;
+
+/// Baseline snapshot of failed_calls per command, used when CONFIG RESETSTAT is unavailable.
+pub type CommandStatsBaseline = HashMap<String, u64>;
+
+/// Parse `INFO COMMANDSTATS` output into a map of command → failed_calls.
+fn parse_failed_calls(info: &str) -> HashMap<String, u64> {
+    let mut map = HashMap::new();
+    for line in info.lines() {
+        let Some((cmd_part, stats_part)) = line.split_once(':') else {
+            continue;
+        };
+        let cmd_name = cmd_part
+            .strip_prefix("cmdstat_")
+            .unwrap_or(cmd_part)
+            .to_ascii_uppercase();
+
+        for field in stats_part.split(',') {
+            if let Some(val) = field.strip_prefix("failed_calls=") {
+                if let Ok(n) = val.parse::<u64>() {
+                    map.insert(cmd_name.clone(), n);
+                }
+            }
+        }
+    }
+    map
+}
 
 /// Reset server command statistics so subsequent checks start from zero.
-/// Non-fatal: warns if the command is not permitted (e.g. Redis Cloud ACLs).
-pub fn reset_commandstats(conn: &mut Connection) -> Result<(), String> {
-    if let Err(e) = redis::cmd("CONFIG").arg("RESETSTAT").query::<()>(conn) {
-        eprintln!(
-            "Warning: CONFIG RESETSTAT not available ({}), skipping commandstats validation",
-            e
-        );
+/// If CONFIG RESETSTAT is not permitted (e.g. Redis Cloud ACLs), captures
+/// a baseline snapshot of current failed_calls so check_commandstats can
+/// compare against it.
+pub fn reset_commandstats(conn: &mut Connection) -> Result<Option<CommandStatsBaseline>, String> {
+    match redis::cmd("CONFIG").arg("RESETSTAT").query::<()>(conn) {
+        Ok(()) => Ok(None),
+        Err(e) => {
+            eprintln!(
+                "Warning: CONFIG RESETSTAT not available ({}), will use baseline diff for commandstats",
+                e
+            );
+            // Snapshot current stats as baseline
+            let info: String = redis::cmd("INFO")
+                .arg("commandstats")
+                .query(conn)
+                .unwrap_or_default();
+            Ok(Some(parse_failed_calls(&info)))
+        }
     }
-    Ok(())
 }
 
 /// Check `INFO COMMANDSTATS` for failed_calls on the given commands.
 ///
-/// Returns `Err` if any of the specified commands have `failed_calls > 0`,
+/// If a baseline is provided (from a failed RESETSTAT), only reports failures
+/// that are NEW since the baseline was captured.
+///
+/// Returns `Err` if any of the specified commands have new `failed_calls`,
 /// listing the offending commands and their failure counts.
 pub fn check_commandstats(
     conn: &mut Connection,
     commands: &[&str],
     context: &str,
+    baseline: Option<&CommandStatsBaseline>,
 ) -> Result<(), String> {
     let info: String = match redis::cmd("INFO").arg("commandstats").query(conn) {
         Ok(v) => v,
         Err(_) => return Ok(()), // not available, skip validation
     };
 
+    let current = parse_failed_calls(&info);
     let mut failures = Vec::new();
 
-    for line in info.lines() {
-        // Lines look like:
-        // cmdstat_hset:calls=317804,usec=8510177522,usec_per_call=26778.07,rejected_calls=0,failed_calls=0
-        // cmdstat_FT.SEARCH:calls=160371,...,failed_calls=160186
-        let Some((cmd_part, stats_part)) = line.split_once(':') else {
-            continue;
-        };
-        let cmd_name = cmd_part.strip_prefix("cmdstat_").unwrap_or(cmd_part);
-
-        // Case-insensitive match against the commands we care about
-        let matches = commands.iter().any(|c| c.eq_ignore_ascii_case(cmd_name));
-        if !matches {
-            continue;
-        }
-
-        // Parse failed_calls from the stats
-        for field in stats_part.split(',') {
-            if let Some(val) = field.strip_prefix("failed_calls=") {
-                if let Ok(n) = val.parse::<u64>() {
-                    if n > 0 {
-                        failures.push(format!("{}: {} failed_calls", cmd_name, n));
-                    }
-                }
-            }
+    for cmd in commands {
+        let cmd_upper = cmd.to_ascii_uppercase();
+        let current_fails = current.get(&cmd_upper).copied().unwrap_or(0);
+        let baseline_fails = baseline
+            .and_then(|b| b.get(&cmd_upper))
+            .copied()
+            .unwrap_or(0);
+        let new_fails = current_fails.saturating_sub(baseline_fails);
+        if new_fails > 0 {
+            failures.push(format!("{}: {} failed_calls", cmd, new_fails));
         }
     }
 

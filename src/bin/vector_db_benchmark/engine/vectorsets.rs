@@ -34,6 +34,7 @@ pub struct VectorSetsEngine {
     redis_url: String,
     config: VectorSetsConfig,
     search_params: Vec<SearchParams>,
+    commandstats_baseline: Option<redis_utils::CommandStatsBaseline>,
 }
 
 impl VectorSetsEngine {
@@ -95,6 +96,7 @@ impl VectorSetsEngine {
                 parallel,
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
+            commandstats_baseline: None,
         })
     }
 
@@ -425,7 +427,7 @@ impl Engine for VectorSetsEngine {
         // Delete existing key if any
         let _ = redis::cmd("DEL").arg("idx").query::<()>(&mut conn);
 
-        redis_utils::reset_commandstats(&mut conn)?;
+        self.commandstats_baseline = redis_utils::reset_commandstats(&mut conn)?;
         Ok(())
     }
 
@@ -470,7 +472,7 @@ impl Engine for VectorSetsEngine {
 
         // Verify no VADD failures occurred during upload
         let mut conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut conn, &["VADD"], "upload")?;
+        redis_utils::check_commandstats(&mut conn, &["VADD"], "upload", self.commandstats_baseline.as_ref())?;
 
         Ok(UploadStats {
             upload_time,
@@ -631,7 +633,7 @@ impl Engine for VectorSetsEngine {
 
         // Verify no VSIM failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["VSIM"], "search")?;
+        redis_utils::check_commandstats(&mut check_conn, &["VSIM"], "search", self.commandstats_baseline.as_ref())?;
 
         Ok(SearchResults {
             total_time,
@@ -878,7 +880,7 @@ impl Engine for VectorSetsEngine {
 
         // Verify no failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["VSIM", "VADD"], "mixed")?;
+        redis_utils::check_commandstats(&mut check_conn, &["VSIM", "VADD"], "mixed", self.commandstats_baseline.as_ref())?;
 
         Ok(SearchResults {
             total_time,

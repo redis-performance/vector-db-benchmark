@@ -37,6 +37,7 @@ pub struct RedisEngine {
     redis_url: String,
     config: RedisEngineConfig,
     search_params: Vec<SearchParams>,
+    commandstats_baseline: Option<redis_utils::CommandStatsBaseline>,
 }
 
 impl RedisEngine {
@@ -91,6 +92,7 @@ impl RedisEngine {
                 skip_vector_index: engine_config.skip_vector_index,
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
+            commandstats_baseline: None,
         })
     }
 
@@ -564,7 +566,7 @@ impl RedisEngine {
 
         // Verify no FT.SEARCH failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search")?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search", self.commandstats_baseline.as_ref())?;
 
         Ok(SearchResults {
             total_time,
@@ -1196,7 +1198,7 @@ impl Engine for RedisEngine {
         }
 
         self.create_index(&mut conn, dataset)?;
-        redis_utils::reset_commandstats(&mut conn)?;
+        self.commandstats_baseline = redis_utils::reset_commandstats(&mut conn)?;
         Ok(())
     }
 
@@ -1246,7 +1248,7 @@ impl Engine for RedisEngine {
 
         // Verify no HSET failures occurred during upload
         let mut conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut conn, &["hset"], "upload")?;
+        redis_utils::check_commandstats(&mut conn, &["hset"], "upload", self.commandstats_baseline.as_ref())?;
 
         Ok(UploadStats {
             upload_time,
@@ -1423,7 +1425,7 @@ impl Engine for RedisEngine {
 
         // Verify no FT.SEARCH failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search")?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search", self.commandstats_baseline.as_ref())?;
 
         Ok(SearchResults {
             total_time,
@@ -1672,7 +1674,7 @@ impl Engine for RedisEngine {
 
         // Verify no failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH", "hset"], "mixed")?;
+        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH", "hset"], "mixed", self.commandstats_baseline.as_ref())?;
 
         Ok(SearchResults {
             total_time,
