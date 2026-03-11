@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -24,8 +23,8 @@ struct RustQuery {
     top: usize,
 }
 
-/// Result of a single search: (precision, latency_seconds)
-type SearchResult = (f64, f64);
+/// Per-query result: (precision, recall, mrr, ndcg, latency)
+type SearchResult = (f64, f64, f64, f64, f64);
 
 #[pyclass]
 pub struct RustVsetSearcher {
@@ -215,13 +214,32 @@ impl RustVsetSearcher {
 
         // Compute stats and return as Python dict
         Python::with_gil(|py| -> PyResult<PyObject> {
-            let precisions: Vec<f64> = results.iter().map(|(p, _)| *p).collect();
-            let latencies: Vec<f64> = results.iter().map(|(_, l)| *l).collect();
+            let precisions: Vec<f64> = results.iter().map(|r| r.0).collect();
+            let recalls: Vec<f64> = results.iter().map(|r| r.1).collect();
+            let mrrs: Vec<f64> = results.iter().map(|r| r.2).collect();
+            let ndcgs: Vec<f64> = results.iter().map(|r| r.3).collect();
+            let latencies: Vec<f64> = results.iter().map(|r| r.4).collect();
 
-            let mean_precision = if precisions.is_empty() {
-                0.0
+            let n = precisions.len() as f64;
+            let mean_precision = if n > 0.0 {
+                precisions.iter().sum::<f64>() / n
             } else {
-                precisions.iter().sum::<f64>() / precisions.len() as f64
+                0.0
+            };
+            let mean_recall = if n > 0.0 {
+                recalls.iter().sum::<f64>() / n
+            } else {
+                0.0
+            };
+            let mean_mrr = if n > 0.0 {
+                mrrs.iter().sum::<f64>() / n
+            } else {
+                0.0
+            };
+            let mean_ndcg = if n > 0.0 {
+                ndcgs.iter().sum::<f64>() / n
+            } else {
+                0.0
             };
             let mean_time = if latencies.is_empty() {
                 0.0
@@ -256,6 +274,9 @@ impl RustVsetSearcher {
             dict.set_item("total_time", total_time)?;
             dict.set_item("mean_time", mean_time)?;
             dict.set_item("mean_precisions", mean_precision)?;
+            dict.set_item("mean_recall", mean_recall)?;
+            dict.set_item("mean_mrr", mean_mrr)?;
+            dict.set_item("mean_ndcg", mean_ndcg)?;
             dict.set_item("std_time", std_time)?;
             dict.set_item("min_time", min_time)?;
             dict.set_item("max_time", max_time)?;
@@ -264,6 +285,9 @@ impl RustVsetSearcher {
             dict.set_item("p95_time", p95)?;
             dict.set_item("p99_time", p99)?;
             dict.set_item("precisions", precisions)?;
+            dict.set_item("recalls", recalls)?;
+            dict.set_item("mrrs", mrrs)?;
+            dict.set_item("ndcgs", ndcgs)?;
             dict.set_item("latencies", latencies)?;
 
             Ok(dict.into())
@@ -330,20 +354,19 @@ fn search_one_rust(conn: &mut redis::Connection, query: &RustQuery, ef: i64) -> 
 
     let search_results = parse_vsim_response(&response);
 
-    let precision = if let Some(expected) = &query.expected_result {
-        let top = query.top;
-        let result_ids: HashSet<i64> = search_results.iter().map(|(id, _)| *id).collect();
-        let expected_set: HashSet<i64> = expected.iter().take(top).cloned().collect();
-        if top > 0 {
-            result_ids.intersection(&expected_set).count() as f64 / top as f64
-        } else {
-            1.0
-        }
+    let m = if let Some(expected) = &query.expected_result {
+        let ordered_ids: Vec<i64> = search_results.iter().map(|(id, _)| *id).collect();
+        crate::metrics::compute_metrics(&ordered_ids, expected, query.top)
     } else {
-        1.0
+        crate::metrics::QueryMetrics {
+            recall: 1.0,
+            precision: 1.0,
+            mrr: 1.0,
+            ndcg: 1.0,
+        }
     };
 
-    (precision, elapsed)
+    (m.precision, m.recall, m.mrr, m.ndcg, elapsed)
 }
 
 fn run_sequential(

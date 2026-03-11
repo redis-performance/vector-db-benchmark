@@ -7,6 +7,7 @@
 //! - `redis_client` - Redis connection management
 
 pub mod config;
+pub mod metrics;
 pub mod readers;
 pub mod redis_client;
 

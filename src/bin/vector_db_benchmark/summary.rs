@@ -29,6 +29,9 @@ struct PrecisionBucket {
     p50_ms: f64,
     p95_ms: f64,
     precision: f64,
+    recall: f64,
+    mrr: f64,
+    ndcg: f64,
 }
 
 /// Format a precision value into a bucket key (matches Python v0 format_precision_key).
@@ -61,6 +64,9 @@ fn analyze_precision_performance(entries: &[SearchEntry]) -> Vec<PrecisionBucket
             p50_ms: entry.results.p50_time * 1000.0,
             p95_ms: entry.results.p95_time * 1000.0,
             precision: entry.results.mean_precision,
+            recall: entry.results.mean_recall,
+            mrr: entry.results.mean_mrr,
+            ndcg: entry.results.mean_ndcg,
         };
 
         // Keep the entry with best QPS for this precision bucket
@@ -116,17 +122,17 @@ pub fn display_results_summary(engine_name: &str, dataset_name: &str, entries: &
     }
 
     // Print table
-    println!("{}", "-".repeat(50));
+    println!("{}", "-".repeat(82));
     println!(
-        "{:<12} {:<10} {:<12} {:<12}",
-        "Precision", "QPS", "P50 (ms)", "P95 (ms)"
+        "{:<10} {:<10} {:<8} {:<8} {:<10} {:<12} {:<12}",
+        "Recall", "Precision", "MRR", "NDCG", "QPS", "P50 (ms)", "P95 (ms)"
     );
-    println!("{}", "-".repeat(50));
+    println!("{}", "-".repeat(82));
 
     for b in &buckets {
         println!(
-            "{:<12.4} {:<10.1} {:<12.3} {:<12.3}",
-            b.precision, b.qps, b.p50_ms, b.p95_ms
+            "{:<10.4} {:<10.4} {:<8.4} {:<8.4} {:<10.1} {:<12.3} {:<12.3}",
+            b.recall, b.precision, b.mrr, b.ndcg, b.qps, b.p50_ms, b.p95_ms
         );
     }
     println!();
@@ -153,12 +159,12 @@ pub fn display_mixed_summary(entries: &[SearchEntry]) {
         return;
     }
 
-    println!("\n{}", "-".repeat(90));
+    println!("\n{}", "-".repeat(116));
     println!(
-        "{:<14} {:<10} {:<10} {:<12} {:<12} {:<10} {:<12}",
-        "Ratio", "Precision", "QPS", "P50 (ms)", "P95 (ms)", "Upd QPS", "Upd P50 (ms)"
+        "{:<14} {:<8} {:<8} {:<8} {:<8} {:<10} {:<12} {:<12} {:<10} {:<12}",
+        "Ratio", "Recall", "Prec", "MRR", "NDCG", "QPS", "P50 (ms)", "P95 (ms)", "Upd QPS", "Upd P50 (ms)"
     );
-    println!("{}", "-".repeat(90));
+    println!("{}", "-".repeat(116));
 
     // Sort: "search" first, then ratios by ascending numeric value
     let mut keys: Vec<String> = by_ratio.keys().cloned().collect();
@@ -188,9 +194,12 @@ pub fn display_mixed_summary(entries: &[SearchEntry]) {
             .unwrap_or_else(|| "-".to_string());
 
         println!(
-            "{:<14} {:<10.4} {:<10.1} {:<12.3} {:<12.3} {:<10} {:<12}",
+            "{:<14} {:<8.4} {:<8.4} {:<8.4} {:<8.4} {:<10.1} {:<12.3} {:<12.3} {:<10} {:<12}",
             key,
+            best.results.mean_recall,
             best.results.mean_precision,
+            best.results.mean_mrr,
+            best.results.mean_ndcg,
             best.results.rps,
             best.results.p50_time * 1000.0,
             best.results.p95_time * 1000.0,
@@ -237,6 +246,9 @@ pub fn save_summary(
                 "QPS": (b.qps * 10.0).round() / 10.0,
                 "P50 (ms)": (b.p50_ms * 1000.0).round() / 1000.0,
                 "P95 (ms)": (b.p95_ms * 1000.0).round() / 1000.0,
+                "recall": (b.recall * 10000.0).round() / 10000.0,
+                "mrr": (b.mrr * 10000.0).round() / 10000.0,
+                "ndcg": (b.ndcg * 10000.0).round() / 10000.0,
             }),
         );
     }
@@ -250,6 +262,9 @@ pub fn save_summary(
                 "ef": e.ef,
                 "parallel": e.parallel,
                 "mean_precisions": e.results.mean_precision,
+                "mean_recall": e.results.mean_recall,
+                "mean_mrr": e.results.mean_mrr,
+                "mean_ndcg": e.results.mean_ndcg,
                 "rps": e.results.rps,
                 "mean_time": e.results.mean_time,
                 "p50_time": e.results.p50_time,

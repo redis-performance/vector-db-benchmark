@@ -1317,6 +1317,9 @@ impl Engine for ValkeyEngine {
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
@@ -1333,6 +1336,9 @@ impl Engine for ValkeyEngine {
                 let parsed_filters = &parsed_filters;
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
+                let recalls = Arc::clone(&recalls);
+                let mrrs = Arc::clone(&mrrs);
+                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -1386,16 +1392,18 @@ impl Engine for ValkeyEngine {
 
                         match &results {
                             Ok(result_ids) => {
-                                let ground_truth: std::collections::HashSet<i64> =
-                                    neighbors[idx].iter().take(top).copied().collect();
-                                let found: std::collections::HashSet<i64> =
-                                    result_ids.iter().map(|(id, _)| *id).collect();
-                                let hits = ground_truth.intersection(&found).count();
-                                let precision = hits as f64 / top as f64;
-                                precisions.lock().unwrap().push(precision);
+                                let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
+                                let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                precisions.lock().unwrap().push(m.precision);
+                                recalls.lock().unwrap().push(m.recall);
+                                mrrs.lock().unwrap().push(m.mrr);
+                                ndcgs.lock().unwrap().push(m.ndcg);
                             }
                             Err(_e) => {
                                 precisions.lock().unwrap().push(0.0);
+                                recalls.lock().unwrap().push(0.0);
+                                mrrs.lock().unwrap().push(0.0);
+                                ndcgs.lock().unwrap().push(0.0);
                             }
                         }
                         pb.inc(1);
@@ -1409,6 +1417,9 @@ impl Engine for ValkeyEngine {
 
         let times = search_times.lock().unwrap();
         let precs = precisions.lock().unwrap();
+        let recs = recalls.lock().unwrap();
+        let mrr_vals = mrrs.lock().unwrap();
+        let ndcg_vals = ndcgs.lock().unwrap();
 
         if times.is_empty() {
             return Err("No searches completed".to_string());
@@ -1416,6 +1427,9 @@ impl Engine for ValkeyEngine {
 
         let rps = times.len() as f64 / total_time;
         let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_recall = recs.iter().sum::<f64>() / recs.len() as f64;
+        let mean_mrr = mrr_vals.iter().sum::<f64>() / mrr_vals.len() as f64;
+        let mean_ndcg = ndcg_vals.iter().sum::<f64>() / ndcg_vals.len() as f64;
         let mean_time = times.iter().sum::<f64>() / times.len() as f64;
         let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
             / times.len() as f64)
@@ -1448,6 +1462,12 @@ impl Engine for ValkeyEngine {
             total_time,
             mean_time,
             mean_precision,
+            mean_recall,
+            mean_mrr,
+            mean_ndcg,
+            recalls: recs.to_vec(),
+            mrrs: mrr_vals.to_vec(),
+            ndcgs: ndcg_vals.to_vec(),
             std_time,
             min_time,
             max_time,
@@ -1514,6 +1534,9 @@ impl Engine for ValkeyEngine {
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let update_times: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let search_idx = Arc::new(AtomicUsize::new(0));
         let update_idx = Arc::new(AtomicUsize::new(0));
 
@@ -1541,6 +1564,9 @@ impl Engine for ValkeyEngine {
                 let search_times = Arc::clone(&search_times);
                 let update_times = Arc::clone(&update_times);
                 let precisions = Arc::clone(&precisions);
+                let recalls = Arc::clone(&recalls);
+                let mrrs = Arc::clone(&mrrs);
+                let ndcgs = Arc::clone(&ndcgs);
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
                 let pb = &pb;
@@ -1585,16 +1611,18 @@ impl Engine for ValkeyEngine {
 
                             match &results {
                                 Ok(result_ids) => {
-                                    let ground_truth: std::collections::HashSet<i64> =
-                                        neighbors[idx].iter().take(top).copied().collect();
-                                    let found: std::collections::HashSet<i64> =
-                                        result_ids.iter().map(|(id, _)| *id).collect();
-                                    let hits = ground_truth.intersection(&found).count();
-                                    let precision = hits as f64 / top as f64;
-                                    precisions.lock().unwrap().push(precision);
+                                    let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
+                                    let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                    precisions.lock().unwrap().push(m.precision);
+                                    recalls.lock().unwrap().push(m.recall);
+                                    mrrs.lock().unwrap().push(m.mrr);
+                                    ndcgs.lock().unwrap().push(m.ndcg);
                                 }
                                 Err(_) => {
                                     precisions.lock().unwrap().push(0.0);
+                                    recalls.lock().unwrap().push(0.0);
+                                    mrrs.lock().unwrap().push(0.0);
+                                    ndcgs.lock().unwrap().push(0.0);
                                 }
                             }
                             pb.inc(1);
@@ -1626,6 +1654,9 @@ impl Engine for ValkeyEngine {
 
         let times = search_times.lock().unwrap();
         let precs = precisions.lock().unwrap();
+        let recs = recalls.lock().unwrap();
+        let mrr_vals = mrrs.lock().unwrap();
+        let ndcg_vals = ndcgs.lock().unwrap();
         let u_times = update_times.lock().unwrap();
 
         if times.is_empty() {
@@ -1634,6 +1665,9 @@ impl Engine for ValkeyEngine {
 
         let rps = times.len() as f64 / total_time;
         let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_recall = recs.iter().sum::<f64>() / recs.len() as f64;
+        let mean_mrr = mrr_vals.iter().sum::<f64>() / mrr_vals.len() as f64;
+        let mean_ndcg = ndcg_vals.iter().sum::<f64>() / ndcg_vals.len() as f64;
         let mean_time = times.iter().sum::<f64>() / times.len() as f64;
         let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
             / times.len() as f64)
@@ -1697,6 +1731,12 @@ impl Engine for ValkeyEngine {
             total_time,
             mean_time,
             mean_precision,
+            mean_recall,
+            mean_mrr,
+            mean_ndcg,
+            recalls: recs.to_vec(),
+            mrrs: mrr_vals.to_vec(),
+            ndcgs: ndcg_vals.to_vec(),
             std_time,
             min_time,
             max_time,

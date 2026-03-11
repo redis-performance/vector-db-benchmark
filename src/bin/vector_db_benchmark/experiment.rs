@@ -428,8 +428,8 @@ fn run_single_experiment(
                             println!("\t→ QPS: {:.1} (filter-only, no precision)", results.rps);
                         } else {
                             println!(
-                                "\t→ QPS: {:.1}, Precision: {:.4}",
-                                results.rps, results.mean_precision
+                                "\t→ QPS: {:.1}, Recall: {:.4}, Precision: {:.4}, MRR: {:.4}, NDCG: {:.4}",
+                                results.rps, results.mean_recall, results.mean_precision, results.mean_mrr, results.mean_ndcg
                             );
                         }
                         save_search_results(
@@ -589,6 +589,9 @@ fn save_search_results(
             "total_time": results.total_time,
             "mean_time": results.mean_time,
             "mean_precisions": results.mean_precision,
+            "mean_recall": results.mean_recall,
+            "mean_mrr": results.mean_mrr,
+            "mean_ndcg": results.mean_ndcg,
             "std_time": results.std_time,
             "min_time": results.min_time,
             "max_time": results.max_time,
@@ -597,6 +600,9 @@ fn save_search_results(
             "p95_time": results.p95_time,
             "p99_time": results.p99_time,
             "precisions": results.precisions,
+            "recalls": results.recalls,
+            "mrrs": results.mrrs,
+            "ndcgs": results.ndcgs,
             "latencies": results.latencies,
         }
     });

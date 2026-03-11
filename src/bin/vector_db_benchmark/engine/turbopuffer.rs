@@ -475,6 +475,9 @@ impl Engine for TurbopufferEngine {
 
         let latencies = Arc::new(Mutex::new(vec![0.0f64; num_to_run]));
         let precisions = Arc::new(Mutex::new(vec![0.0f64; num_to_run]));
+        let recalls = Arc::new(Mutex::new(vec![0.0_f64; num_to_run]));
+        let mrrs = Arc::new(Mutex::new(vec![0.0_f64; num_to_run]));
+        let ndcgs = Arc::new(Mutex::new(vec![0.0_f64; num_to_run]));
 
         let pb = self.create_progress_bar(num_to_run);
         let total_start = Instant::now();
@@ -495,18 +498,12 @@ impl Engine for TurbopufferEngine {
                 )?;
                 let elapsed = start.elapsed().as_secs_f64();
 
-                let expected: std::collections::HashSet<i64> =
-                    neighbors[i].iter().take(top).copied().collect();
-                let found: std::collections::HashSet<i64> = results.into_iter().collect();
-                let hits = expected.intersection(&found).count();
-                let precision = if expected.is_empty() {
-                    1.0
-                } else {
-                    hits as f64 / expected.len() as f64
-                };
-
+                let m = crate::metrics::compute_metrics(&results, &neighbors[i], top);
                 latencies.lock().unwrap()[i] = elapsed;
-                precisions.lock().unwrap()[i] = precision;
+                precisions.lock().unwrap()[i] = m.precision;
+                recalls.lock().unwrap()[i] = m.recall;
+                mrrs.lock().unwrap()[i] = m.mrr;
+                ndcgs.lock().unwrap()[i] = m.ndcg;
                 pb.inc(1);
             }
         } else {
@@ -529,6 +526,9 @@ impl Engine for TurbopufferEngine {
                     let neighbor = neighbors[i].clone();
                     let latencies = Arc::clone(&latencies);
                     let precisions = Arc::clone(&precisions);
+                    let recalls = Arc::clone(&recalls);
+                    let mrrs = Arc::clone(&mrrs);
+                    let ndcgs = Arc::clone(&ndcgs);
                     let pb = &pb;
 
                     s.spawn(move |_| {
@@ -546,19 +546,12 @@ impl Engine for TurbopufferEngine {
                         let elapsed = start.elapsed().as_secs_f64();
 
                         if let Ok(result_ids) = results {
-                            let expected: std::collections::HashSet<i64> =
-                                neighbor.iter().take(top).copied().collect();
-                            let found: std::collections::HashSet<i64> =
-                                result_ids.into_iter().collect();
-                            let hits = expected.intersection(&found).count();
-                            let precision = if expected.is_empty() {
-                                1.0
-                            } else {
-                                hits as f64 / expected.len() as f64
-                            };
-
+                            let m = crate::metrics::compute_metrics(&result_ids, &neighbor, top);
                             latencies.lock().unwrap()[i] = elapsed;
-                            precisions.lock().unwrap()[i] = precision;
+                            precisions.lock().unwrap()[i] = m.precision;
+                            recalls.lock().unwrap()[i] = m.recall;
+                            mrrs.lock().unwrap()[i] = m.mrr;
+                            ndcgs.lock().unwrap()[i] = m.ndcg;
                         }
                         pb.inc(1);
                     });
@@ -571,9 +564,15 @@ impl Engine for TurbopufferEngine {
 
         let latencies = latencies.lock().unwrap().clone();
         let precisions = precisions.lock().unwrap().clone();
+        let recalls = recalls.lock().unwrap().clone();
+        let mrrs = mrrs.lock().unwrap().clone();
+        let ndcgs = ndcgs.lock().unwrap().clone();
 
         let mean_time = latencies.iter().sum::<f64>() / num_to_run as f64;
         let mean_precision = precisions.iter().sum::<f64>() / num_to_run as f64;
+        let mean_recall = recalls.iter().sum::<f64>() / num_to_run as f64;
+        let mean_mrr = mrrs.iter().sum::<f64>() / num_to_run as f64;
+        let mean_ndcg = ndcgs.iter().sum::<f64>() / num_to_run as f64;
 
         let variance = latencies
             .iter()
@@ -598,6 +597,9 @@ impl Engine for TurbopufferEngine {
             total_time,
             mean_time,
             mean_precision,
+            mean_recall,
+            mean_mrr,
+            mean_ndcg,
             std_time,
             min_time,
             max_time,
@@ -606,6 +608,9 @@ impl Engine for TurbopufferEngine {
             p95_time,
             p99_time,
             precisions,
+            recalls,
+            mrrs,
+            ndcgs,
             latencies,
             top,
             num_queries: num_to_run,

@@ -9,6 +9,7 @@ mod dataset;
 mod download;
 mod engine;
 mod experiment;
+mod metrics;
 mod summary;
 
 use clap::Parser;

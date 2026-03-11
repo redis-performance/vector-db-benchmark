@@ -18,6 +18,7 @@ use redis::Connection;
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
+use crate::metrics::compute_metrics;
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
 
 /// Redis engine configuration
@@ -1307,6 +1308,9 @@ impl Engine for RedisEngine {
         let search_times: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
@@ -1322,6 +1326,9 @@ impl Engine for RedisEngine {
                 let parsed_filters = &parsed_filters;
                 let search_times = Arc::clone(&search_times);
                 let precisions = Arc::clone(&precisions);
+                let recalls = Arc::clone(&recalls);
+                let mrrs = Arc::clone(&mrrs);
+                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -1367,17 +1374,19 @@ impl Engine for RedisEngine {
 
                         search_times.lock().unwrap().push(query_time);
 
-                        // Calculate precision
+                        // Calculate retrieval quality metrics
                         if let Ok(result_ids) = results {
-                            let ground_truth: std::collections::HashSet<i64> =
-                                neighbors[idx].iter().take(top).copied().collect();
-                            let found: std::collections::HashSet<i64> =
-                                result_ids.iter().map(|(id, _)| *id).collect();
-                            let hits = ground_truth.intersection(&found).count();
-                            let precision = hits as f64 / top as f64;
-                            precisions.lock().unwrap().push(precision);
+                            let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
+                            let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
+                            precisions.lock().unwrap().push(m.precision);
+                            recalls.lock().unwrap().push(m.recall);
+                            mrrs.lock().unwrap().push(m.mrr);
+                            ndcgs.lock().unwrap().push(m.ndcg);
                         } else {
                             precisions.lock().unwrap().push(0.0);
+                            recalls.lock().unwrap().push(0.0);
+                            mrrs.lock().unwrap().push(0.0);
+                            ndcgs.lock().unwrap().push(0.0);
                         }
                         pb.inc(1);
                     }
@@ -1391,6 +1400,9 @@ impl Engine for RedisEngine {
         // Calculate statistics
         let times = search_times.lock().unwrap();
         let precs = precisions.lock().unwrap();
+        let recs = recalls.lock().unwrap();
+        let mrs = mrrs.lock().unwrap();
+        let nds = ndcgs.lock().unwrap();
 
         if times.is_empty() {
             return Err("No searches completed".to_string());
@@ -1398,6 +1410,9 @@ impl Engine for RedisEngine {
 
         let rps = times.len() as f64 / total_time;
         let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_recall = recs.iter().sum::<f64>() / recs.len() as f64;
+        let mean_mrr = mrs.iter().sum::<f64>() / mrs.len() as f64;
+        let mean_ndcg = nds.iter().sum::<f64>() / nds.len() as f64;
         let mean_time = times.iter().sum::<f64>() / times.len() as f64;
         let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
             / times.len() as f64)
@@ -1431,6 +1446,9 @@ impl Engine for RedisEngine {
             total_time,
             mean_time,
             mean_precision,
+            mean_recall,
+            mean_mrr,
+            mean_ndcg,
             std_time,
             min_time,
             max_time,
@@ -1439,6 +1457,9 @@ impl Engine for RedisEngine {
             p95_time,
             p99_time,
             precisions: precs.to_vec(),
+            recalls: recs.to_vec(),
+            mrrs: mrs.to_vec(),
+            ndcgs: nds.to_vec(),
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
@@ -1497,6 +1518,9 @@ impl Engine for RedisEngine {
             Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let update_times: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
         let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let search_idx = Arc::new(AtomicUsize::new(0));
         let update_idx = Arc::new(AtomicUsize::new(0));
 
@@ -1523,6 +1547,9 @@ impl Engine for RedisEngine {
                 let search_times = Arc::clone(&search_times);
                 let update_times = Arc::clone(&update_times);
                 let precisions = Arc::clone(&precisions);
+                let recalls = Arc::clone(&recalls);
+                let mrrs = Arc::clone(&mrrs);
+                let ndcgs = Arc::clone(&ndcgs);
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
                 let pb = &pb;
@@ -1569,16 +1596,19 @@ impl Engine for RedisEngine {
 
                             search_times.lock().unwrap().push(query_time);
 
+                            // Calculate retrieval quality metrics
                             if let Ok(result_ids) = results {
-                                let ground_truth: std::collections::HashSet<i64> =
-                                    neighbors[idx].iter().take(top).copied().collect();
-                                let found: std::collections::HashSet<i64> =
-                                    result_ids.iter().map(|(id, _)| *id).collect();
-                                let hits = ground_truth.intersection(&found).count();
-                                let precision = hits as f64 / top as f64;
-                                precisions.lock().unwrap().push(precision);
+                                let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
+                                let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                precisions.lock().unwrap().push(m.precision);
+                                recalls.lock().unwrap().push(m.recall);
+                                mrrs.lock().unwrap().push(m.mrr);
+                                ndcgs.lock().unwrap().push(m.ndcg);
                             } else {
                                 precisions.lock().unwrap().push(0.0);
+                                recalls.lock().unwrap().push(0.0);
+                                mrrs.lock().unwrap().push(0.0);
+                                ndcgs.lock().unwrap().push(0.0);
                             }
                             pb.inc(1);
                         }
@@ -1609,6 +1639,9 @@ impl Engine for RedisEngine {
 
         let times = search_times.lock().unwrap();
         let precs = precisions.lock().unwrap();
+        let recs = recalls.lock().unwrap();
+        let mrs = mrrs.lock().unwrap();
+        let nds = ndcgs.lock().unwrap();
         let u_times = update_times.lock().unwrap();
 
         if times.is_empty() {
@@ -1617,6 +1650,9 @@ impl Engine for RedisEngine {
 
         let rps = times.len() as f64 / total_time;
         let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
+        let mean_recall = recs.iter().sum::<f64>() / recs.len() as f64;
+        let mean_mrr = mrs.iter().sum::<f64>() / mrs.len() as f64;
+        let mean_ndcg = nds.iter().sum::<f64>() / nds.len() as f64;
         let mean_time = times.iter().sum::<f64>() / times.len() as f64;
         let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
             / times.len() as f64)
@@ -1680,6 +1716,9 @@ impl Engine for RedisEngine {
             total_time,
             mean_time,
             mean_precision,
+            mean_recall,
+            mean_mrr,
+            mean_ndcg,
             std_time,
             min_time,
             max_time,
@@ -1688,6 +1727,9 @@ impl Engine for RedisEngine {
             p95_time,
             p99_time,
             precisions: precs.to_vec(),
+            recalls: recs.to_vec(),
+            mrrs: mrs.to_vec(),
+            ndcgs: nds.to_vec(),
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
