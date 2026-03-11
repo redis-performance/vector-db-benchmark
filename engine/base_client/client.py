@@ -217,6 +217,22 @@ class BaseClient:
                 upload_end_idx=upload_end_idx,
             )
 
+            # Populate upload summary in results
+            algorithm = self.configurator.collection_params.get("algorithm", "hnsw")
+            algo_config_key = f"{algorithm}_config"
+            index_info = upload_stats.get("memory_usage", {}).get("index_info", {})
+            upload_summary = {"total_time": upload_stats.get("total_time")}
+            used_memory = upload_stats.get("memory_usage", {}).get("used_memory")
+            if used_memory is not None:
+                upload_summary["used_memory"] = used_memory
+            total_index_memory = index_info.get("total_index_memory_sz_mb")
+            if total_index_memory is not None:
+                upload_summary["total_index_memory_sz_mb"] = total_index_memory
+            algo_config = self.configurator.collection_params.get(algo_config_key)
+            if algo_config is not None:
+                upload_summary[algo_config_key] = algo_config
+            results["upload"] = upload_summary
+
         if not skip_search:
             print("Experiment stage: Search")
             for search_id, searcher in enumerate(self.searchers):
