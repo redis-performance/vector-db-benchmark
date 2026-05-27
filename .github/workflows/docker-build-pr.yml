@@ -26,7 +26,7 @@ jobs:
 
     services:
       redis:
-        image: redis:8.2-rc1-alpine3.22
+        image: redis:8.6
         ports:
           - 6379:6379
         options: >-

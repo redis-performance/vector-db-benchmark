@@ -13,7 +13,7 @@ jobs:
     
     services:
       redis:
-        image: redis:8.2-rc1-bookworm
+        image: redis:8.6
         ports:
           - 6379:6379
         options: >-
@@ -58,7 +58,7 @@ jobs:
         echo "Testing --describe commands..."
         poetry run python run.py --describe datasets | head -10
         poetry run python run.py --describe engines | head -10
-        echo "✅ Describe functionality works"
+        echo "Describe functionality works"
         
     - name: Test basic benchmark functionality
       run: |
@@ -77,26 +77,26 @@ jobs:
       run: |
         echo "Checking if results were generated..."
         if [ -d "results" ] && [ "$(ls -A results)" ]; then
-          echo "✅ Results directory contains files:"
+          echo "Results directory contains files:"
           ls -la results/
           
           # Check for summary file
           if ls results/*summary.json 1> /dev/null 2>&1; then
-            echo "✅ Summary file found"
+            echo "Summary file found"
             echo "Sample summary content:"
             head -20 results/*summary.json
           else
-            echo "⚠️  No summary file found"
+            echo "No summary file found"
           fi
           
           # Check for experiment files
           if ls results/*redis-default-simple*.json 1> /dev/null 2>&1; then
-            echo "✅ Experiment result files found"
+            echo "Experiment result files found"
           else
-            echo "⚠️  No experiment result files found"
+            echo "No experiment result files found"
           fi
         else
-          echo "❌ No results generated"
+          echo "No results generated"
           exit 1
         fi
         
@@ -111,11 +111,11 @@ jobs:
           --skip-upload \
           --timeout 180
           
-        echo "✅ Skip upload test completed"
+        echo "Skip upload test completed"
         
     - name: Cleanup
       run: |
         echo "Cleaning up test files..."
         rm -rf datasets/random-100/
         rm -rf results/
-        echo "✅ Cleanup completed"
+        echo "Cleanup completed"
