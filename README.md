@@ -1,5 +1,8 @@
 # vector-db-benchmark
 
+[![Docker Pulls](https://img.shields.io/docker/pulls/redis/vector-db-benchmark)](https://hub.docker.com/r/redis/vector-db-benchmark)
+[![CI](https://github.com/redis-performance/vector-db-benchmark/actions/workflows/test-basic-functionality-redisearch.yml/badge.svg)](https://github.com/redis-performance/vector-db-benchmark/actions/workflows/test-basic-functionality-redisearch.yml)
+
 A comprehensive benchmarking tool for vector databases, including Redis (both RediSearch and Vector Sets), Weaviate, Milvus, Qdrant, OpenSearch, Postgres, and others...
 
 In a one-liner cli tool you can get this and much more:
