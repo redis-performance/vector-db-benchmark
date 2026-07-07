@@ -40,6 +40,8 @@ pub struct QdrantEngine {
     search_params: Vec<SearchParams>,
     /// Raw collection_params JSON to pass through to Qdrant
     collection_params_extra: serde_json::Value,
+    hnsw_m: Option<u64>,
+    hnsw_ef_construct: Option<u64>,
     /// Tokio runtime for async operations
     rt: tokio::runtime::Runtime,
     /// Shared Qdrant client (wrapped in Arc for thread-safe sharing)
@@ -97,6 +99,13 @@ impl QdrantEngine {
             .map(|e| serde_json::to_value(e).unwrap_or_default())
             .unwrap_or(serde_json::json!({}));
 
+        let typed_hnsw = engine_config
+            .collection_params
+            .as_ref()
+            .and_then(|cp| cp.hnsw_config.as_ref());
+        let hnsw_m = typed_hnsw.and_then(|h| h.m).map(|v| v as u64);
+        let hnsw_ef_construct = typed_hnsw.and_then(|h| h.ef_construction).map(|v| v as u64);
+
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
 
@@ -121,6 +130,8 @@ impl QdrantEngine {
             api_key,
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             collection_params_extra,
+            hnsw_m,
+            hnsw_ef_construct,
             rt,
             client: Arc::new(client),
         })
@@ -159,17 +170,11 @@ impl QdrantEngine {
             other => return Err(format!("Unsupported distance metric for Qdrant: {}", other)),
         };
 
-        // Extract HNSW params from extra config
-        let hnsw_m = self
-            .collection_params_extra
-            .get("hnsw_config")
-            .and_then(|h| h.get("m"))
-            .and_then(|v| v.as_u64());
-        let hnsw_ef = self
-            .collection_params_extra
-            .get("hnsw_config")
-            .and_then(|h| h.get("ef_construct"))
-            .and_then(|v| v.as_u64());
+        // HNSW params come from the TYPED collection_params.hnsw_config field
+        // (serde captures "m"/"ef_construct" there via aliases; the flattened
+        // `extra` map never contains hnsw_config since it is a declared field).
+        let hnsw_m = self.hnsw_m;
+        let hnsw_ef = self.hnsw_ef_construct;
 
         let vector_params = VectorParamsBuilder::new(vector_size as u64, qdrant_distance);
 
