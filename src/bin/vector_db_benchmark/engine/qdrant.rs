@@ -10,9 +10,11 @@ use std::time::Instant;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use qdrant_client::qdrant::vectors_config::Config;
+use qdrant_client::qdrant::quantization_config::Quantization;
 use qdrant_client::qdrant::{
-    Condition, CreateCollectionBuilder, DeleteCollectionBuilder, Distance, FieldType, Filter,
-    HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct, SearchPointsBuilder,
+    BinaryQuantization, Condition, CreateCollectionBuilder, DeleteCollectionBuilder, Distance,
+    FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct,
+    QuantizationSearchParams, QuantizationType, ScalarQuantization, SearchPointsBuilder,
     VectorParamsBuilder, VectorsConfig,
 };
 use qdrant_client::{Payload, Qdrant};
@@ -186,6 +188,50 @@ impl QdrantEngine {
                 hnsw_config.ef_construct = Some(ef as u64);
             }
             create_builder = create_builder.hnsw_config(hnsw_config);
+        }
+
+        // Pass through optimizers_config (e.g. the rps-tuned default_segment_number /
+        // max_segment_size / memmap_threshold) — mirrors the python engine, which
+        // forwards collection_params verbatim.
+        if let Some(opt) = self.collection_params_extra.get("optimizers_config") {
+            let mut diff = OptimizersConfigDiff::default();
+            if let Some(v) = opt.get("default_segment_number").and_then(|v| v.as_u64()) {
+                diff.default_segment_number = Some(v);
+            }
+            if let Some(v) = opt.get("max_segment_size").and_then(|v| v.as_u64()) {
+                diff.max_segment_size = Some(v);
+            }
+            if let Some(v) = opt.get("memmap_threshold").and_then(|v| v.as_u64()) {
+                diff.memmap_threshold = Some(v);
+            }
+            create_builder = create_builder.optimizers_config(diff);
+        }
+
+        // Pass through quantization_config (sq/bq tuned setups).
+        if let Some(q) = self.collection_params_extra.get("quantization_config") {
+            let quantization = if let Some(s) = q.get("scalar") {
+                let qtype = match s.get("type").and_then(|v| v.as_str()) {
+                    Some("int8") | None => QuantizationType::Int8,
+                    Some(other) => {
+                        return Err(format!("Unsupported scalar quantization type: {}", other))
+                    }
+                };
+                Some(Quantization::Scalar(ScalarQuantization {
+                    r#type: qtype.into(),
+                    quantile: s.get("quantile").and_then(|v| v.as_f64()).map(|v| v as f32),
+                    always_ram: s.get("always_ram").and_then(|v| v.as_bool()),
+                }))
+            } else if let Some(b) = q.get("binary") {
+                Some(Quantization::Binary(BinaryQuantization {
+                    always_ram: b.get("always_ram").and_then(|v| v.as_bool()),
+                    ..Default::default()
+                }))
+            } else {
+                None
+            };
+            if let Some(quantization) = quantization {
+                create_builder = create_builder.quantization_config(quantization);
+            }
         }
 
         self.rt
@@ -591,6 +637,19 @@ impl Engine for QdrantEngine {
             })
         });
 
+        // Search-time quantization params (rescore/oversampling) from the config's
+        // search_params.quantization object — mirrors python rest.SearchParams(**params).
+        let quantization_params: Option<QuantizationSearchParams> = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.extra.as_ref())
+            .and_then(|e| e.get("quantization"))
+            .map(|q| QuantizationSearchParams {
+                rescore: q.get("rescore").and_then(|v| v.as_bool()),
+                oversampling: q.get("oversampling").and_then(|v| v.as_f64()),
+                ..Default::default()
+            });
+
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
@@ -663,9 +722,10 @@ impl Engine for QdrantEngine {
                         )
                         .with_payload(false);
 
-                        if let Some(ef) = hnsw_ef {
+                        if hnsw_ef.is_some() || quantization_params.is_some() {
                             let search_params = qdrant_client::qdrant::SearchParams {
-                                hnsw_ef: Some(ef),
+                                hnsw_ef,
+                                quantization: quantization_params.clone(),
                                 ..Default::default()
                             };
                             search_builder = search_builder.params(search_params);
