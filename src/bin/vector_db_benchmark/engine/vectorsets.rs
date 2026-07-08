@@ -472,7 +472,12 @@ impl Engine for VectorSetsEngine {
 
         // Verify no VADD failures occurred during upload
         let mut conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut conn, &["VADD"], "upload", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut conn,
+            &["VADD"],
+            "upload",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(UploadStats {
             upload_time,
@@ -585,8 +590,10 @@ impl Engine for VectorSetsEngine {
                         search_times.lock().unwrap().push(query_time);
 
                         if let Ok(result_ids) = results {
-                            let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                            let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                            let ordered_ids: Vec<i64> =
+                                result_ids.iter().map(|(id, _)| *id).collect();
+                            let m =
+                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
                             mrrs.lock().unwrap().push(m.mrr);
@@ -647,7 +654,12 @@ impl Engine for VectorSetsEngine {
 
         // Verify no VSIM failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["VSIM"], "search", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["VSIM"],
+            "search",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,
@@ -802,8 +814,13 @@ impl Engine for VectorSetsEngine {
                             search_times.lock().unwrap().push(query_time);
 
                             if let Ok(result_ids) = results {
-                                let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                let ordered_ids: Vec<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let m = crate::metrics::compute_metrics(
+                                    &ordered_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
                                 precisions.lock().unwrap().push(m.precision);
                                 recalls.lock().unwrap().push(m.recall);
                                 mrrs.lock().unwrap().push(m.mrr);
@@ -914,7 +931,12 @@ impl Engine for VectorSetsEngine {
 
         // Verify no failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["VSIM", "VADD"], "mixed", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["VSIM", "VADD"],
+            "mixed",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,
@@ -1049,10 +1071,8 @@ fn build_match_clause(field_name: &str, criteria: &serde_json::Value) -> Option<
         Some(format!(".{} == \"{}\"", field_name, escaped))
     } else if let Some(n) = value.as_i64() {
         Some(format!(".{} == {}", field_name, n))
-    } else if let Some(f) = value.as_f64() {
-        Some(format!(".{} == {}", field_name, f))
     } else {
-        None
+        value.as_f64().map(|f| format!(".{} == {}", field_name, f))
     }
 }
 

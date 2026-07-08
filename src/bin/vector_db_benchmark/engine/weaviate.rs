@@ -538,7 +538,7 @@ fn parse_weaviate_conditions(conditions: &serde_json::Value) -> Option<serde_jso
     if let Some(and_items) = obj.get("and").and_then(|v| v.as_array()) {
         let and_filters: Vec<serde_json::Value> = and_items
             .iter()
-            .filter_map(|entry| build_weaviate_entry_filter(entry))
+            .filter_map(build_weaviate_entry_filter)
             .collect();
         if !and_filters.is_empty() {
             if and_filters.len() == 1 {
@@ -555,7 +555,7 @@ fn parse_weaviate_conditions(conditions: &serde_json::Value) -> Option<serde_jso
     if let Some(or_items) = obj.get("or").and_then(|v| v.as_array()) {
         let or_filters: Vec<serde_json::Value> = or_items
             .iter()
-            .filter_map(|entry| build_weaviate_entry_filter(entry))
+            .filter_map(build_weaviate_entry_filter)
             .collect();
         if !or_filters.is_empty() {
             if or_filters.len() == 1 {
@@ -878,8 +878,10 @@ impl Engine for WeaviateEngine {
                         search_times.lock().unwrap().push(query_time);
 
                         if let Ok(result_ids) = results {
-                            let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                            let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                            let ordered_ids: Vec<i64> =
+                                result_ids.iter().map(|(id, _)| *id).collect();
+                            let m =
+                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
                             mrrs.lock().unwrap().push(m.mrr);

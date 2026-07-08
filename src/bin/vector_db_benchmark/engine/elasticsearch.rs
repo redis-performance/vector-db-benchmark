@@ -840,11 +840,8 @@ impl Engine for ElasticsearchEngine {
                         if let Ok(result_ids) = results {
                             let ordered_ids: Vec<i64> =
                                 result_ids.iter().map(|(id, _)| *id).collect();
-                            let m = crate::metrics::compute_metrics(
-                                &ordered_ids,
-                                &neighbors[idx],
-                                top,
-                            );
+                            let m =
+                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
                             mrrs.lock().unwrap().push(m.mrr);
