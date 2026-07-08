@@ -12,6 +12,7 @@ use opensearch::http::request::JsonBody;
 use opensearch::http::transport::{SingleNodeConnectionPool, TransportBuilder};
 use opensearch::indices::{
     IndicesCreateParts, IndicesDeleteParts, IndicesForcemergeParts, IndicesPutSettingsParts,
+    IndicesRefreshParts,
 };
 use opensearch::{BulkParts, OpenSearch, SearchParts};
 use uuid::Uuid;
@@ -202,6 +203,11 @@ impl OpenSearchEngine {
             "settings": {
                 "index": {
                     "knn": true,
+                    // Indexing-throughput tuning: no replicas and no periodic
+                    // refresh, since the benchmark bulk-loads all data up front and
+                    // force-merges before searching.
+                    "number_of_replicas": 0,
+                    "refresh_interval": -1,
                 }
             },
             "mappings": {
@@ -308,6 +314,26 @@ impl OpenSearchEngine {
         Ok(())
     }
 
+    /// Refresh the index to make just-uploaded documents searchable. Required
+    /// because we set `refresh_interval: -1` (no periodic refresh) during upload.
+    fn refresh(&self) -> Result<(), String> {
+        let resp = self
+            .rt
+            .block_on(
+                self.client
+                    .indices()
+                    .refresh(IndicesRefreshParts::Index(&[&self.index_name]))
+                    .send(),
+            )
+            .map_err(|e| format!("Refresh failed: {}", e))?;
+
+        if !resp.status_code().is_success() {
+            let text = self.rt.block_on(resp.text()).unwrap_or_default();
+            return Err(format!("Refresh error: {}", text));
+        }
+        Ok(())
+    }
+
     fn force_merge(&self) -> Result<(), String> {
         println!("Forcing merge...");
 
@@ -328,8 +354,38 @@ impl OpenSearchEngine {
         Ok(())
     }
 
+    /// Load the kNN index into memory before searching so the first queries
+    /// aren't penalised by cold-cache graph loading. Best-effort: a non-success
+    /// response is logged, not fatal.
+    fn warmup(&self) -> Result<(), String> {
+        use opensearch::http::headers::HeaderMap;
+        use opensearch::http::Method;
+
+        let path = format!("/_plugins/_knn/warmup/{}", self.index_name);
+        let resp = self
+            .rt
+            .block_on(self.client.transport().send(
+                Method::Get,
+                &path,
+                HeaderMap::new(),
+                Option::<&()>::None,
+                Option::<Vec<u8>>::None,
+                None,
+            ))
+            .map_err(|e| format!("kNN warmup request failed: {}", e))?;
+
+        if !resp.status_code().is_success() {
+            let text = self.rt.block_on(resp.text()).unwrap_or_default();
+            eprintln!("Warning: kNN warmup returned non-success: {}", text);
+        }
+        Ok(())
+    }
+
     /// Apply search-time settings (e.g., knn.algo_param.ef_search)
     fn setup_search(&self, params: &SearchParams) -> Result<(), String> {
+        // Warm the graph into memory before timing any queries.
+        self.warmup()?;
+
         let ef_search = params
             .extra
             .as_ref()
@@ -642,10 +698,28 @@ fn build_knn_body(
         query["knn"]["vector"]["filter"] = f.clone();
     }
 
+    // Response trimming: the benchmark only needs each hit's id, so skip loading
+    // `_source` and stored fields and return `_id` via a doc-value field. This
+    // trims the response payload for a fairer QPS/latency measurement.
     serde_json::json!({
         "query": query,
         "size": top,
+        "_source": false,
+        "docvalue_fields": ["_id"],
+        "stored_fields": "_none_",
     })
+}
+
+/// Extract the document id from a search hit. With response trimming the id is
+/// returned as a doc-value under `fields._id[0]`; fall back to the top-level
+/// `_id` for untrimmed responses.
+fn hit_id(hit: &serde_json::Value) -> Option<&str> {
+    hit.get("fields")
+        .and_then(|f| f.get("_id"))
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .or_else(|| hit.get("_id").and_then(|v| v.as_str()))
 }
 
 fn knn_search(
@@ -684,10 +758,7 @@ fn knn_search(
 
     let mut results = Vec::with_capacity(hits.len());
     for hit in hits {
-        let id_hex = hit
-            .get("_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing _id in hit".to_string())?;
+        let id_hex = hit_id(hit).ok_or_else(|| "Missing _id in hit".to_string())?;
         let score = hit.get("_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let id = uuid_hex_to_int(id_hex)?;
         results.push((id, score));
@@ -752,6 +823,9 @@ impl Engine for OpenSearchEngine {
             vectors.len() as f64 / upload_time
         );
 
+        // Explicit refresh (refresh_interval is disabled during upload) so the
+        // documents are searchable, then merge segments.
+        self.refresh()?;
         self.force_merge()?;
 
         let total_time = read_time + upload_time;
@@ -982,6 +1056,27 @@ mod tests {
     fn knn_body_without_filter_has_no_filter_key() {
         let body = build_knn_body(&[0.1, 0.2], 5, None);
         assert!(body["query"]["knn"]["vector"].get("filter").is_none());
+    }
+
+    #[test]
+    fn knn_body_trims_the_response() {
+        // Response trimming: no _source, ids via doc-value, no stored fields.
+        let body = build_knn_body(&[0.1, 0.2], 5, None);
+        assert_eq!(body["_source"], serde_json::json!(false));
+        assert_eq!(body["docvalue_fields"], serde_json::json!(["_id"]));
+        assert_eq!(body["stored_fields"], serde_json::json!("_none_"));
+    }
+
+    #[test]
+    fn hit_id_reads_docvalue_then_falls_back() {
+        // Trimmed response: id under fields._id[0].
+        let trimmed = serde_json::json!({"fields": {"_id": ["deadbeef"]}, "_score": 1.0});
+        assert_eq!(hit_id(&trimmed), Some("deadbeef"));
+        // Untrimmed response: top-level _id.
+        let plain = serde_json::json!({"_id": "cafef00d", "_score": 1.0});
+        assert_eq!(hit_id(&plain), Some("cafef00d"));
+        // Missing id.
+        assert_eq!(hit_id(&serde_json::json!({"_score": 1.0})), None);
     }
 
     #[test]
