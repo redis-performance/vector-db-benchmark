@@ -88,6 +88,106 @@ pub struct SearchResults {
     pub update_search_ratio: Option<String>,
 }
 
+/// Build `SearchResults` for a search-only run from the per-query samples
+/// collected by an engine's parallel harness. Centralizes rps/means/std/
+/// percentile computation so every engine reports metrics identically.
+///
+/// `times`/`precisions`/`recalls`/`mrrs`/`ndcgs` are the per-successful-query
+/// samples (see the engines' search loops), `total_time` the wall clock,
+/// `top` the k used, and `parallel` the client concurrency.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_search_stats(
+    times: &[f64],
+    precisions: &[f64],
+    recalls: &[f64],
+    mrrs: &[f64],
+    ndcgs: &[f64],
+    total_time: f64,
+    top: usize,
+    parallel: usize,
+) -> Result<SearchResults, String> {
+    if times.is_empty() {
+        return Err("No searches completed".to_string());
+    }
+
+    let mean = |v: &[f64]| -> f64 {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
+
+    let mean_time = mean(times);
+    let std_time =
+        (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>() / times.len() as f64).sqrt();
+    let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    let mut sorted = times.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // Nearest-rank percentile, clamped to a valid index.
+    let pct = |q: f64| sorted[((sorted.len() as f64 * q) as usize).min(sorted.len() - 1)];
+
+    Ok(SearchResults {
+        total_time,
+        mean_time,
+        mean_precision: mean(precisions),
+        mean_recall: mean(recalls),
+        mean_mrr: mean(mrrs),
+        mean_ndcg: mean(ndcgs),
+        recalls: recalls.to_vec(),
+        mrrs: mrrs.to_vec(),
+        ndcgs: ndcgs.to_vec(),
+        std_time,
+        min_time,
+        max_time,
+        rps: times.len() as f64 / total_time,
+        p50_time: pct(0.50),
+        p95_time: pct(0.95),
+        p99_time: pct(0.99),
+        precisions: precisions.to_vec(),
+        latencies: times.to_vec(),
+        top,
+        num_queries: times.len(),
+        parallel,
+        ..Default::default()
+    })
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::compute_search_stats;
+
+    #[test]
+    fn empty_times_errors() {
+        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1).is_err());
+    }
+
+    #[test]
+    fn computes_means_rps_and_clamped_percentiles() {
+        let times = vec![0.1, 0.2, 0.3, 0.4];
+        let ones = vec![1.0, 1.0, 1.0, 1.0];
+        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4).unwrap();
+        assert_eq!(r.num_queries, 4);
+        assert!((r.rps - 2.0).abs() < 1e-9); // 4 / 2.0s
+        assert!((r.mean_recall - 1.0).abs() < 1e-9);
+        assert!((r.mean_time - 0.25).abs() < 1e-9);
+        assert!((r.min_time - 0.1).abs() < 1e-9 && (r.max_time - 0.4).abs() < 1e-9);
+        // percentile indices stay in-bounds (no panic, no 0.0 fallback)
+        assert!(r.p50_time > 0.0 && r.p95_time > 0.0 && r.p99_time > 0.0);
+        assert_eq!(r.parallel, 4);
+        assert_eq!(r.top, 10);
+        assert!(r.update_count.is_none());
+    }
+
+    #[test]
+    fn single_query_percentiles_dont_panic() {
+        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1).unwrap();
+        assert!((r.p99_time - 0.5).abs() < 1e-9);
+    }
+}
+
 /// Engine trait - equivalent to Python BaseClient
 ///
 /// Each engine implementation provides:
