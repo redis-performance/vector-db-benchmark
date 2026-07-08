@@ -428,7 +428,18 @@ impl QdrantEngine {
             ),
         );
 
-        for _ in 0..600 {
+        // Index build can take hours on large datasets (e.g. deep-image-96 has
+        // ~10M vectors); the old fixed 50-min cap (600 * 5s) was too short for
+        // high-M / high-ef_construct configs and silently aborted the whole run.
+        // Make the budget configurable (QDRANT_GREEN_WAIT_SECS) with a generous
+        // default, and log indexing progress so a slow build is visible and
+        // distinguishable from a genuinely stuck one.
+        let green_wait_secs: u64 = std::env::var("QDRANT_GREEN_WAIT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(14400); // 4h
+        let iterations = (green_wait_secs / 5).max(1);
+        for i in 0..iterations {
             std::thread::sleep(std::time::Duration::from_secs(5));
 
             if let Ok(info) = self
@@ -437,6 +448,17 @@ impl QdrantEngine {
             {
                 // status: 1 = Green, 2 = Yellow, 3 = Red (from protobuf enum)
                 if let Some(result) = info.result {
+                    // Progress heartbeat every ~60s so long builds aren't opaque.
+                    if i % 12 == 11 {
+                        println!(
+                            "  ...waiting for GREEN: status={} indexed={}/{} ({}s / {}s budget)",
+                            result.status,
+                            result.indexed_vectors_count.unwrap_or(0),
+                            result.points_count.unwrap_or(0),
+                            (i + 1) * 5,
+                            green_wait_secs
+                        );
+                    }
                     if result.status == 1 {
                         // Double-check
                         std::thread::sleep(std::time::Duration::from_secs(5));
@@ -455,7 +477,11 @@ impl QdrantEngine {
                 }
             }
         }
-        Err("Timed out waiting for collection to reach GREEN status".to_string())
+        Err(format!(
+            "Timed out waiting for collection to reach GREEN status after {}s \
+             (override with QDRANT_GREEN_WAIT_SECS)",
+            green_wait_secs
+        ))
     }
 }
 
