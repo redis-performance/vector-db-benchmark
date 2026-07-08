@@ -119,8 +119,11 @@ services:
     image: opensearchproject/opensearch:2.19.2
     environment:
       discovery.type: "single-node"
-      plugins.security.disabled: "true"
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "Admin_1234!"
+      # DISABLE_SECURITY_PLUGIN skips the security demo installer entirely; the
+      # older plugins.security.disabled flag does not, so the installer still ran
+      # and rejected the (weak) admin password, crashing the container on startup.
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
     ports:
       - "9202:9200"
     healthcheck:

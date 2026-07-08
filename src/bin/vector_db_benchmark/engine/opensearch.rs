@@ -441,22 +441,34 @@ fn parse_os_conditions(conditions: &serde_json::Value) -> Option<serde_json::Val
     let and_filters = obj
         .get("and")
         .and_then(|v| v.as_array())
-        .map(|entries| build_subfilters(entries));
+        .map(|entries| build_subfilters(entries))
+        .filter(|f| !f.is_empty());
     let or_filters = obj
         .get("or")
         .and_then(|v| v.as_array())
-        .map(|entries| build_subfilters(entries));
+        .map(|entries| build_subfilters(entries))
+        .filter(|f| !f.is_empty());
 
     if and_filters.is_none() && or_filters.is_none() {
         return None;
     }
 
-    Some(serde_json::json!({
-        "bool": {
-            "must": and_filters.unwrap_or_default(),
-            "should": or_filters.unwrap_or_default(),
-        }
-    }))
+    let mut bool_query = serde_json::Map::new();
+    if let Some(must) = and_filters {
+        bool_query.insert("must".to_string(), serde_json::Value::Array(must));
+    }
+    if let Some(should) = or_filters {
+        bool_query.insert("should".to_string(), serde_json::Value::Array(should));
+        // Force OR filters to actually restrict results. `minimum_should_match`
+        // defaults to 0 as soon as a `must` clause is also present, which would
+        // silently drop the OR condition in a mixed AND+OR filter.
+        bool_query.insert(
+            "minimum_should_match".to_string(),
+            serde_json::Value::from(1),
+        );
+    }
+
+    Some(serde_json::json!({ "bool": bool_query }))
 }
 
 fn build_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -605,14 +617,18 @@ fn upload_bulk_batch(
 
 /// OpenSearch KNN search (different format from Elasticsearch).
 /// Uses {"query": {"knn": {"vector": {"vector": [...], "k": top}}}} format.
-fn knn_search(
-    rt: &tokio::runtime::Runtime,
-    client: &OpenSearch,
-    index_name: &str,
+/// Build the OpenSearch kNN search body.
+///
+/// Efficient (pre-)filtering: the filter is pushed *inside* the kNN clause so the
+/// Lucene engine applies it during graph traversal. Wrapping the kNN query in an
+/// outer `bool.must` + `filter` instead performs post-filtering, which collapses
+/// recall on filtered datasets (see qdrant/vector-db-benchmark#167). Requires the
+/// `lucene` engine, which our index mapping uses (see `configure`).
+fn build_knn_body(
     query_vector: &[f32],
     top: usize,
     filter: Option<&serde_json::Value>,
-) -> Result<Vec<(i64, f64)>, String> {
+) -> serde_json::Value {
     let mut query = serde_json::json!({
         "knn": {
             "vector": {
@@ -623,18 +639,24 @@ fn knn_search(
     });
 
     if let Some(f) = filter {
-        query = serde_json::json!({
-            "bool": {
-                "must": [query],
-                "filter": f,
-            }
-        });
+        query["knn"]["vector"]["filter"] = f.clone();
     }
 
-    let body = serde_json::json!({
+    serde_json::json!({
         "query": query,
         "size": top,
-    });
+    })
+}
+
+fn knn_search(
+    rt: &tokio::runtime::Runtime,
+    client: &OpenSearch,
+    index_name: &str,
+    query_vector: &[f32],
+    top: usize,
+    filter: Option<&serde_json::Value>,
+) -> Result<Vec<(i64, f64)>, String> {
+    let body = build_knn_body(query_vector, top, filter);
 
     let resp = rt
         .block_on(
@@ -932,5 +954,67 @@ impl Engine for OpenSearchEngine {
 
     fn delete(&mut self) -> Result<(), String> {
         self.delete_index()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // Regression for qdrant/vector-db-benchmark#167: the filter must land inside
+    // the kNN clause (efficient filtering), not in an outer bool wrapper
+    // (post-filtering), otherwise filtered-search recall collapses.
+    #[test]
+    fn knn_filter_is_pushed_inside_knn_clause() {
+        let filter = json!({"bool": {"must": [{"match": {"a": 1}}]}});
+        let body = build_knn_body(&[0.1, 0.2, 0.3], 10, Some(&filter));
+
+        // Filter lives at query.knn.vector.filter ...
+        assert_eq!(body["query"]["knn"]["vector"]["filter"], filter);
+        // ... and there is no post-filtering bool wrapper around the kNN query.
+        assert!(
+            body["query"].get("bool").is_none(),
+            "kNN query must not be wrapped in an outer bool (post-filtering)"
+        );
+        assert_eq!(body["query"]["knn"]["vector"]["k"], 10);
+        assert_eq!(body["size"], 10);
+    }
+
+    #[test]
+    fn knn_body_without_filter_has_no_filter_key() {
+        let body = build_knn_body(&[0.1, 0.2], 5, None);
+        assert!(body["query"]["knn"]["vector"].get("filter").is_none());
+    }
+
+    #[test]
+    fn or_conditions_require_minimum_should_match() {
+        let conditions = json!({"or": [{"a": {"match": {"value": 1}}}]});
+        let parsed = parse_os_conditions(&conditions).expect("should parse");
+        let bool_query = &parsed["bool"];
+
+        // OR filters must actually restrict results, not just contribute score.
+        assert_eq!(bool_query["minimum_should_match"], 1);
+        assert!(bool_query["should"].as_array().unwrap().len() == 1);
+        // No empty `must` array should be emitted for an OR-only filter.
+        assert!(bool_query.get("must").is_none());
+    }
+
+    #[test]
+    fn and_only_conditions_omit_should() {
+        let conditions = json!({"and": [{"a": {"match": {"value": 1}}}]});
+        let parsed = parse_os_conditions(&conditions).expect("should parse");
+        let bool_query = &parsed["bool"];
+
+        assert!(bool_query["must"].as_array().unwrap().len() == 1);
+        assert!(bool_query.get("should").is_none());
+        assert!(bool_query.get("minimum_should_match").is_none());
+    }
+
+    #[test]
+    fn empty_conditions_return_none() {
+        assert!(parse_os_conditions(&json!({})).is_none());
+        // Present-but-empty sub-arrays should not produce a filter either.
+        assert!(parse_os_conditions(&json!({"and": [], "or": []})).is_none());
     }
 }
