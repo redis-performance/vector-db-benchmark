@@ -9,7 +9,7 @@ use crate::download;
 use vector_db_benchmark::readers::metadata::MetadataItem;
 use vector_db_benchmark::readers::{
     read_compound_data, read_compound_queries, read_hdf5_vectors, read_jsonl_queries,
-    read_jsonl_vectors, read_npy_vectors,
+    read_jsonl_vectors, read_npy_vectors, read_sparse_matrix, SparseVector,
 };
 
 /// Dataset wrapper that provides access to vectors and metadata
@@ -205,6 +205,40 @@ impl Dataset {
                 }
             }
         }
+    }
+
+    /// Whether this is a sparse-vector dataset (`dataset_type: "sparse"`).
+    pub fn is_sparse(&self) -> bool {
+        self.config.dataset_type.as_deref() == Some("sparse")
+    }
+
+    /// Read sparse data vectors from `<dir>/data.csr`. Ids are the row indices.
+    pub fn read_sparse_data(&self) -> Result<(Vec<i64>, Vec<SparseVector>), String> {
+        let dir = self.get_path()?;
+        let data = dir.join("data.csr");
+        let vectors = read_sparse_matrix(data.to_str().ok_or("Invalid data.csr path")?)?;
+        let ids: Vec<i64> = (0..vectors.len() as i64).collect();
+        Ok((ids, vectors))
+    }
+
+    /// Read sparse queries from `<dir>/queries.csr` and ground-truth neighbours
+    /// from `<dir>/neighbours.jsonl` (one JSON array of ids per line).
+    pub fn read_sparse_queries(&self) -> Result<(Vec<SparseVector>, Vec<Vec<i64>>), String> {
+        let dir = self.get_path()?;
+        let queries = read_sparse_matrix(
+            dir.join("queries.csr")
+                .to_str()
+                .ok_or("Invalid queries.csr path")?,
+        )?;
+
+        let gt_path = dir.join("neighbours.jsonl");
+        let neighbours: Vec<Vec<i64>> = std::fs::read_to_string(&gt_path)
+            .map_err(|e| format!("read {}: {}", gt_path.display(), e))?
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<Vec<i64>>(l).map_err(|e| e.to_string()))
+            .collect::<Result<_, _>>()?;
+        Ok((queries, neighbours))
     }
 
     /// Read queries from HDF5 file (test + neighbors datasets).
