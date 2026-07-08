@@ -12,9 +12,10 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use qdrant_client::qdrant::quantization_config::Quantization;
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
-    BinaryQuantization, Condition, CreateCollectionBuilder, DeleteCollectionBuilder, Distance,
-    FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct,
-    QuantizationSearchParams, QuantizationType, ScalarQuantization, SearchPointsBuilder,
+    BinaryQuantization, Condition, CreateCollectionBuilder, DatetimeRange, DeleteCollectionBuilder,
+    Distance, FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff,
+    PointStruct, PrefetchQueryBuilder, QuantizationSearchParams, QuantizationType,
+    QueryPointsBuilder, ScalarQuantization, SearchParams as QdrantSearchParams, Timestamp,
     VectorParamsBuilder, VectorsConfig,
 };
 use qdrant_client::{Payload, Qdrant};
@@ -190,7 +191,16 @@ impl QdrantEngine {
         let hnsw_m = self.hnsw_m;
         let hnsw_ef = self.hnsw_ef_construct;
 
-        let vector_params = VectorParamsBuilder::new(vector_size as u64, qdrant_distance);
+        // Optionally store vectors on disk (mmap) — collection_params.vectors_config.on_disk.
+        let vectors_on_disk = self
+            .collection_params_extra
+            .get("vectors_config")
+            .and_then(|v| v.get("on_disk"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let vector_params =
+            VectorParamsBuilder::new(vector_size as u64, qdrant_distance).on_disk(vectors_on_disk);
 
         let mut create_builder = CreateCollectionBuilder::new(&self.collection_name)
             .vectors_config(VectorsConfig {
@@ -283,6 +293,9 @@ impl QdrantEngine {
                         "text" => FieldType::Text,
                         "float" => FieldType::Float,
                         "geo" => FieldType::Geo,
+                        "uuid" => FieldType::Uuid,
+                        "bool" => FieldType::Bool,
+                        "datetime" => FieldType::Datetime,
                         _ => continue,
                     };
                     let _ = self.rt.block_on(self.client.create_field_index(
@@ -548,6 +561,15 @@ fn build_qdrant_subfilters(entries: &[serde_json::Value]) -> Vec<Condition> {
     filters
 }
 
+/// Parse an ISO-8601 / RFC 3339 datetime string into a protobuf Timestamp.
+fn parse_rfc3339_timestamp(s: &str) -> Option<Timestamp> {
+    let dt = chrono::DateTime::parse_from_rfc3339(s).ok()?;
+    Some(Timestamp {
+        seconds: dt.timestamp(),
+        nanos: dt.timestamp_subsec_nanos() as i32,
+    })
+}
+
 fn build_qdrant_filter(
     field_name: &str,
     condition_type: &str,
@@ -555,9 +577,32 @@ fn build_qdrant_filter(
 ) -> Option<Condition> {
     match condition_type {
         "match" => {
-            let value = criteria.get("value")?;
+            let criteria_obj = criteria.as_object()?;
+            // match_any: value in a list (keywords or integers).
+            if let Some(any) = criteria_obj.get("any").and_then(|v| v.as_array()) {
+                if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
+                    let vals: Vec<i64> = any.iter().filter_map(|v| v.as_i64()).collect();
+                    return Some(Condition::matches(field_name.to_string(), vals));
+                }
+                let vals: Vec<String> = any
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                return Some(Condition::matches(field_name.to_string(), vals));
+            }
+            // match_text: full-text match.
+            if let Some(text) = criteria_obj.get("text").and_then(|v| v.as_str()) {
+                return Some(Condition::matches_text(
+                    field_name.to_string(),
+                    text.to_string(),
+                ));
+            }
+            // exact match on keyword / integer / bool.
+            let value = criteria_obj.get("value")?;
             if let Some(s) = value.as_str() {
                 Some(Condition::matches(field_name.to_string(), s.to_string()))
+            } else if let Some(b) = value.as_bool() {
+                Some(Condition::matches(field_name.to_string(), b))
             } else {
                 value
                     .as_i64()
@@ -566,6 +611,27 @@ fn build_qdrant_filter(
         }
         "range" => {
             let criteria_obj = criteria.as_object()?;
+            // A string bound means an ISO-8601 datetime range rather than numeric.
+            let is_datetime = ["lt", "gt", "lte", "gte"]
+                .iter()
+                .any(|k| criteria_obj.get(*k).map(|v| v.is_string()).unwrap_or(false));
+            if is_datetime {
+                let ts = |k: &str| {
+                    criteria_obj
+                        .get(k)
+                        .and_then(|v| v.as_str())
+                        .and_then(parse_rfc3339_timestamp)
+                };
+                return Some(Condition::datetime_range(
+                    field_name.to_string(),
+                    DatetimeRange {
+                        lt: ts("lt"),
+                        gt: ts("gt"),
+                        gte: ts("gte"),
+                        lte: ts("lte"),
+                    },
+                ));
+            }
             let mut range = qdrant_client::qdrant::Range::default();
             if let Some(lt) = criteria_obj.get("lt").and_then(|v| v.as_f64()) {
                 range.lt = Some(lt);
@@ -695,6 +761,30 @@ impl Engine for QdrantEngine {
                 ..Default::default()
             });
 
+        // Prefetch (two-stage retrieval / rescoring): search_params.prefetch =
+        // { "limit": N, "params": { "hnsw_ef": .., "quantization": {..} } }.
+        // Mirrors python `models.Prefetch(**prefetch, query=query_vector)`.
+        let prefetch = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.extra.as_ref())
+            .and_then(|e| e.get("prefetch"));
+        let prefetch_enabled = prefetch.is_some();
+        let prefetch_limit = prefetch
+            .and_then(|p| p.get("limit"))
+            .and_then(|v| v.as_u64());
+        let prefetch_params = prefetch.and_then(|p| p.get("params"));
+        let prefetch_hnsw_ef = prefetch_params
+            .and_then(|p| p.get("hnsw_ef"))
+            .and_then(|v| v.as_u64());
+        let prefetch_quant: Option<QuantizationSearchParams> = prefetch_params
+            .and_then(|p| p.get("quantization"))
+            .map(|q| QuantizationSearchParams {
+                rescore: q.get("rescore").and_then(|v| v.as_bool()),
+                oversampling: q.get("oversampling").and_then(|v| v.as_f64()),
+                ..Default::default()
+            });
+
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
@@ -760,28 +850,41 @@ impl Engine for QdrantEngine {
                             }
                         });
 
-                        let mut search_builder = SearchPointsBuilder::new(
-                            &collection_name,
-                            queries[idx].clone(),
-                            top as u64,
-                        )
-                        .with_payload(false);
+                        let mut query_builder = QueryPointsBuilder::new(collection_name.clone())
+                            .query(queries[idx].clone())
+                            .limit(top as u64)
+                            .with_payload(false);
 
                         if hnsw_ef.is_some() || quantization_params.is_some() {
-                            let search_params = qdrant_client::qdrant::SearchParams {
+                            query_builder = query_builder.params(QdrantSearchParams {
                                 hnsw_ef,
                                 quantization: quantization_params,
                                 ..Default::default()
-                            };
-                            search_builder = search_builder.params(search_params);
+                            });
                         }
 
                         if let Some(filter) = &parsed_filters[idx] {
-                            search_builder = search_builder.filter(filter.clone());
+                            query_builder = query_builder.filter(filter.clone());
+                        }
+
+                        if prefetch_enabled {
+                            let mut pf =
+                                PrefetchQueryBuilder::default().query(queries[idx].clone());
+                            if let Some(l) = prefetch_limit {
+                                pf = pf.limit(l);
+                            }
+                            if prefetch_hnsw_ef.is_some() || prefetch_quant.is_some() {
+                                pf = pf.params(QdrantSearchParams {
+                                    hnsw_ef: prefetch_hnsw_ef,
+                                    quantization: prefetch_quant,
+                                    ..Default::default()
+                                });
+                            }
+                            query_builder = query_builder.prefetch(vec![pf.build()]);
                         }
 
                         let query_start = Instant::now();
-                        let result = rt.block_on(client.search_points(search_builder));
+                        let result = rt.block_on(client.query(query_builder));
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         search_times.lock().unwrap().push(query_time);
@@ -984,7 +1087,59 @@ fn parse_qdrant_metrics(text: &str) -> serde_json::Map<String, serde_json::Value
 
 #[cfg(test)]
 mod tests {
-    use super::parse_qdrant_metrics;
+    use super::{build_qdrant_filter, parse_qdrant_metrics, parse_rfc3339_timestamp};
+    use qdrant_client::qdrant::{condition::ConditionOneOf, FieldCondition};
+    use serde_json::json;
+
+    fn field_condition(c: &qdrant_client::qdrant::Condition) -> FieldCondition {
+        match c.condition_one_of.clone().unwrap() {
+            ConditionOneOf::Field(fc) => fc,
+            other => panic!("expected FieldCondition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_rfc3339_timestamp() {
+        let ts = parse_rfc3339_timestamp("1970-01-01T00:00:01Z").unwrap();
+        assert_eq!(ts.seconds, 1);
+        assert!(parse_rfc3339_timestamp("not-a-date").is_none());
+    }
+
+    #[test]
+    fn builds_match_any_integers() {
+        let c = build_qdrant_filter("cat", "match", &json!({"any": [1, 2, 3]})).unwrap();
+        let fc = field_condition(&c);
+        assert_eq!(fc.key, "cat");
+        assert!(fc.r#match.is_some(), "match_any should set a Match");
+    }
+
+    #[test]
+    fn builds_match_text() {
+        let c = build_qdrant_filter("body", "match", &json!({"text": "hello"})).unwrap();
+        let fc = field_condition(&c);
+        assert_eq!(fc.key, "body");
+        assert!(fc.r#match.is_some());
+    }
+
+    #[test]
+    fn builds_bool_exact_match() {
+        let c = build_qdrant_filter("flag", "match", &json!({"value": true})).unwrap();
+        assert!(field_condition(&c).r#match.is_some());
+    }
+
+    #[test]
+    fn range_with_string_bound_becomes_datetime_range() {
+        let dt =
+            build_qdrant_filter("ts", "range", &json!({"gte": "2023-01-01T00:00:00Z"})).unwrap();
+        let fc = field_condition(&dt);
+        assert!(fc.datetime_range.is_some(), "string bound → datetime_range");
+        assert!(fc.range.is_none());
+
+        let num = build_qdrant_filter("n", "range", &json!({"gte": 5, "lt": 10})).unwrap();
+        let fc = field_condition(&num);
+        assert!(fc.range.is_some(), "numeric bounds → numeric range");
+        assert!(fc.datetime_range.is_none());
+    }
 
     #[test]
     fn parses_qdrant_memory_and_collection_gauges() {
