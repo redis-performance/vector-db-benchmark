@@ -386,8 +386,8 @@ fn test_valkey_upload_and_retrieve() {
     }
 
     // Verify vectors stored
-    for i in 0..ids.len() {
-        let key = ids[i].to_string();
+    for id in &ids {
+        let key = id.to_string();
         let exists: bool = redis::cmd("EXISTS").arg(&key).query(&mut conn).unwrap();
         assert!(exists, "Key {} should exist", key);
     }

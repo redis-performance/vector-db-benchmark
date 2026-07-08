@@ -69,7 +69,7 @@ fn get_index_doc_count() -> usize {
     let client = es_client();
     // Refresh first to make sure all docs are searchable
     let _ = client
-        .post(&format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
         .send();
     let url = format!("{}/{}/_count", es_base_url(), ES_INDEX);
     let resp = client.get(&url).send().expect("Failed to get doc count");
@@ -207,7 +207,7 @@ fn test_es_bulk_upload_and_count() {
         }
     });
     let resp = client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&create_body)
         .send()
         .unwrap();
@@ -224,7 +224,7 @@ fn test_es_bulk_upload_and_count() {
     }
 
     let resp = client
-        .post(&format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(bulk_body)
         .send()
@@ -268,7 +268,7 @@ fn test_es_uuid_id_format() {
         }
     });
     client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&create_body)
         .send()
         .unwrap();
@@ -280,7 +280,7 @@ fn test_es_uuid_id_format() {
         uuid_hex
     );
     client
-        .post(&format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(bulk_body)
         .send()
@@ -288,12 +288,12 @@ fn test_es_uuid_id_format() {
 
     // Refresh and retrieve by UUID
     client
-        .post(&format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
 
     let resp = client
-        .get(&format!("{}/{}/_doc/{}", es_base_url(), ES_INDEX, uuid_hex))
+        .get(format!("{}/{}/_doc/{}", es_base_url(), ES_INDEX, uuid_hex))
         .send()
         .unwrap();
     assert!(
@@ -319,7 +319,7 @@ fn test_es_delete_index() {
 
     // Create index
     client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&serde_json::json!({
             "mappings": {
                 "properties": {
@@ -332,14 +332,14 @@ fn test_es_delete_index() {
 
     // Delete it
     let resp = client
-        .delete(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .delete(format!("{}/{}", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
 
     // Verify gone (should return 404)
     let resp = client
-        .get(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .get(format!("{}/{}", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
@@ -354,7 +354,7 @@ fn test_es_delete_nonexistent_index() {
 
     // Delete non-existent index should return 404 (not crash)
     let resp = client
-        .delete(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .delete(format!("{}/{}", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
@@ -369,7 +369,7 @@ fn test_es_force_merge() {
 
     // Create index and upload some data
     client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&serde_json::json!({
             "settings": { "index": { "number_of_shards": 1, "number_of_replicas": 0 } },
             "mappings": {
@@ -395,7 +395,7 @@ fn test_es_force_merge() {
         bulk_body.push_str(&format!("{{\"vector\":[{}]}}\n", vec_json.join(",")));
     }
     client
-        .post(&format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(bulk_body)
         .send()
@@ -403,7 +403,7 @@ fn test_es_force_merge() {
 
     // Force merge
     let resp = client
-        .post(&format!(
+        .post(format!(
             "{}/{}/_forcemerge?wait_for_completion=true&max_num_segments=1",
             es_base_url(),
             ES_INDEX
@@ -447,7 +447,7 @@ fn test_es_schema_field_mapping() {
     });
 
     let resp = client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -455,7 +455,7 @@ fn test_es_schema_field_mapping() {
 
     // Verify mappings
     let resp = client
-        .get(&format!("{}/{}/_mapping", es_base_url(), ES_INDEX))
+        .get(format!("{}/{}/_mapping", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
     let mappings: serde_json::Value = resp.json().unwrap();
@@ -510,7 +510,7 @@ fn create_test_index_with_vectors(
         }
     });
     let resp = client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&body)
         .send()
         .expect("Failed to create index");
@@ -530,7 +530,7 @@ fn create_test_index_with_vectors(
         bulk_body.push('\n');
     }
     let resp = client
-        .post(&format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(bulk_body)
         .send()
@@ -539,7 +539,7 @@ fn create_test_index_with_vectors(
 
     // Refresh to make docs searchable
     client
-        .post(&format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
         .send()
         .expect("Refresh failed");
 }
@@ -563,7 +563,7 @@ fn es_knn_search(
     let body = serde_json::json!({ "knn": knn, "size": top });
 
     let resp = client
-        .post(&format!("{}/{}/_search", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_search", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/json")
         .json(&body)
         .send()
@@ -713,7 +713,7 @@ fn test_es_knn_search_with_match_filter() {
         }
     });
     client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -730,14 +730,14 @@ fn test_es_knn_search_with_match_filter() {
         bulk_body.push('\n');
     }
     client
-        .post(&format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(bulk_body)
         .send()
         .unwrap();
 
     client
-        .post(&format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
 
@@ -786,7 +786,7 @@ fn test_es_knn_search_with_range_filter() {
         }
     });
     client
-        .put(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .put(format!("{}/{}", es_base_url(), ES_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -802,14 +802,14 @@ fn test_es_knn_search_with_range_filter() {
         bulk_body.push('\n');
     }
     client
-        .post(&format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_bulk", es_base_url(), ES_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(bulk_body)
         .send()
         .unwrap();
 
     client
-        .post(&format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
+        .post(format!("{}/{}/_refresh", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
 
@@ -891,14 +891,14 @@ fn test_es_full_cycle_configure_upload_search_delete() {
 
     // 4. Delete
     let resp = client
-        .delete(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .delete(format!("{}/{}", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
 
     // Verify deleted
     let resp = client
-        .get(&format!("{}/{}", es_base_url(), ES_INDEX))
+        .get(format!("{}/{}", es_base_url(), ES_INDEX))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);

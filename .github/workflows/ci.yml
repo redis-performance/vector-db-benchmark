@@ -37,7 +37,15 @@ jobs:
       run: cargo fmt --check
 
     - name: Run clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
+
+    - name: Security audit (advisories)
+      # Non-blocking: reports known-vulnerable/unmaintained crates without
+      # failing CI on advisories in transitive deps we can't immediately fix.
+      continue-on-error: true
+      run: |
+        cargo install cargo-audit --locked || true
+        cargo audit
 
   test:
     name: Unit tests

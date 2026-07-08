@@ -233,8 +233,8 @@ fn test_redis_upload_and_retrieve() {
     }
 
     // Verify vectors stored
-    for i in 0..ids.len() {
-        let key = ids[i].to_string();
+    for id in &ids {
+        let key = id.to_string();
         let exists: bool = redis::cmd("EXISTS").arg(&key).query(&mut conn).unwrap();
         assert!(exists, "Key {} should exist", key);
     }
@@ -870,7 +870,7 @@ fn test_redis_parallel_upload_search() {
         .expect("FT.CREATE failed");
 
     // Parallel upload across 4 threads
-    let chunk_size = (count + num_threads - 1) / num_threads;
+    let chunk_size = count.div_ceil(num_threads);
     thread::scope(|s| {
         for chunk_idx in 0..num_threads {
             let start = chunk_idx * chunk_size;
@@ -917,6 +917,7 @@ fn test_redis_parallel_upload_search() {
     // Store results indexed by query number so precision check uses the right entry.
     let num_queries = 20;
     let query_idx = Arc::new(AtomicUsize::new(0));
+    #[allow(clippy::type_complexity)]
     let results: Arc<Mutex<Vec<(usize, Vec<i64>)>>> = Arc::new(Mutex::new(Vec::new()));
 
     thread::scope(|s| {
