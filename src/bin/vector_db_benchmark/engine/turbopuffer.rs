@@ -476,11 +476,14 @@ impl Engine for TurbopufferEngine {
             parallel
         );
 
-        let latencies = Arc::new(Mutex::new(vec![0.0f64; num_to_run]));
-        let precisions = Arc::new(Mutex::new(vec![0.0f64; num_to_run]));
-        let recalls = Arc::new(Mutex::new(vec![0.0_f64; num_to_run]));
-        let mrrs = Arc::new(Mutex::new(vec![0.0_f64; num_to_run]));
-        let ndcgs = Arc::new(Mutex::new(vec![0.0_f64; num_to_run]));
+        // Push-based collection: only successful queries contribute latency +
+        // quality samples, so a failure is never scored as a 0-recall / 0-latency
+        // sample. Order is completion order (fine for aggregates).
+        let latencies = Arc::new(Mutex::new(Vec::<f64>::new()));
+        let precisions = Arc::new(Mutex::new(Vec::<f64>::new()));
+        let recalls = Arc::new(Mutex::new(Vec::<f64>::new()));
+        let mrrs = Arc::new(Mutex::new(Vec::<f64>::new()));
+        let ndcgs = Arc::new(Mutex::new(Vec::<f64>::new()));
 
         let pb = self.create_progress_bar(num_to_run);
         let total_start = Instant::now();
@@ -498,15 +501,22 @@ impl Engine for TurbopufferEngine {
                     &self.distance_metric,
                     filter,
                     &self.rt,
-                )?;
+                );
                 let elapsed = start.elapsed().as_secs_f64();
 
-                let m = crate::metrics::compute_metrics(&results, &neighbors[i], top);
-                latencies.lock().unwrap()[i] = elapsed;
-                precisions.lock().unwrap()[i] = m.precision;
-                recalls.lock().unwrap()[i] = m.recall;
-                mrrs.lock().unwrap()[i] = m.mrr;
-                ndcgs.lock().unwrap()[i] = m.ndcg;
+                match results {
+                    Ok(result_ids) => {
+                        let m = crate::metrics::compute_metrics(&result_ids, &neighbors[i], top);
+                        latencies.lock().unwrap().push(elapsed);
+                        precisions.lock().unwrap().push(m.precision);
+                        recalls.lock().unwrap().push(m.recall);
+                        mrrs.lock().unwrap().push(m.mrr);
+                        ndcgs.lock().unwrap().push(m.ndcg);
+                    }
+                    Err(e) => {
+                        eprintln!("Search query {} failed: {}", i, e);
+                    }
+                }
                 pb.inc(1);
             }
         } else {
@@ -548,13 +558,19 @@ impl Engine for TurbopufferEngine {
                         );
                         let elapsed = start.elapsed().as_secs_f64();
 
-                        if let Ok(result_ids) = results {
-                            let m = crate::metrics::compute_metrics(&result_ids, &neighbor, top);
-                            latencies.lock().unwrap()[i] = elapsed;
-                            precisions.lock().unwrap()[i] = m.precision;
-                            recalls.lock().unwrap()[i] = m.recall;
-                            mrrs.lock().unwrap()[i] = m.mrr;
-                            ndcgs.lock().unwrap()[i] = m.ndcg;
+                        match results {
+                            Ok(result_ids) => {
+                                let m =
+                                    crate::metrics::compute_metrics(&result_ids, &neighbor, top);
+                                latencies.lock().unwrap().push(elapsed);
+                                precisions.lock().unwrap().push(m.precision);
+                                recalls.lock().unwrap().push(m.recall);
+                                mrrs.lock().unwrap().push(m.mrr);
+                                ndcgs.lock().unwrap().push(m.ndcg);
+                            }
+                            Err(e) => {
+                                eprintln!("Search query {} failed: {}", i, e);
+                            }
                         }
                         pb.inc(1);
                     });
@@ -571,17 +587,27 @@ impl Engine for TurbopufferEngine {
         let mrrs = mrrs.lock().unwrap().clone();
         let ndcgs = ndcgs.lock().unwrap().clone();
 
-        let mean_time = latencies.iter().sum::<f64>() / num_to_run as f64;
-        let mean_precision = precisions.iter().sum::<f64>() / num_to_run as f64;
-        let mean_recall = recalls.iter().sum::<f64>() / num_to_run as f64;
-        let mean_mrr = mrrs.iter().sum::<f64>() / num_to_run as f64;
-        let mean_ndcg = ndcgs.iter().sum::<f64>() / num_to_run as f64;
+        // Aggregate over successful queries only.
+        let succeeded = latencies.len();
+        if succeeded == 0 {
+            return Err("No searches completed (all queries failed)".to_string());
+        }
+        let failed = num_to_run - succeeded;
+        if failed > 0 {
+            eprintln!("WARNING: {} of {} queries failed", failed, num_to_run);
+        }
+
+        let mean_time = latencies.iter().sum::<f64>() / succeeded as f64;
+        let mean_precision = precisions.iter().sum::<f64>() / succeeded as f64;
+        let mean_recall = recalls.iter().sum::<f64>() / succeeded as f64;
+        let mean_mrr = mrrs.iter().sum::<f64>() / succeeded as f64;
+        let mean_ndcg = ndcgs.iter().sum::<f64>() / succeeded as f64;
 
         let variance = latencies
             .iter()
             .map(|t| (t - mean_time).powi(2))
             .sum::<f64>()
-            / num_to_run as f64;
+            / succeeded as f64;
         let std_time = variance.sqrt();
 
         let min_time = latencies.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -590,11 +616,12 @@ impl Engine for TurbopufferEngine {
         let mut sorted_latencies = latencies.clone();
         sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let p50_time = sorted_latencies[num_to_run / 2];
-        let p95_time = sorted_latencies[(num_to_run as f64 * 0.95) as usize];
-        let p99_time = sorted_latencies[(num_to_run as f64 * 0.99) as usize];
+        let pct = |q: f64| sorted_latencies[((succeeded as f64 * q) as usize).min(succeeded - 1)];
+        let p50_time = pct(0.50);
+        let p95_time = pct(0.95);
+        let p99_time = pct(0.99);
 
-        let rps = num_to_run as f64 / total_time;
+        let rps = succeeded as f64 / total_time;
 
         Ok(SearchResults {
             total_time,

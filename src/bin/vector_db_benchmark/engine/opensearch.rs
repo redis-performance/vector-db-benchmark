@@ -932,22 +932,24 @@ impl Engine for OpenSearchEngine {
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        search_times.lock().unwrap().push(query_time);
-
-                        if let Ok(result_ids) = results {
-                            let ordered_ids: Vec<i64> =
-                                result_ids.iter().map(|(id, _)| *id).collect();
-                            let m =
-                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
-                            precisions.lock().unwrap().push(m.precision);
-                            recalls.lock().unwrap().push(m.recall);
-                            mrrs.lock().unwrap().push(m.mrr);
-                            ndcgs.lock().unwrap().push(m.ndcg);
-                        } else {
-                            precisions.lock().unwrap().push(0.0);
-                            recalls.lock().unwrap().push(0.0);
-                            mrrs.lock().unwrap().push(0.0);
-                            ndcgs.lock().unwrap().push(0.0);
+                        match results {
+                            Ok(result_ids) => {
+                                search_times.lock().unwrap().push(query_time);
+                                let ordered_ids: Vec<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let m = crate::metrics::compute_metrics(
+                                    &ordered_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
+                                precisions.lock().unwrap().push(m.precision);
+                                recalls.lock().unwrap().push(m.recall);
+                                mrrs.lock().unwrap().push(m.mrr);
+                                ndcgs.lock().unwrap().push(m.ndcg);
+                            }
+                            Err(e) => {
+                                eprintln!("Search query {} failed: {}", idx, e);
+                            }
                         }
                         pb.inc(1);
                     }
