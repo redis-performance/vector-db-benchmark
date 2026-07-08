@@ -13,6 +13,38 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
+use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
+
+/// Map a dataset schema field type to a Postgres column type. Returns None for
+/// types pgvector can't filter on with a plain scalar column (e.g. geo).
+fn pg_column_type(field_type: &str) -> Option<&'static str> {
+    match field_type {
+        "keyword" | "text" => Some("TEXT"),
+        "int" => Some("BIGINT"),
+        "float" => Some("DOUBLE PRECISION"),
+        _ => None,
+    }
+}
+
+/// Escape a string for a COPY ... FORMAT text field.
+fn escape_copy_text(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Format the value of `column` from a row's metadata as a COPY text field,
+/// returning `\N` (NULL) when the field is absent or unsupported.
+fn copy_field(meta: Option<&MetadataItem>, column: &str) -> String {
+    let value = meta.and_then(|m| m.fields.iter().find(|(k, _)| k == column).map(|(_, v)| v));
+    match value {
+        Some(MetadataValue::String(s)) => escape_copy_text(s),
+        Some(MetadataValue::Labels(labels)) => escape_copy_text(&labels.join(";")),
+        // geo / missing → NULL (geo isn't a scalar filter column here)
+        _ => "\\N".to_string(),
+    }
+}
 
 pub struct PgVectorEngine {
     name: String,
@@ -28,6 +60,9 @@ pub struct PgVectorEngine {
     search_params: Vec<SearchParams>,
     distance_op: String,
     hnsw_ops_class: String,
+    /// Payload columns (name, pg type) derived from the dataset schema, set in
+    /// `configure` and written by `upload` so filtered queries have real columns.
+    schema_columns: Vec<(String, String)>,
 }
 
 impl PgVectorEngine {
@@ -78,6 +113,7 @@ impl PgVectorEngine {
             // Default: will be set during configure based on dataset distance
             distance_op: String::new(),
             hnsw_ops_class: String::new(),
+            schema_columns: Vec::new(),
         })
     }
 
@@ -153,12 +189,33 @@ impl Engine for PgVectorEngine {
         conn.execute("DROP TABLE IF EXISTS items CASCADE", &[])
             .map_err(|e| format!("Failed to drop table: {}", e))?;
 
-        // Create table
+        // Derive payload columns from the dataset schema so filtered queries have
+        // real columns to reference (otherwise every filter is a SQL error).
+        self.schema_columns = dataset
+            .config
+            .schema
+            .as_ref()
+            .and_then(|s| s.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(field, ftype)| {
+                        pg_column_type(ftype.as_str().unwrap_or(""))
+                            .map(|t| (field.clone(), t.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Create table (id, embedding, + one column per schema field)
         println!("Creating items table (vector dimension {})...", vector_size);
-        let create_sql = format!(
-            "CREATE TABLE items (id SERIAL PRIMARY KEY, embedding vector({}) NOT NULL)",
-            vector_size
-        );
+        let mut columns = vec![
+            "id SERIAL PRIMARY KEY".to_string(),
+            format!("embedding vector({}) NOT NULL", vector_size),
+        ];
+        for (name, pg_type) in &self.schema_columns {
+            columns.push(format!("\"{}\" {}", name, pg_type));
+        }
+        let create_sql = format!("CREATE TABLE items ({})", columns.join(", "));
         conn.execute(&create_sql, &[])
             .map_err(|e| format!("Failed to create table: {}", e))?;
 
@@ -191,7 +248,7 @@ impl Engine for PgVectorEngine {
         let dataset_path = dataset.get_path()?;
         println!("Reading dataset from {}...", dataset_path.display());
         let read_start = Instant::now();
-        let (ids, vectors, _metadata) = dataset.read_vectors(normalize)?;
+        let (ids, vectors, metadata) = dataset.read_vectors(normalize)?;
         let read_time = read_start.elapsed().as_secs_f64();
 
         println!(
@@ -215,13 +272,29 @@ impl Engine for PgVectorEngine {
         let batch_idx = Arc::new(AtomicUsize::new(0));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let conn_str = self.connection_string();
+        let schema_columns = self.schema_columns.clone();
+
+        // COPY target column list: id, embedding, then one per schema field.
+        let copy_sql = {
+            let mut cols = vec!["id".to_string(), "embedding".to_string()];
+            for (name, _) in &schema_columns {
+                cols.push(format!("\"{}\"", name));
+            }
+            format!(
+                "COPY items ({}) FROM STDIN WITH (FORMAT text)",
+                cols.join(", ")
+            )
+        };
 
         std::thread::scope(|s| {
             for _ in 0..self.parallel {
                 let conn_str = conn_str.clone();
+                let copy_sql = copy_sql.clone();
+                let schema_columns = &schema_columns;
                 let batches = &batches;
                 let ids = &ids;
                 let vectors = &vectors;
+                let metadata = &metadata;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
                 let pb = &pb;
@@ -249,7 +322,7 @@ impl Engine for PgVectorEngine {
                         // Use COPY for bulk insert
                         let copy_result = (|| -> Result<(), String> {
                             let mut writer = conn
-                                .copy_in("COPY items (id, embedding) FROM STDIN WITH (FORMAT text)")
+                                .copy_in(copy_sql.as_str())
                                 .map_err(|e| format!("COPY start failed: {}", e))?;
 
                             use std::io::Write;
@@ -259,7 +332,12 @@ impl Engine for PgVectorEngine {
                                     .map(|v| v.to_string())
                                     .collect::<Vec<_>>()
                                     .join(",");
-                                writeln!(writer, "{}\t[{}]", ids[i], vec_str)
+                                let mut line = format!("{}\t[{}]", ids[i], vec_str);
+                                for (name, _) in schema_columns {
+                                    line.push('\t');
+                                    line.push_str(&copy_field(metadata[i].as_ref(), name));
+                                }
+                                writeln!(writer, "{}", line)
                                     .map_err(|e| format!("COPY write failed: {}", e))?;
                             }
 
@@ -557,9 +635,9 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                 "match" => {
                     if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
-                            parts.push(format!("{} = '{}'", field_name, s.replace('\'', "''")));
+                            parts.push(format!("\"{}\" = '{}'", field_name, s.replace('\'', "''")));
                         } else {
-                            parts.push(format!("{} = {}", field_name, value));
+                            parts.push(format!("\"{}\" = {}", field_name, value));
                         }
                     }
                 }
@@ -574,7 +652,7 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                                 _ => continue,
                             };
                             if !val.is_null() {
-                                parts.push(format!("{} {} {}", field_name, sql_op, val));
+                                parts.push(format!("\"{}\" {} {}", field_name, sql_op, val));
                             }
                         }
                     }
@@ -587,5 +665,67 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
         None
     } else {
         Some(parts.join(" AND "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
+
+    #[test]
+    fn maps_schema_types_to_pg_columns() {
+        assert_eq!(pg_column_type("keyword"), Some("TEXT"));
+        assert_eq!(pg_column_type("text"), Some("TEXT"));
+        assert_eq!(pg_column_type("int"), Some("BIGINT"));
+        assert_eq!(pg_column_type("float"), Some("DOUBLE PRECISION"));
+        assert_eq!(pg_column_type("geo"), None);
+    }
+
+    #[test]
+    fn escapes_copy_text_specials() {
+        assert_eq!(escape_copy_text("a\tb\nc\\d"), "a\\tb\\nc\\\\d");
+    }
+
+    #[test]
+    fn copy_field_reads_value_or_null() {
+        let meta = MetadataItem {
+            fields: vec![
+                (
+                    "category".to_string(),
+                    MetadataValue::String("shoes".to_string()),
+                ),
+                (
+                    "labels".to_string(),
+                    MetadataValue::Labels(vec!["a".to_string(), "b".to_string()]),
+                ),
+            ],
+        };
+        assert_eq!(copy_field(Some(&meta), "category"), "shoes");
+        assert_eq!(copy_field(Some(&meta), "labels"), "a;b");
+        assert_eq!(copy_field(Some(&meta), "missing"), "\\N");
+        assert_eq!(copy_field(None, "category"), "\\N");
+    }
+
+    #[test]
+    fn filter_clause_quotes_columns() {
+        // AND of a keyword match and a numeric range → quoted column identifiers.
+        let cond = json!({
+            "and": [
+                {"category": {"match": {"value": "shoes"}}},
+                {"year": {"range": {"gte": 2020}}}
+            ]
+        });
+        let sql = parse_pg_conditions(&cond).unwrap();
+        assert!(sql.contains("\"category\" = 'shoes'"), "sql={}", sql);
+        assert!(sql.contains("\"year\" >= 2020"), "sql={}", sql);
+    }
+
+    #[test]
+    fn filter_clause_escapes_single_quotes() {
+        let cond = json!({"and": [{"name": {"match": {"value": "O'Brien"}}}]});
+        let sql = parse_pg_conditions(&cond).unwrap();
+        assert!(sql.contains("'O''Brien'"), "sql={}", sql);
     }
 }
