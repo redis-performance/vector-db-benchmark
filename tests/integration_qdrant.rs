@@ -8,6 +8,8 @@ use rand::Rng;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -652,4 +654,52 @@ fn test_binary_qdrant_sparse() {
     let precision = read_precision(&root, "qdrant-sparse-cov");
     println!("qdrant sparse precision={:.3}", precision);
     assert!(precision >= 0.9, "sparse precision {:.3} < 0.9", precision);
+}
+
+/// End-to-end `match_any` coverage. Qdrant already supports `match_any`, so this
+/// doubles as validation that the shared fixture + harness are correct: build a
+/// dataset whose queries filter a keyword field to an OR-set, with ground truth
+/// brute-forced over ONLY the matching documents, then assert the engine's
+/// recall is high (it applied the filter and returned the filtered NNs).
+#[test]
+fn test_binary_qdrant_match_any() {
+    wait_for_qdrant();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-ma", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-ma",
+            "match-any-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "qdrant-ma");
+    println!("qdrant match_any recall={:.3}", recall);
+    assert!(recall >= 0.9, "qdrant match_any recall {:.3} < 0.9", recall);
 }

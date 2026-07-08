@@ -12,7 +12,7 @@ pub use compound_reader::{read_compound_data, read_compound_queries, read_compou
 pub use hdf5_reader::read_hdf5_vectors;
 pub use jsonl_reader::{read_jsonl_queries, read_jsonl_vectors};
 pub use metadata::{parse_metadata_from_json, MetadataItem, MetadataValue};
-pub use npy_reader::read_npy_vectors;
+pub use npy_reader::{read_npy_vectors, write_npy_vectors};
 pub use sparse_reader::{read_sparse_matrix, write_sparse_matrix, SparseVector};
 
 #[cfg(test)]
