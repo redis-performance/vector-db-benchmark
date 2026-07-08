@@ -25,9 +25,13 @@ pub struct DatasetConfig {
 /// HNSW configuration
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct HnswConfig {
-    #[serde(rename = "M")]
+    #[serde(rename = "M", alias = "m")]
     pub m: Option<i64>,
-    #[serde(rename = "EF_CONSTRUCTION")]
+    #[serde(
+        rename = "EF_CONSTRUCTION",
+        alias = "ef_construct",
+        alias = "ef_construction"
+    )]
     pub ef_construction: Option<i64>,
 }
 
