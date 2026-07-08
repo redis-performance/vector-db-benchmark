@@ -38,12 +38,26 @@ pub struct Args {
     #[arg(long, default_value = "false")]
     pub skip_search: bool,
 
-    /// Skip if results already exist
-    #[arg(long, default_value = "true")]
+    /// Skip if results already exist (accepts an optional value, e.g.
+    /// `--skip-if-exists false`; bare `--skip-if-exists` means true)
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_value_t = true,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set
+    )]
     pub skip_if_exists: bool,
 
-    /// Exit on first error
-    #[arg(long, default_value = "true")]
+    /// Exit on first error (accepts an optional value, e.g.
+    /// `--exit-on-error false`; bare `--exit-on-error` means true)
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_value_t = true,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set
+    )]
     pub exit_on_error: bool,
 
     /// Timeout in seconds
@@ -83,4 +97,42 @@ pub struct Args {
     /// Collapses all M/EF variants of the same engine into a single "<engine>-no-vector" experiment.
     #[arg(long, default_value = "false")]
     pub skip_vector_index: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(extra: &[&str]) -> Args {
+        let mut argv = vec!["vector-db-benchmark", "--engines", "x", "--datasets", "y"];
+        argv.extend_from_slice(extra);
+        Args::try_parse_from(argv).expect("args should parse")
+    }
+
+    // Regression: the default-true bool flags must accept an explicit value
+    // (`--skip-if-exists false`, as the mongodb integration test invokes it),
+    // an `=` value, a bare flag, and default to true when omitted. Previously
+    // they were SetTrue flags that rejected any value and could never be false.
+    #[test]
+    fn skip_if_exists_accepts_all_forms() {
+        assert!(parse(&[]).skip_if_exists, "omitted → true");
+        assert!(parse(&["--skip-if-exists"]).skip_if_exists, "bare → true");
+        assert!(
+            !parse(&["--skip-if-exists", "false"]).skip_if_exists,
+            "space value → false"
+        );
+        assert!(
+            !parse(&["--skip-if-exists=false"]).skip_if_exists,
+            "= value → false"
+        );
+        assert!(parse(&["--skip-if-exists", "true"]).skip_if_exists);
+    }
+
+    #[test]
+    fn exit_on_error_accepts_all_forms() {
+        assert!(parse(&[]).exit_on_error, "omitted → true");
+        assert!(parse(&["--exit-on-error"]).exit_on_error, "bare → true");
+        assert!(!parse(&["--exit-on-error", "false"]).exit_on_error);
+        assert!(!parse(&["--exit-on-error=false"]).exit_on_error);
+    }
 }
