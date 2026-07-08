@@ -880,63 +880,10 @@ impl Engine for ElasticsearchEngine {
         let mrr_vals = mrrs.lock().unwrap();
         let ndcg_vals = ndcgs.lock().unwrap();
 
-        if times.is_empty() {
-            return Err("No searches completed".to_string());
-        }
-
-        let rps = times.len() as f64 / total_time;
-        let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
-        let mean_recall = recs.iter().sum::<f64>() / recs.len() as f64;
-        let mean_mrr = mrr_vals.iter().sum::<f64>() / mrr_vals.len() as f64;
-        let mean_ndcg = ndcg_vals.iter().sum::<f64>() / ndcg_vals.len() as f64;
-        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
-        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
-            / times.len() as f64)
-            .sqrt();
-        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
-        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
-        let mut sorted_times: Vec<f64> = times.clone();
-        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
-        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
-        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
-
-        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
-        let p95_time = sorted_times
-            .get(p95_idx.min(sorted_times.len() - 1))
-            .copied()
-            .unwrap_or(0.0);
-        let p99_time = sorted_times
-            .get(p99_idx.min(sorted_times.len() - 1))
-            .copied()
-            .unwrap_or(0.0);
-
-        Ok(SearchResults {
-            total_time,
-            mean_time,
-            mean_precision,
-            mean_recall,
-            mean_mrr,
-            mean_ndcg,
-            recalls: recs.to_vec(),
-            mrrs: mrr_vals.to_vec(),
-            ndcgs: ndcg_vals.to_vec(),
-            std_time,
-            min_time,
-            max_time,
-            rps,
-            p50_time,
-            p95_time,
-            p99_time,
-            precisions: precs.to_vec(),
-            latencies: times.to_vec(),
-            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
-            num_queries: times.len(),
-            parallel,
-            ..Default::default()
-        })
+        let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
+        crate::engine::compute_search_stats(
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+        )
     }
 
     fn delete(&mut self) -> Result<(), String> {
