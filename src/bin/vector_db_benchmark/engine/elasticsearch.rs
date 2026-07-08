@@ -625,9 +625,14 @@ fn knn_search(
             .insert("filter".to_string(), f.clone());
     }
 
+    // Response trimming: the benchmark only needs each hit's id (always returned
+    // as `_id` metadata) and score, so don't ship the document `_source`. This
+    // trims the response for a fairer QPS/latency measurement — matching the
+    // OpenSearch engine's trimming.
     let body = serde_json::json!({
         "knn": knn,
         "size": top,
+        "_source": false,
     });
 
     let resp = rt
