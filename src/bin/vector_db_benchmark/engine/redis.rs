@@ -611,6 +611,41 @@ impl RedisEngine {
     }
 }
 
+/// Encode a vector to the little-endian byte layout RediSearch expects for the
+/// given `TYPE`. Integer types (INT8/UINT8) round each component and saturate to
+/// the type's range; unknown types fall back to FLOAT32.
+fn encode_vector(data_type: &str, vector: &[f32]) -> Vec<u8> {
+    match data_type {
+        "FLOAT64" => vector
+            .iter()
+            .map(|&f| f as f64)
+            .flat_map(|f| f.to_le_bytes())
+            .collect(),
+        "FLOAT16" => vector
+            .iter()
+            .map(|&f| half::f16::from_f32(f).to_bits())
+            .flat_map(|v| v.to_le_bytes())
+            .collect(),
+        "BFLOAT16" => vector
+            .iter()
+            .map(|&f| half::bf16::from_f32(f).to_bits())
+            .flat_map(|v| v.to_le_bytes())
+            .collect(),
+        // INT8/UINT8: quantized vectors (e.g. Cohere int8 embeddings) arrive as
+        // f32; round and clamp to the integer range (float→int casts saturate).
+        "INT8" => vector
+            .iter()
+            .map(|&f| (f.round().clamp(-128.0, 127.0) as i8).to_le_bytes())
+            .flat_map(|b| b.into_iter())
+            .collect(),
+        "UINT8" => vector
+            .iter()
+            .map(|&f| f.round().clamp(0.0, 255.0) as u8)
+            .collect(),
+        _ => vector.iter().flat_map(|f| f.to_le_bytes()).collect(),
+    }
+}
+
 /// Internal batch upload function
 fn upload_batch_internal(
     conn: &mut Connection,
@@ -623,24 +658,7 @@ fn upload_batch_internal(
 
     for i in 0..ids.len() {
         let key = ids[i].to_string();
-        let vec_bytes: Vec<u8> = match config.data_type.as_str() {
-            "FLOAT64" => vectors[i]
-                .iter()
-                .map(|&f| f as f64)
-                .flat_map(|f| f.to_le_bytes())
-                .collect(),
-            "FLOAT16" => vectors[i]
-                .iter()
-                .map(|&f| half::f16::from_f32(f).to_bits())
-                .flat_map(|v| v.to_le_bytes())
-                .collect(),
-            "BFLOAT16" => vectors[i]
-                .iter()
-                .map(|&f| half::bf16::from_f32(f).to_bits())
-                .flat_map(|v| v.to_le_bytes())
-                .collect(),
-            _ => vectors[i].iter().flat_map(|f| f.to_le_bytes()).collect(),
-        };
+        let vec_bytes = encode_vector(&config.data_type, &vectors[i]);
 
         let mut fields: Vec<(Vec<u8>, Vec<u8>)> = vec![("vector".as_bytes().to_vec(), vec_bytes)];
 
@@ -991,8 +1009,11 @@ fn ft_search_knn(
     hybrid_policy: &str,
     query_timeout: i64,
     filter: Option<&ParsedFilter>,
+    data_type: &str,
 ) -> Result<Vec<(i64, f64)>, String> {
-    let vec_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+    // Encode the query vector to match the index TYPE (e.g. INT8), otherwise a
+    // FLOAT32 blob would be sent against an INT8 index.
+    let vec_bytes = encode_vector(data_type, query_vector);
 
     // Build KNN conditions string
     let knn_conditions = if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
@@ -1139,24 +1160,7 @@ fn hset_single(
     metadata: Option<&MetadataItem>,
 ) -> Result<(), String> {
     let key = id.to_string();
-    let vec_bytes: Vec<u8> = match config.data_type.as_str() {
-        "FLOAT64" => vector
-            .iter()
-            .map(|&f| f as f64)
-            .flat_map(|f| f.to_le_bytes())
-            .collect(),
-        "FLOAT16" => vector
-            .iter()
-            .map(|&f| half::f16::from_f32(f).to_bits())
-            .flat_map(|v| v.to_le_bytes())
-            .collect(),
-        "BFLOAT16" => vector
-            .iter()
-            .map(|&f| half::bf16::from_f32(f).to_bits())
-            .flat_map(|v| v.to_le_bytes())
-            .collect(),
-        _ => vector.iter().flat_map(|f| f.to_le_bytes()).collect(),
-    };
+    let vec_bytes = encode_vector(&config.data_type, vector);
 
     let mut cmd = redis::cmd("HSET");
     cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
@@ -1332,6 +1336,7 @@ impl Engine for RedisEngine {
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
                 let algorithm = self.config.algorithm.clone();
+                let data_type = self.config.data_type.clone();
                 let hybrid_policy = hybrid_policy.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
@@ -1381,6 +1386,7 @@ impl Engine for RedisEngine {
                             &hybrid_policy,
                             query_timeout,
                             parsed_filters[idx].as_ref(),
+                            &data_type,
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
 
@@ -1554,6 +1560,7 @@ impl Engine for RedisEngine {
                 let redis_url = self.redis_url.clone();
                 let config = self.config.clone();
                 let algorithm = self.config.algorithm.clone();
+                let data_type = self.config.data_type.clone();
                 let hybrid_policy = hybrid_policy.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
@@ -1609,6 +1616,7 @@ impl Engine for RedisEngine {
                                 &hybrid_policy,
                                 query_timeout,
                                 parsed_filters[idx].as_ref(),
+                                &data_type,
                             );
                             let query_time = query_start.elapsed().as_secs_f64();
 
@@ -1801,5 +1809,42 @@ impl Engine for RedisEngine {
             "used_memory": [used_memory],
             "index_info": ft_info,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_vector;
+
+    #[test]
+    fn encodes_float32_by_default() {
+        let v = vec![1.0f32, -2.5];
+        let bytes = encode_vector("FLOAT32", &v);
+        assert_eq!(bytes.len(), 8); // 2 x f32
+        assert_eq!(bytes, encode_vector("SOMETHING_UNKNOWN", &v));
+        assert_eq!(&bytes[0..4], &1.0f32.to_le_bytes());
+    }
+
+    #[test]
+    fn encodes_int8_one_byte_per_element_with_rounding() {
+        // Values arrive as f32 (e.g. pre-quantized cohere int8 embeddings).
+        let v = vec![0.0f32, 1.4, -1.6, 127.0, -128.0];
+        let bytes = encode_vector("INT8", &v);
+        assert_eq!(bytes.len(), 5); // 1 byte per element
+        let decoded: Vec<i8> = bytes.iter().map(|&b| b as i8).collect();
+        assert_eq!(decoded, vec![0, 1, -2, 127, -128]);
+    }
+
+    #[test]
+    fn int8_saturates_out_of_range() {
+        let bytes = encode_vector("INT8", &[200.0, -200.0]);
+        let decoded: Vec<i8> = bytes.iter().map(|&b| b as i8).collect();
+        assert_eq!(decoded, vec![127, -128]);
+    }
+
+    #[test]
+    fn encodes_uint8_clamped_to_0_255() {
+        let bytes = encode_vector("UINT8", &[0.0, 255.0, 300.0, -5.0, 12.6]);
+        assert_eq!(bytes, vec![0, 255, 255, 0, 13]);
     }
 }
