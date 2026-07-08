@@ -410,26 +410,29 @@ impl Engine for PgVectorEngine {
                         let results = conn.query(&query_sql, &[&query_vec]);
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        search_times.lock().unwrap().push(query_time);
-
-                        if let Ok(rows) = results {
-                            let ordered_ids: Vec<i64> = rows
-                                .iter()
-                                .map(|row| {
-                                    let id: i32 = row.get(0);
-                                    id as i64
-                                })
-                                .collect();
-                            let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
-                            precisions.lock().unwrap().push(m.precision);
-                            recalls.lock().unwrap().push(m.recall);
-                            mrrs.lock().unwrap().push(m.mrr);
-                            ndcgs.lock().unwrap().push(m.ndcg);
-                        } else {
-                            precisions.lock().unwrap().push(0.0);
-                            recalls.lock().unwrap().push(0.0);
-                            mrrs.lock().unwrap().push(0.0);
-                            ndcgs.lock().unwrap().push(0.0);
+                        match results {
+                            Ok(rows) => {
+                                search_times.lock().unwrap().push(query_time);
+                                let ordered_ids: Vec<i64> = rows
+                                    .iter()
+                                    .map(|row| {
+                                        let id: i32 = row.get(0);
+                                        id as i64
+                                    })
+                                    .collect();
+                                let m = crate::metrics::compute_metrics(
+                                    &ordered_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
+                                precisions.lock().unwrap().push(m.precision);
+                                recalls.lock().unwrap().push(m.recall);
+                                mrrs.lock().unwrap().push(m.mrr);
+                                ndcgs.lock().unwrap().push(m.ndcg);
+                            }
+                            Err(e) => {
+                                eprintln!("Search query {} failed: {}", idx, e);
+                            }
                         }
                         pb.inc(1);
                     }

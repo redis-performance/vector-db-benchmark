@@ -1000,35 +1000,39 @@ impl Engine for QdrantEngine {
                         let result = rt.block_on(client.query(query_builder));
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        search_times.lock().unwrap().push(query_time);
-
-                        if let Ok(response) = result {
-                            let ordered_ids: Vec<i64> = response
-                                .result
-                                .iter()
-                                .filter_map(|p| {
-                                    if let Some(
-                                        qdrant_client::qdrant::point_id::PointIdOptions::Num(n),
-                                    ) =
-                                        &p.id.as_ref().and_then(|id| id.point_id_options.as_ref())
-                                    {
-                                        Some(*n as i64)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            let m =
-                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
-                            precisions.lock().unwrap().push(m.precision);
-                            recalls.lock().unwrap().push(m.recall);
-                            mrrs.lock().unwrap().push(m.mrr);
-                            ndcgs.lock().unwrap().push(m.ndcg);
-                        } else {
-                            precisions.lock().unwrap().push(0.0);
-                            recalls.lock().unwrap().push(0.0);
-                            mrrs.lock().unwrap().push(0.0);
-                            ndcgs.lock().unwrap().push(0.0);
+                        match result {
+                            Ok(response) => {
+                                search_times.lock().unwrap().push(query_time);
+                                let ordered_ids: Vec<i64> = response
+                                    .result
+                                    .iter()
+                                    .filter_map(|p| {
+                                        if let Some(
+                                            qdrant_client::qdrant::point_id::PointIdOptions::Num(n),
+                                        ) = &p
+                                            .id
+                                            .as_ref()
+                                            .and_then(|id| id.point_id_options.as_ref())
+                                        {
+                                            Some(*n as i64)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                let m = crate::metrics::compute_metrics(
+                                    &ordered_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
+                                precisions.lock().unwrap().push(m.precision);
+                                recalls.lock().unwrap().push(m.recall);
+                                mrrs.lock().unwrap().push(m.mrr);
+                                ndcgs.lock().unwrap().push(m.ndcg);
+                            }
+                            Err(e) => {
+                                eprintln!("Search query {} failed: {}", idx, e);
+                            }
                         }
                         pb.inc(1);
                     }

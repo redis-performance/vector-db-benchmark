@@ -1400,10 +1400,9 @@ impl Engine for ValkeyEngine {
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        search_times.lock().unwrap().push(query_time);
-
                         match &results {
                             Ok(result_ids) => {
+                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = crate::metrics::compute_metrics(
@@ -1416,11 +1415,8 @@ impl Engine for ValkeyEngine {
                                 mrrs.lock().unwrap().push(m.mrr);
                                 ndcgs.lock().unwrap().push(m.ndcg);
                             }
-                            Err(_e) => {
-                                precisions.lock().unwrap().push(0.0);
-                                recalls.lock().unwrap().push(0.0);
-                                mrrs.lock().unwrap().push(0.0);
-                                ndcgs.lock().unwrap().push(0.0);
+                            Err(e) => {
+                                eprintln!("Search query {} failed: {}", idx, e);
                             }
                         }
                         pb.inc(1);
@@ -1629,10 +1625,9 @@ impl Engine for ValkeyEngine {
                             );
                             let query_time = query_start.elapsed().as_secs_f64();
 
-                            search_times.lock().unwrap().push(query_time);
-
                             match &results {
                                 Ok(result_ids) => {
+                                    search_times.lock().unwrap().push(query_time);
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
                                     let m = crate::metrics::compute_metrics(
@@ -1645,11 +1640,8 @@ impl Engine for ValkeyEngine {
                                     mrrs.lock().unwrap().push(m.mrr);
                                     ndcgs.lock().unwrap().push(m.ndcg);
                                 }
-                                Err(_) => {
-                                    precisions.lock().unwrap().push(0.0);
-                                    recalls.lock().unwrap().push(0.0);
-                                    mrrs.lock().unwrap().push(0.0);
-                                    ndcgs.lock().unwrap().push(0.0);
+                                Err(e) => {
+                                    eprintln!("Search query {} failed: {}", idx, e);
                                 }
                             }
                             pb.inc(1);
