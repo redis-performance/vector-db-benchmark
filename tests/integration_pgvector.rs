@@ -174,7 +174,7 @@ fn test_pgvector_copy_upload() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -210,7 +210,7 @@ fn test_pgvector_knn_l2_search() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -265,7 +265,7 @@ fn test_pgvector_knn_cosine_search() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -317,7 +317,7 @@ fn test_pgvector_precision_l2() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -383,7 +383,7 @@ fn test_pgvector_precision_cosine() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -449,7 +449,7 @@ fn test_pgvector_full_cycle() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }

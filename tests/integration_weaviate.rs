@@ -95,7 +95,7 @@ fn test_weaviate_class_management() {
     });
 
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .expect("Failed to create class");
@@ -107,7 +107,7 @@ fn test_weaviate_class_management() {
 
     // Verify class exists
     let resp = client
-        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .get(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
@@ -116,14 +116,14 @@ fn test_weaviate_class_management() {
 
     // Delete class
     let resp = client
-        .delete(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .delete(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
 
     // Verify deleted
     let resp = client
-        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .get(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
@@ -145,7 +145,7 @@ fn test_weaviate_batch_upload() {
         "vectorIndexConfig": {"distance": "l2-squared"},
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -167,7 +167,7 @@ fn test_weaviate_batch_upload() {
 
     let batch_body = serde_json::json!({"objects": objects});
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&batch_body)
         .send()
         .expect("Failed batch upload");
@@ -182,7 +182,7 @@ fn test_weaviate_batch_upload() {
         "query": format!("{{ Aggregate {{ {} {{ meta {{ count }} }} }} }}", TEST_CLASS),
     });
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&gql_body)
         .send()
         .unwrap();
@@ -202,7 +202,7 @@ fn test_weaviate_near_vector_search() {
     delete_test_class();
 
     let client = http_client();
-    let dim = 4;
+    let _dim = 4;
 
     // Create class with cosine distance
     let class_body = serde_json::json!({
@@ -212,7 +212,7 @@ fn test_weaviate_near_vector_search() {
         "vectorIndexConfig": {"distance": "cosine"},
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -240,7 +240,7 @@ fn test_weaviate_near_vector_search() {
 
     let batch_body = serde_json::json!({"objects": objects});
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&batch_body)
         .send()
         .unwrap();
@@ -252,7 +252,7 @@ fn test_weaviate_near_vector_search() {
         class = TEST_CLASS
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -293,7 +293,7 @@ fn test_weaviate_precision() {
         },
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -315,7 +315,7 @@ fn test_weaviate_precision() {
 
     let batch_body = serde_json::json!({"objects": objects});
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&batch_body)
         .send()
         .unwrap();
@@ -348,7 +348,7 @@ fn test_weaviate_precision() {
         k = k
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -397,7 +397,7 @@ fn test_weaviate_full_cycle() {
         "vectorIndexConfig": {"distance": "l2-squared"},
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -417,7 +417,7 @@ fn test_weaviate_full_cycle() {
         })
         .collect();
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&serde_json::json!({"objects": objects}))
         .send()
         .unwrap();
@@ -429,7 +429,7 @@ fn test_weaviate_full_cycle() {
         TEST_CLASS
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -445,7 +445,7 @@ fn test_weaviate_full_cycle() {
         TEST_CLASS, vectors[0]
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -457,7 +457,7 @@ fn test_weaviate_full_cycle() {
     // Delete
     delete_test_class();
     let resp = client
-        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .get(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
