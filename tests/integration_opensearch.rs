@@ -413,6 +413,185 @@ fn test_opensearch_precision_l2() {
     delete_test_index();
 }
 
+/// Regression test for qdrant/vector-db-benchmark#167: filtered kNN search must
+/// use *efficient* filtering (filter pushed inside the `knn` clause) rather than
+/// post-filtering (kNN wrapped in an outer `bool.must` + `filter`).
+///
+/// With a selective filter, post-filtering retrieves the `k` global nearest
+/// neighbours first and only *then* drops those outside the filter, so it returns
+/// far fewer than `k` matches and collapses precision. Efficient filtering
+/// retrieves the `k` nearest neighbours *within* the filter. This test asserts the
+/// efficient form scores high, and asserts the post-filtering form does measurably
+/// worse on the same data — so the fix cannot silently regress.
+#[test]
+fn test_opensearch_filtered_precision() {
+    wait_for_opensearch();
+    delete_test_index();
+
+    let client = os_client();
+    let dim = 8;
+    let n = 500;
+    let k = 10;
+    let num_categories = 5; // target category is ~20% of the corpus → selective
+    let target_category = 3;
+
+    // Create index with a knn_vector plus an integer `category` payload field.
+    let body = serde_json::json!({
+        "settings": {"index": {"knn": true}},
+        "mappings": {
+            "properties": {
+                "vector": {
+                    "type": "knn_vector",
+                    "dimension": dim,
+                    "method": {
+                        "name": "hnsw",
+                        "engine": "lucene",
+                        "space_type": "l2",
+                        "parameters": {"m": 32, "ef_construction": 200}
+                    }
+                },
+                "category": {"type": "integer"}
+            }
+        }
+    });
+    let resp = client
+        .put(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .json(&body)
+        .send()
+        .unwrap();
+    assert!(resp.status().is_success());
+
+    // Upload random vectors, round-robin category assignment.
+    let (ids, vectors) = generate_test_vectors(n, dim);
+    let categories: Vec<i64> = (0..n as i64).map(|i| i % num_categories).collect();
+    let mut ndjson = String::new();
+    for i in 0..n {
+        let uuid_hex = id_to_uuid_hex(ids[i]);
+        ndjson.push_str(&format!("{{\"index\":{{\"_id\":\"{}\"}}}}\n", uuid_hex));
+        let doc = serde_json::json!({"vector": vectors[i], "category": categories[i]});
+        ndjson.push_str(&serde_json::to_string(&doc).unwrap());
+        ndjson.push('\n');
+    }
+    let resp = client
+        .post(&format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
+        .header("Content-Type", "application/x-ndjson")
+        .body(ndjson)
+        .send()
+        .unwrap();
+    assert!(resp.status().is_success());
+    let _ = client
+        .post(&format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
+        .send();
+
+    // Ground truth: k nearest by L2 *among docs in the target category*.
+    let query = &vectors[0];
+    let mut distances: Vec<(i64, f64)> = ids
+        .iter()
+        .zip(vectors.iter())
+        .zip(categories.iter())
+        .filter(|((_, _), &cat)| cat == target_category)
+        .map(|((&id, v), _)| {
+            let dist: f64 = query
+                .iter()
+                .zip(v.iter())
+                .map(|(a, b)| ((*a as f64) - (*b as f64)).powi(2))
+                .sum();
+            (id, dist)
+        })
+        .collect();
+    distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    let ground_truth: std::collections::HashSet<i64> =
+        distances.iter().take(k).map(|(id, _)| *id).collect();
+    assert_eq!(ground_truth.len(), k, "test setup: need >= k docs in category");
+
+    let filter = serde_json::json!({"bool": {"must": [{"match": {"category": target_category}}]}});
+
+    // Helper: run a search body and return the set of returned ids.
+    let run = |search_body: &serde_json::Value| -> Vec<(i64, i64)> {
+        let resp = client
+            .post(&format!("{}/{}/_search", os_base_url(), OS_INDEX))
+            .json(search_body)
+            .send()
+            .unwrap();
+        assert!(resp.status().is_success());
+        let body: serde_json::Value = resp.json().unwrap();
+        body["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|h| {
+                let hex = h["_id"].as_str()?;
+                let id = uuid::Uuid::parse_str(hex).ok()?.as_u128() as i64;
+                let cat = h["_source"]["category"].as_i64()?;
+                Some((id, cat))
+            })
+            .collect()
+    };
+
+    // Efficient filtering (the form our engine now produces): filter inside knn.
+    let efficient_body = serde_json::json!({
+        "query": {"knn": {"vector": {"vector": query, "k": k, "filter": filter}}},
+        "size": k,
+    });
+    let efficient_hits = run(&efficient_body);
+    let efficient_found: std::collections::HashSet<i64> =
+        efficient_hits.iter().map(|(id, _)| *id).collect();
+    let efficient_overlap = ground_truth.intersection(&efficient_found).count();
+    let efficient_precision = efficient_overlap as f64 / k as f64;
+
+    // Post-filtering (the old buggy form): kNN wrapped in an outer bool + filter.
+    let post_body = serde_json::json!({
+        "query": {"bool": {
+            "must": [{"knn": {"vector": {"vector": query, "k": k}}}],
+            "filter": filter,
+        }},
+        "size": k,
+    });
+    let post_hits = run(&post_body);
+    let post_found: std::collections::HashSet<i64> =
+        post_hits.iter().map(|(id, _)| *id).collect();
+    let post_precision = post_found.intersection(&ground_truth).count() as f64 / k as f64;
+
+    println!(
+        "OpenSearch filtered precision@{k}: efficient={:.2} ({} hits), post-filter={:.2} ({} hits)",
+        efficient_precision,
+        efficient_hits.len(),
+        post_precision,
+        post_hits.len(),
+    );
+
+    // Every returned doc must satisfy the filter.
+    for (id, cat) in &efficient_hits {
+        assert_eq!(
+            *cat, target_category,
+            "efficient filtering returned doc {id} outside target category"
+        );
+    }
+
+    // Efficient filtering returns a full page of high-precision results ...
+    assert_eq!(
+        efficient_hits.len(),
+        k,
+        "efficient filtering should return k in-filter neighbours"
+    );
+    assert!(
+        efficient_precision >= 0.8,
+        "efficient filtering precision {:.2} < 0.80",
+        efficient_precision
+    );
+
+    // ... and it must clearly beat the old post-filtering behaviour, which loses
+    // most of its candidates to the selective filter.
+    assert!(
+        efficient_precision > post_precision,
+        "efficient filtering ({:.2}) should beat post-filtering ({:.2})",
+        efficient_precision,
+        post_precision
+    );
+
+    delete_test_index();
+}
+
 #[test]
 fn test_opensearch_full_cycle() {
     wait_for_opensearch();
