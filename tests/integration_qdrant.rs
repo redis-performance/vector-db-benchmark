@@ -55,7 +55,7 @@ fn wait_for_qdrant() {
 fn delete_collection() {
     let client = rest_client();
     let _ = client
-        .delete(&format!("{}/collections/{}", rest_url(), COLLECTION))
+        .delete(format!("{}/collections/{}", rest_url(), COLLECTION))
         .send();
 }
 
@@ -363,4 +363,185 @@ fn test_qdrant_payload_filter() {
     }
 
     delete_collection();
+}
+
+// ---------------------------------------------------------------------------
+// Binary-level coverage: run the real engine end-to-end via the CLI.
+// Covers the query_points migration and prefetch (search_params.prefetch).
+// ---------------------------------------------------------------------------
+
+fn binary_path() -> std::path::PathBuf {
+    let mut path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    path.push("vector-db-benchmark");
+    if path.exists() {
+        return path;
+    }
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/vector-db-benchmark")
+}
+
+/// Write a temp project (datasets + configs + results) and return its root.
+fn write_dense_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    vectors: &[Vec<f32>],
+    queries: &[Vec<f32>],
+    neighbors: &[Vec<i64>],
+    dim: usize,
+) -> std::path::PathBuf {
+    use std::fs;
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+
+    let dataset_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&dataset_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    let jsonl = |rows: &[Vec<f32>]| -> String {
+        rows.iter()
+            .map(|v| {
+                serde_json::to_string(&v.iter().map(|x| *x as f64).collect::<Vec<_>>()).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    fs::write(dataset_dir.join("vectors.jsonl"), jsonl(vectors)).unwrap();
+    fs::write(dataset_dir.join("queries.jsonl"), jsonl(queries)).unwrap();
+    let nb = neighbors
+        .iter()
+        .map(|n| serde_json::to_string(n).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(dataset_dir.join("neighbours.jsonl"), nb).unwrap();
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name, "type": "jsonl", "path": format!("{}/", dataset_name),
+        "distance": "l2", "vector_size": dim, "vector_count": vectors.len(),
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+    root
+}
+
+fn run_qdrant_binary(root: &std::path::Path, engine: &str, dataset: &str) -> bool {
+    let out = std::process::Command::new(binary_path())
+        .args([
+            "--engines",
+            engine,
+            "--datasets",
+            dataset,
+            "--host",
+            "localhost",
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("QDRANT_GRPC_PORT", QDRANT_GRPC_PORT.to_string())
+        .env("QDRANT_REST_PORT", QDRANT_REST_PORT.to_string())
+        .current_dir(root)
+        .output()
+        .expect("run vector-db-benchmark");
+    if !out.status.success() {
+        eprintln!(
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    out.status.success()
+}
+
+fn read_precision(root: &std::path::Path, engine: &str) -> f64 {
+    use std::fs;
+    let pattern = format!("{}-*-search-*.json", engine);
+    let dir = root.join("results");
+    let path = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            glob::Pattern::new(&pattern)
+                .unwrap()
+                .matches(&p.file_name().unwrap().to_string_lossy())
+        })
+        .unwrap_or_else(|| panic!("no search result for {}", engine));
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    v["results"]["mean_precisions"].as_f64().unwrap()
+}
+
+/// End-to-end via the real engine: a plain search (covers the query_points
+/// migration) and a prefetch/two-stage search both return high-recall results.
+#[test]
+fn test_binary_qdrant_query_points_and_prefetch() {
+    wait_for_qdrant();
+
+    let dim = 8;
+    let (_ids, vectors) = generate_test_vectors(200, dim);
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let top = 10;
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors_l2(q, &vectors, top))
+        .collect();
+
+    let configs = serde_json::json!([
+        {
+            "name": "qdrant-qp", "engine": "qdrant",
+            "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+            "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+            "upload_params": {"parallel": 1, "batch_size": 100}
+        },
+        {
+            "name": "qdrant-pf", "engine": "qdrant",
+            "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+            "search_params": [{"parallel": 1, "search_params": {
+                "hnsw_ef": 128, "prefetch": {"limit": 50, "params": {"hnsw_ef": 256}}
+            }}],
+            "upload_params": {"parallel": 1, "batch_size": 100}
+        }
+    ]);
+    let root = write_dense_project(
+        "qp-test",
+        &serde_json::to_string(&configs).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        dim,
+    );
+
+    assert!(
+        run_qdrant_binary(&root, "qdrant-qp", "qp-test"),
+        "plain run failed"
+    );
+    let p_plain = read_precision(&root, "qdrant-qp");
+    assert!(
+        p_plain >= 0.9,
+        "query_points precision {:.3} < 0.9",
+        p_plain
+    );
+
+    assert!(
+        run_qdrant_binary(&root, "qdrant-pf", "qp-test"),
+        "prefetch run failed"
+    );
+    let p_pf = read_precision(&root, "qdrant-pf");
+    assert!(p_pf >= 0.9, "prefetch precision {:.3} < 0.9", p_pf);
+    println!(
+        "qdrant query_points precision={:.3}, prefetch precision={:.3}",
+        p_plain, p_pf
+    );
 }
