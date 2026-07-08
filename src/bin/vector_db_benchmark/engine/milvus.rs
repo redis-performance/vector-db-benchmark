@@ -473,6 +473,7 @@ fn insert_batch(
 }
 
 /// Search Milvus via REST API.
+#[allow(clippy::too_many_arguments)]
 fn search_vectors(
     client: &reqwest::blocking::Client,
     base_url: &str,
@@ -571,7 +572,7 @@ fn parse_milvus_conditions(conditions: &serde_json::Value) -> Option<String> {
     if let Some(and_items) = obj.get("and").and_then(|v| v.as_array()) {
         let and_filters: Vec<String> = and_items
             .iter()
-            .filter_map(|entry| build_milvus_entry_filter(entry))
+            .filter_map(build_milvus_entry_filter)
             .collect();
         if !and_filters.is_empty() {
             clauses.push(format!("({})", and_filters.join(" && ")));
@@ -581,7 +582,7 @@ fn parse_milvus_conditions(conditions: &serde_json::Value) -> Option<String> {
     if let Some(or_items) = obj.get("or").and_then(|v| v.as_array()) {
         let or_filters: Vec<String> = or_items
             .iter()
-            .filter_map(|entry| build_milvus_entry_filter(entry))
+            .filter_map(build_milvus_entry_filter)
             .collect();
         if !or_filters.is_empty() {
             clauses.push(format!("({})", or_filters.join(" || ")));
@@ -857,8 +858,10 @@ impl Engine for MilvusEngine {
                         search_times.lock().unwrap().push(query_time);
 
                         if let Ok(result_ids) = results {
-                            let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                            let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                            let ordered_ids: Vec<i64> =
+                                result_ids.iter().map(|(id, _)| *id).collect();
+                            let m =
+                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
                             mrrs.lock().unwrap().push(m.mrr);

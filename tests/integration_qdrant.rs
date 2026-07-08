@@ -87,8 +87,9 @@ fn brute_force_neighbors_l2(query: &[f32], vectors: &[Vec<f32>], top: usize) -> 
 
 fn create_grpc_client() -> (tokio::runtime::Runtime, qdrant_client::Qdrant) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let client = rt
-        .block_on(qdrant_client::Qdrant::from_url(&grpc_url()).build())
+    // `from_url(...).build()` is synchronous and returns a Result, not a future.
+    let client = qdrant_client::Qdrant::from_url(&grpc_url())
+        .build()
         .unwrap();
     (rt, client)
 }

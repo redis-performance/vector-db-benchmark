@@ -19,6 +19,9 @@ use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
 use vector_db_benchmark::readers::metadata::MetadataItem;
 
+/// One upload batch: ids, their vectors, and optional per-item metadata.
+type UploadBatch = (Vec<i64>, Vec<Vec<f32>>, Vec<Option<MetadataItem>>);
+
 const DEFAULT_NAMESPACE: &str = "benchmark";
 
 pub struct TurbopufferEngine {
@@ -372,7 +375,7 @@ impl Engine for TurbopufferEngine {
             let counter = Arc::new(AtomicUsize::new(0));
             let errors = Arc::new(Mutex::new(Vec::new()));
 
-            let batches: Vec<(Vec<i64>, Vec<Vec<f32>>, Vec<Option<MetadataItem>>)> = (0..total)
+            let batches: Vec<UploadBatch> = (0..total)
                 .step_by(batch_size)
                 .map(|start| {
                     let end = (start + batch_size).min(total);

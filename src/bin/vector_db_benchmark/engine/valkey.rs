@@ -432,7 +432,7 @@ impl ValkeyEngine {
                 return Ok(());
             }
 
-            if start.elapsed().as_secs() % 10 == 0 && start.elapsed().as_secs() > 0 {
+            if start.elapsed().as_secs().is_multiple_of(10) && start.elapsed().as_secs() > 0 {
                 println!(
                     "Waiting for indexing: {} docs, indexing={} ({:.0}s)",
                     num_docs,
@@ -474,9 +474,7 @@ impl ValkeyEngine {
             .collect();
 
         if runnable_indices.is_empty() {
-            return Err(
-                "No queries with filter conditions for filter-only search".to_string()
-            );
+            return Err("No queries with filter conditions for filter-only search".to_string());
         }
 
         // Round-robin: if num_queries > available queries, cycle through them
@@ -533,7 +531,11 @@ impl ValkeyEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let query_start = Instant::now();
@@ -600,7 +602,12 @@ impl ValkeyEngine {
             .unwrap_or(0.0);
 
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["FT.SEARCH"],
+            "search",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,
@@ -1263,7 +1270,12 @@ impl Engine for ValkeyEngine {
 
         // Verify no HSET failures occurred during upload
         let mut conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut conn, &["hset"], "upload", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut conn,
+            &["hset"],
+            "upload",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(UploadStats {
             upload_time,
@@ -1392,8 +1404,13 @@ impl Engine for ValkeyEngine {
 
                         match &results {
                             Ok(result_ids) => {
-                                let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                let ordered_ids: Vec<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let m = crate::metrics::compute_metrics(
+                                    &ordered_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
                                 precisions.lock().unwrap().push(m.precision);
                                 recalls.lock().unwrap().push(m.recall);
                                 mrrs.lock().unwrap().push(m.mrr);
@@ -1456,7 +1473,12 @@ impl Engine for ValkeyEngine {
 
         // Verify no FT.SEARCH failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["FT.SEARCH"],
+            "search",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,
@@ -1611,8 +1633,13 @@ impl Engine for ValkeyEngine {
 
                             match &results {
                                 Ok(result_ids) => {
-                                    let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                                    let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                    let ordered_ids: Vec<i64> =
+                                        result_ids.iter().map(|(id, _)| *id).collect();
+                                    let m = crate::metrics::compute_metrics(
+                                        &ordered_ids,
+                                        &neighbors[idx],
+                                        top,
+                                    );
                                     precisions.lock().unwrap().push(m.precision);
                                     recalls.lock().unwrap().push(m.recall);
                                     mrrs.lock().unwrap().push(m.mrr);
@@ -1725,7 +1752,12 @@ impl Engine for ValkeyEngine {
 
         // Verify no failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH", "hset"], "mixed", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["FT.SEARCH", "hset"],
+            "mixed",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,

@@ -92,16 +92,11 @@ pub fn display_results_summary(engine_name: &str, dataset_name: &str, entries: &
     }
 
     // Filter-only mode: precision is not applicable (mean_precision == -1.0)
-    let filter_only = entries
-        .iter()
-        .all(|e| e.results.mean_precision < 0.0);
+    let filter_only = entries.iter().all(|e| e.results.mean_precision < 0.0);
 
     if filter_only {
         println!("{}", "-".repeat(40));
-        println!(
-            "{:<10} {:<12} {:<12}",
-            "QPS", "P50 (ms)", "P95 (ms)"
-        );
+        println!("{:<10} {:<12} {:<12}", "QPS", "P50 (ms)", "P95 (ms)");
         println!("{}", "-".repeat(40));
 
         for e in entries {
@@ -162,7 +157,16 @@ pub fn display_mixed_summary(entries: &[SearchEntry]) {
     println!("\n{}", "-".repeat(116));
     println!(
         "{:<14} {:<8} {:<8} {:<8} {:<8} {:<10} {:<12} {:<12} {:<10} {:<12}",
-        "Ratio", "Recall", "Prec", "MRR", "NDCG", "QPS", "P50 (ms)", "P95 (ms)", "Upd QPS", "Upd P50 (ms)"
+        "Ratio",
+        "Recall",
+        "Prec",
+        "MRR",
+        "NDCG",
+        "QPS",
+        "P50 (ms)",
+        "P95 (ms)",
+        "Upd QPS",
+        "Upd P50 (ms)"
     );
     println!("{}", "-".repeat(116));
 

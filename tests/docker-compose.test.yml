@@ -27,7 +27,9 @@ services:
       - "6334:6333"
       - "6335:6334"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/collections || exit 1"]
+      # The qdrant image ships neither curl nor wget; it does have bash, so use a
+      # /dev/tcp connect check against the REST port to confirm readiness.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333"]
       interval: 2s
       timeout: 5s
       retries: 15
@@ -61,7 +63,9 @@ services:
     ports:
       - "8081:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/.well-known/ready || exit 1"]
+      # The weaviate image has no curl; use its bundled wget in spider mode to
+      # probe the readiness endpoint.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/v1/.well-known/ready"]
       interval: 2s
       timeout: 5s
       retries: 15

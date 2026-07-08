@@ -404,7 +404,7 @@ impl RedisEngine {
                 return Ok(());
             }
 
-            if start.elapsed().as_secs() > 0 && start.elapsed().as_secs() % 10 == 0 {
+            if start.elapsed().as_secs() > 0 && start.elapsed().as_secs().is_multiple_of(10) {
                 println!(
                     "  indexing... num_docs={}/{}, percent_indexed={:.2}, indexing={}",
                     num_docs, expected, percent_indexed, indexing
@@ -448,9 +448,7 @@ impl RedisEngine {
             .collect();
 
         if runnable_indices.is_empty() {
-            return Err(
-                "No queries with filter conditions for filter-only search".to_string()
-            );
+            return Err("No queries with filter conditions for filter-only search".to_string());
         }
 
         // Round-robin: if num_queries > available queries, cycle through them
@@ -499,7 +497,11 @@ impl RedisEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let query_start = Instant::now();
@@ -567,7 +569,12 @@ impl RedisEngine {
 
         // Verify no FT.SEARCH failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["FT.SEARCH"],
+            "search",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,
@@ -1249,7 +1256,12 @@ impl Engine for RedisEngine {
 
         // Verify no HSET failures occurred during upload
         let mut conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut conn, &["hset"], "upload", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut conn,
+            &["hset"],
+            "upload",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(UploadStats {
             upload_time,
@@ -1376,7 +1388,8 @@ impl Engine for RedisEngine {
 
                         // Calculate retrieval quality metrics
                         if let Ok(result_ids) = results {
-                            let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
+                            let ordered_ids: Vec<i64> =
+                                result_ids.iter().map(|(id, _)| *id).collect();
                             let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
@@ -1440,7 +1453,12 @@ impl Engine for RedisEngine {
 
         // Verify no FT.SEARCH failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH"], "search", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["FT.SEARCH"],
+            "search",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,
@@ -1598,7 +1616,8 @@ impl Engine for RedisEngine {
 
                             // Calculate retrieval quality metrics
                             if let Ok(result_ids) = results {
-                                let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
+                                let ordered_ids: Vec<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
                                 precisions.lock().unwrap().push(m.precision);
                                 recalls.lock().unwrap().push(m.recall);
@@ -1710,7 +1729,12 @@ impl Engine for RedisEngine {
 
         // Verify no failures occurred
         let mut check_conn = self.get_connection()?;
-        redis_utils::check_commandstats(&mut check_conn, &["FT.SEARCH", "hset"], "mixed", self.commandstats_baseline.as_ref())?;
+        redis_utils::check_commandstats(
+            &mut check_conn,
+            &["FT.SEARCH", "hset"],
+            "mixed",
+            self.commandstats_baseline.as_ref(),
+        )?;
 
         Ok(SearchResults {
             total_time,

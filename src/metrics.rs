@@ -62,11 +62,13 @@ pub fn compute_metrics(result_ids_ordered: &[i64], ground_truth: &[i64], k: usiz
             .sum();
 
         let ideal_hits = k.min(truth_set.len());
-        let idcg: f64 = (0..ideal_hits)
-            .map(|i| 1.0 / (i as f64 + 2.0).log2())
-            .sum();
+        let idcg: f64 = (0..ideal_hits).map(|i| 1.0 / (i as f64 + 2.0).log2()).sum();
 
-        if idcg > 0.0 { dcg / idcg } else { 0.0 }
+        if idcg > 0.0 {
+            dcg / idcg
+        } else {
+            0.0
+        }
     };
 
     QueryMetrics {

@@ -124,9 +124,7 @@ impl MongoDBEngine {
             .collect();
 
         if runnable_indices.is_empty() {
-            return Err(
-                "No queries with filter conditions for filter-only search".to_string(),
-            );
+            return Err("No queries with filter conditions for filter-only search".to_string());
         }
 
         // Round-robin: if num_queries > available queries, cycle through them
@@ -179,7 +177,11 @@ impl MongoDBEngine {
 
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
-                            if n > 0 { n } else { 10 }
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
                         });
 
                         let filter = parsed_filters[idx].as_ref().unwrap();
@@ -292,16 +294,16 @@ impl MongoDBEngine {
         let deadline = Instant::now() + std::time::Duration::from_secs(120);
         loop {
             let cmd = doc! { "listSearchIndexes": &self.collection_name };
-            let index_exists = db.run_command(cmd).run().ok().map_or(false, |result| {
+            let index_exists = db.run_command(cmd).run().ok().is_some_and(|result| {
                 result
                     .get_document("cursor")
                     .ok()
                     .and_then(|c| c.get_array("firstBatch").ok())
-                    .map_or(false, |batch| {
+                    .is_some_and(|batch| {
                         batch.iter().any(|idx| {
                             idx.as_document()
                                 .and_then(|d| d.get_str("name").ok())
-                                .map_or(false, |n| n == self.index_name)
+                                .is_some_and(|n| n == self.index_name)
                         })
                     })
             });
@@ -1004,7 +1006,10 @@ impl Engine for MongoDBEngine {
         let total_time;
         if self.config.skip_vector_index {
             total_time = read_time + upload_time;
-            println!("Total time (read+upload): {:.3}s (no vector index)", total_time);
+            println!(
+                "Total time (read+upload): {:.3}s (no vector index)",
+                total_time
+            );
         } else {
             // Wait for the search index to finish indexing all uploaded documents
             // Use the first vector as a probe query to verify actual search readiness
@@ -1134,8 +1139,10 @@ impl Engine for MongoDBEngine {
                         search_times.lock().unwrap().push(query_time);
 
                         if let Ok(result_ids) = results {
-                            let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                            let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                            let ordered_ids: Vec<i64> =
+                                result_ids.iter().map(|(id, _)| *id).collect();
+                            let m =
+                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
                             mrrs.lock().unwrap().push(m.mrr);
@@ -1346,8 +1353,13 @@ impl Engine for MongoDBEngine {
                             search_times.lock().unwrap().push(query_time);
 
                             if let Ok(result_ids) = results {
-                                let ordered_ids: Vec<i64> = result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                let ordered_ids: Vec<i64> =
+                                    result_ids.iter().map(|(id, _)| *id).collect();
+                                let m = crate::metrics::compute_metrics(
+                                    &ordered_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
                                 precisions.lock().unwrap().push(m.precision);
                                 recalls.lock().unwrap().push(m.recall);
                                 mrrs.lock().unwrap().push(m.mrr);

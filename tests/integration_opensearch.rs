@@ -502,7 +502,11 @@ fn test_opensearch_filtered_precision() {
     distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     let ground_truth: std::collections::HashSet<i64> =
         distances.iter().take(k).map(|(id, _)| *id).collect();
-    assert_eq!(ground_truth.len(), k, "test setup: need >= k docs in category");
+    assert_eq!(
+        ground_truth.len(),
+        k,
+        "test setup: need >= k docs in category"
+    );
 
     let filter = serde_json::json!({"bool": {"must": [{"match": {"category": target_category}}]}});
 
@@ -548,8 +552,7 @@ fn test_opensearch_filtered_precision() {
         "size": k,
     });
     let post_hits = run(&post_body);
-    let post_found: std::collections::HashSet<i64> =
-        post_hits.iter().map(|(id, _)| *id).collect();
+    let post_found: std::collections::HashSet<i64> = post_hits.iter().map(|(id, _)| *id).collect();
     let post_precision = post_found.intersection(&ground_truth).count() as f64 / k as f64;
 
     println!(

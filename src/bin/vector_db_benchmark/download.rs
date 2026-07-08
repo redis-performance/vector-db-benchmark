@@ -122,7 +122,7 @@ fn extract_or_move(tmp_path: &Path, target_path: &Path, link: &str) -> Result<()
         extract_tgz(tmp_path, target_path)
     } else if link_lower.ends_with(".bz2") {
         // Decompress bz2 — strip .bz2 from target if present
-        let final_target = if target_path.extension().map_or(false, |e| e == "bz2") {
+        let final_target = if target_path.extension().is_some_and(|e| e == "bz2") {
             target_path.with_extension("")
         } else {
             target_path.to_path_buf()

@@ -86,7 +86,7 @@ impl QdrantEngine {
             .trim_start_matches("http://")
             .trim_start_matches("https://");
 
-        let grpc_url = if let Some(url) = std::env::var("QDRANT_URL").ok() {
+        let grpc_url = if let Ok(url) = std::env::var("QDRANT_URL") {
             url
         } else {
             format!("http://{}:{}", clean_host, grpc_port)
@@ -187,10 +187,10 @@ impl QdrantEngine {
         if hnsw_m.is_some() || hnsw_ef.is_some() {
             let mut hnsw_config = HnswConfigDiff::default();
             if let Some(m) = hnsw_m {
-                hnsw_config.m = Some(m as u64);
+                hnsw_config.m = Some(m);
             }
             if let Some(ef) = hnsw_ef {
-                hnsw_config.ef_construct = Some(ef as u64);
+                hnsw_config.ef_construct = Some(ef);
             }
             create_builder = create_builder.hnsw_config(hnsw_config);
         }
@@ -226,13 +226,13 @@ impl QdrantEngine {
                     quantile: s.get("quantile").and_then(|v| v.as_f64()).map(|v| v as f32),
                     always_ram: s.get("always_ram").and_then(|v| v.as_bool()),
                 }))
-            } else if let Some(b) = q.get("binary") {
-                Some(Quantization::Binary(BinaryQuantization {
-                    always_ram: b.get("always_ram").and_then(|v| v.as_bool()),
-                    ..Default::default()
-                }))
             } else {
-                None
+                q.get("binary").map(|b| {
+                    Quantization::Binary(BinaryQuantization {
+                        always_ram: b.get("always_ram").and_then(|v| v.as_bool()),
+                        ..Default::default()
+                    })
+                })
             };
             if let Some(quantization) = quantization {
                 create_builder = create_builder.quantization_config(quantization);
@@ -518,10 +518,10 @@ fn build_qdrant_filter(
             let value = criteria.get("value")?;
             if let Some(s) = value.as_str() {
                 Some(Condition::matches(field_name.to_string(), s.to_string()))
-            } else if let Some(n) = value.as_i64() {
-                Some(Condition::matches(field_name.to_string(), n))
             } else {
-                None
+                value
+                    .as_i64()
+                    .map(|n| Condition::matches(field_name.to_string(), n))
             }
         }
         "range" => {
@@ -730,7 +730,7 @@ impl Engine for QdrantEngine {
                         if hnsw_ef.is_some() || quantization_params.is_some() {
                             let search_params = qdrant_client::qdrant::SearchParams {
                                 hnsw_ef,
-                                quantization: quantization_params.clone(),
+                                quantization: quantization_params,
                                 ..Default::default()
                             };
                             search_builder = search_builder.params(search_params);

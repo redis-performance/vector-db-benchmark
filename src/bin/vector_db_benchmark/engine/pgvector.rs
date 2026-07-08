@@ -259,7 +259,7 @@ impl Engine for PgVectorEngine {
                                     .map(|v| v.to_string())
                                     .collect::<Vec<_>>()
                                     .join(",");
-                                write!(writer, "{}\t[{}]\n", ids[i], vec_str)
+                                writeln!(writer, "{}\t[{}]", ids[i], vec_str)
                                     .map_err(|e| format!("COPY write failed: {}", e))?;
                             }
 
