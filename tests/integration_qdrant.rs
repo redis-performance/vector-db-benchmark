@@ -55,7 +55,7 @@ fn wait_for_qdrant() {
 fn delete_collection() {
     let client = rest_client();
     let _ = client
-        .delete(&format!("{}/collections/{}", rest_url(), COLLECTION))
+        .delete(format!("{}/collections/{}", rest_url(), COLLECTION))
         .send();
 }
 
