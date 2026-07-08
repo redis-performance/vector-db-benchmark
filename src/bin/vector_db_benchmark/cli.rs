@@ -60,7 +60,8 @@ pub struct Args {
     )]
     pub exit_on_error: bool,
 
-    /// Timeout in seconds
+    /// Overall wall-clock budget in seconds: stop launching new experiments once
+    /// total elapsed exceeds this (any in-flight experiment finishes). 0 disables.
     #[arg(long, default_value = "86400.0")]
     pub timeout: f64,
 

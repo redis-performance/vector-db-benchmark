@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -112,7 +113,18 @@ pub fn run(args: &Args) -> Result<(), String> {
 
     let skip_vector_engines = ["redis", "valkey", "mongodb"];
 
-    for (_engine_name, engine_config) in &engines {
+    // Soft wall-clock budget: once total elapsed reaches --timeout, stop launching
+    // further experiments and finish cleanly. This bounds the overall run without
+    // interrupting an in-flight experiment (the Rust runner is blocking, so a hard
+    // per-experiment abort as in the Python tool is not safe here).
+    let run_start = Instant::now();
+    let budget = if args.timeout.is_finite() && args.timeout > 0.0 {
+        Some(Duration::from_secs_f64(args.timeout))
+    } else {
+        None
+    };
+
+    'experiments: for (_engine_name, engine_config) in &engines {
         // Apply --skip-vector-index: override name and set flag on config
         let mut engine_config = (*engine_config).clone();
         if args.skip_vector_index {
@@ -129,6 +141,24 @@ pub fn run(args: &Args) -> Result<(), String> {
         }
 
         for (dataset_name, dataset_config) in &datasets {
+            // Stop before starting a new experiment if the time budget is exhausted.
+            if let Some(budget) = budget {
+                let elapsed = run_start.elapsed();
+                if elapsed >= budget {
+                    let remaining = total_experiments as u64 - pb.position();
+                    pb.suspend(|| {
+                        eprintln!(
+                            "Reached --timeout budget ({:.0}s, elapsed {:.0}s); \
+                             stopping with {} experiment(s) not started.",
+                            budget.as_secs_f64(),
+                            elapsed.as_secs_f64(),
+                            remaining
+                        );
+                    });
+                    break 'experiments;
+                }
+            }
+
             let experiment_num = pb.position() + 1;
             pb.suspend(|| {
                 println!("\n{}", "=".repeat(60));
