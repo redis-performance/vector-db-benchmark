@@ -401,7 +401,10 @@ impl Engine for TurbopufferEngine {
                     let pb = pb.clone();
 
                     s.spawn(move |_| {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
                         if let Err(e) = Self::upload_batch(
                             &client, &namespace, batch_ids, batch_vecs, batch_meta, &rt,
                         ) {
@@ -545,7 +548,10 @@ impl Engine for TurbopufferEngine {
                     let pb = &pb;
 
                     s.spawn(move |_| {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
                         let start = Instant::now();
                         let results = single_query(
                             &client,

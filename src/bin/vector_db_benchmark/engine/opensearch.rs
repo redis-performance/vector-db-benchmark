@@ -263,7 +263,10 @@ impl OpenSearchEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
                         Ok(rt) => rt,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
@@ -897,7 +900,10 @@ impl Engine for OpenSearchEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
                         Ok(rt) => rt,
                         Err(_) => return,
                     };
