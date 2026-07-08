@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
-use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::quantization_config::Quantization;
+use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
     BinaryQuantization, Condition, CreateCollectionBuilder, DeleteCollectionBuilder, Distance,
     FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff, PointStruct,
@@ -762,7 +762,8 @@ impl Engine for QdrantEngine {
                                     }
                                 })
                                 .collect();
-                            let m = crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
+                            let m =
+                                crate::metrics::compute_metrics(&ordered_ids, &neighbors[idx], top);
                             precisions.lock().unwrap().push(m.precision);
                             recalls.lock().unwrap().push(m.recall);
                             mrrs.lock().unwrap().push(m.mrr);
