@@ -13,9 +13,10 @@ use qdrant_client::qdrant::quantization_config::Quantization;
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
     BinaryQuantization, Condition, CreateCollectionBuilder, DatetimeRange, DeleteCollectionBuilder,
-    Distance, FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, OptimizersConfigDiff,
-    PointStruct, PrefetchQueryBuilder, QuantizationSearchParams, QuantizationType,
-    QueryPointsBuilder, ScalarQuantization, SearchParams as QdrantSearchParams, Timestamp,
+    Distance, FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, NamedVectors,
+    OptimizersConfigDiff, PointStruct, PrefetchQueryBuilder, QuantizationSearchParams,
+    QuantizationType, QueryPointsBuilder, ScalarQuantization, SearchParams as QdrantSearchParams,
+    SparseVectorParamsBuilder, SparseVectorsConfigBuilder, Timestamp, Vector, VectorInput,
     VectorParamsBuilder, VectorsConfig,
 };
 use qdrant_client::{Payload, Qdrant};
@@ -175,6 +176,10 @@ impl QdrantEngine {
     }
 
     fn create_collection(&self, dataset: &Dataset) -> Result<(), String> {
+        if dataset.is_sparse() {
+            return self.create_sparse_collection(dataset);
+        }
+
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
@@ -282,7 +287,13 @@ impl QdrantEngine {
             ),
         );
 
-        // Create payload indexes for schema fields
+        self.create_payload_indexes(dataset);
+
+        Ok(())
+    }
+
+    /// Create Qdrant payload indexes for the dataset's schema fields.
+    fn create_payload_indexes(&self, dataset: &Dataset) {
         if let Some(schema) = &dataset.config.schema {
             if let Some(schema_obj) = schema.as_object() {
                 for (field_name, field_type) in schema_obj {
@@ -308,8 +319,75 @@ impl QdrantEngine {
                 }
             }
         }
+    }
 
+    /// Create a sparse-vector collection with a single named "sparse" vector.
+    fn create_sparse_collection(&self, dataset: &Dataset) -> Result<(), String> {
+        let mut sparse_cfg = SparseVectorsConfigBuilder::default();
+        sparse_cfg.add_named_vector_params("sparse", SparseVectorParamsBuilder::default());
+        let create_builder =
+            CreateCollectionBuilder::new(&self.collection_name).sparse_vectors_config(sparse_cfg);
+        self.rt
+            .block_on(self.client.create_collection(create_builder))
+            .map_err(|e| format!("Failed to create sparse collection: {}", e))?;
+        self.create_payload_indexes(dataset);
         Ok(())
+    }
+
+    /// Upload sparse vectors under the named "sparse" vector, batched.
+    fn upload_sparse(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        let dataset_path = dataset.get_path()?;
+        println!("Reading sparse dataset from {}...", dataset_path.display());
+        let read_start = Instant::now();
+        let (ids, vectors) = dataset.read_sparse_data()?;
+        let read_time = read_start.elapsed().as_secs_f64();
+        println!("Read {} sparse vectors in {:.3}s", vectors.len(), read_time);
+
+        println!("Starting sparse upload, batch size {}...", self.batch_size);
+        let upload_start = Instant::now();
+        let pb = self.create_progress_bar(ids.len());
+        for start in (0..ids.len()).step_by(self.batch_size) {
+            let end = (start + self.batch_size).min(ids.len());
+            let points: Vec<PointStruct> = (start..end)
+                .map(|i| {
+                    PointStruct::new(
+                        ids[i] as u64,
+                        NamedVectors::default().add_vector(
+                            "sparse",
+                            Vector::new_sparse(
+                                vectors[i].indices.clone(),
+                                vectors[i].values.clone(),
+                            ),
+                        ),
+                        Payload::new(),
+                    )
+                })
+                .collect();
+            self.rt
+                .block_on(
+                    self.client.upsert_points(
+                        qdrant_client::qdrant::UpsertPointsBuilder::new(
+                            &self.collection_name,
+                            points,
+                        )
+                        .wait(true),
+                    ),
+                )
+                .map_err(|e| format!("Sparse upsert failed: {}", e))?;
+            pb.inc((end - start) as u64);
+        }
+        pb.finish_with_message("Upload complete");
+        let upload_time = upload_start.elapsed().as_secs_f64();
+        self.wait_collection_green()?;
+
+        Ok(UploadStats {
+            upload_time,
+            total_time: read_time + upload_time,
+            upload_count: vectors.len(),
+            parallel: 1,
+            batch_size: self.batch_size,
+            memory_usage: None,
+        })
     }
 
     fn upload_parallel(
@@ -687,6 +765,10 @@ impl Engine for QdrantEngine {
     }
 
     fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        if dataset.is_sparse() {
+            return self.upload_sparse(dataset);
+        }
+
         let normalize = dataset.needs_normalization();
         let dataset_path = dataset.get_path()?;
         println!("Reading dataset from {}...", dataset_path.display());
@@ -787,18 +869,37 @@ impl Engine for QdrantEngine {
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
-        let (queries, neighbors, conditions) = dataset.read_queries()?;
 
-        let parsed_filters: Vec<Option<Filter>> = conditions
-            .iter()
-            .map(|c| c.as_ref().and_then(parse_qdrant_conditions))
-            .collect();
+        // Dense and sparse queries are read into separate vectors; only one is
+        // populated. Filters/prefetch/quantization apply to the dense path only.
+        let is_sparse = dataset.is_sparse();
+        let (queries, sparse_queries, neighbors, parsed_filters) = if is_sparse {
+            let (sq, nb) = dataset.read_sparse_queries()?;
+            (Vec::<Vec<f32>>::new(), sq, nb, Vec::<Option<Filter>>::new())
+        } else {
+            let (q, nb, conditions) = dataset.read_queries()?;
+            let pf: Vec<Option<Filter>> = conditions
+                .iter()
+                .map(|c| c.as_ref().and_then(parse_qdrant_conditions))
+                .collect();
+            (
+                q,
+                Vec::<vector_db_benchmark::readers::SparseVector>::new(),
+                nb,
+                pf,
+            )
+        };
 
-        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
-        let num_to_run = if num_queries > 0 {
-            (num_queries as usize).min(queries.len())
+        let query_count = if is_sparse {
+            sparse_queries.len()
         } else {
             queries.len()
+        };
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(query_count)
+        } else {
+            query_count
         };
 
         let search_times: Arc<Mutex<Vec<f64>>> =
@@ -819,6 +920,7 @@ impl Engine for QdrantEngine {
                 let client = Arc::clone(&client);
                 let collection_name = collection_name.clone();
                 let queries = &queries;
+                let sparse_queries = &sparse_queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
                 let search_times = Arc::clone(&search_times);
@@ -850,24 +952,35 @@ impl Engine for QdrantEngine {
                             }
                         });
 
-                        let mut query_builder = QueryPointsBuilder::new(collection_name.clone())
-                            .query(queries[idx].clone())
-                            .limit(top as u64)
-                            .with_payload(false);
+                        let mut query_builder = if is_sparse {
+                            let sv = &sparse_queries[idx];
+                            QueryPointsBuilder::new(collection_name.clone())
+                                .query(VectorInput::new_sparse(
+                                    sv.indices.clone(),
+                                    sv.values.clone(),
+                                ))
+                                .using("sparse")
+                                .limit(top as u64)
+                                .with_payload(false)
+                        } else {
+                            let mut qb = QueryPointsBuilder::new(collection_name.clone())
+                                .query(queries[idx].clone())
+                                .limit(top as u64)
+                                .with_payload(false);
+                            if hnsw_ef.is_some() || quantization_params.is_some() {
+                                qb = qb.params(QdrantSearchParams {
+                                    hnsw_ef,
+                                    quantization: quantization_params,
+                                    ..Default::default()
+                                });
+                            }
+                            if let Some(filter) = &parsed_filters[idx] {
+                                qb = qb.filter(filter.clone());
+                            }
+                            qb
+                        };
 
-                        if hnsw_ef.is_some() || quantization_params.is_some() {
-                            query_builder = query_builder.params(QdrantSearchParams {
-                                hnsw_ef,
-                                quantization: quantization_params,
-                                ..Default::default()
-                            });
-                        }
-
-                        if let Some(filter) = &parsed_filters[idx] {
-                            query_builder = query_builder.filter(filter.clone());
-                        }
-
-                        if prefetch_enabled {
+                        if !is_sparse && prefetch_enabled {
                             let mut pf =
                                 PrefetchQueryBuilder::default().query(queries[idx].clone());
                             if let Some(l) = prefetch_limit {
