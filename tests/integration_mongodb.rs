@@ -33,13 +33,13 @@ fn mongodb_uri() -> String {
 }
 
 fn mongodb_client() -> Client {
-    Client::with_uri_str(&mongodb_uri()).expect("Failed to create MongoDB client")
+    Client::with_uri_str(mongodb_uri()).expect("Failed to create MongoDB client")
 }
 
 fn wait_for_mongodb() {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        if let Ok(client) = Client::with_uri_str(&mongodb_uri()) {
+        if let Ok(client) = Client::with_uri_str(mongodb_uri()) {
             let db = client.database("admin");
             if db.run_command(doc! { "ping": 1 }).run().is_ok() {
                 return;
@@ -71,16 +71,14 @@ fn drop_test_collection() {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let cmd = doc! { "listSearchIndexes": TEST_COLLECTION };
-        let index_exists = db.run_command(cmd).run().ok().map_or(false, |result| {
+        let index_exists = db.run_command(cmd).run().ok().is_some_and(|result| {
             result
                 .get_document("cursor")
                 .ok()
                 .and_then(|c| c.get_array("firstBatch").ok())
-                .map_or(false, |batch| {
+                .is_some_and(|batch| {
                     batch.iter().any(|idx| {
-                        idx.as_document()
-                            .and_then(|d| d.get_str("name").ok())
-                            .map_or(false, |n| n == TEST_INDEX)
+                        idx.as_document().and_then(|d| d.get_str("name").ok()) == Some(TEST_INDEX)
                     })
                 })
         });
