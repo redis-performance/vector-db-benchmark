@@ -296,7 +296,19 @@ impl WeaviateEngine {
         Ok(())
     }
 
-    /// Update vectorIndexConfig ef for search-time tuning.
+    /// Update the class's vectorIndexConfig `ef` for search-time tuning.
+    ///
+    /// In Weaviate, query-time `ef` is a class-level schema setting, not a
+    /// per-query parameter. Updating it requires `PUT /v1/schema/{class}` with the
+    /// *complete* class object: a partial body (just `vectorIndexConfig`) is
+    /// rejected with 422 ("class name is immutable: attempted change from
+    /// \"<class>\" to \"\""), which would silently leave every query running at the
+    /// default dynamic ef (-1) and flatten the recall/QPS sweep. So we fetch the
+    /// current class, merge the new `ef` into its `vectorIndexConfig`, and PUT the
+    /// whole object back — immutable fields (efConstruction, maxConnections) are
+    /// sent back unchanged, so they don't trip the immutability check. A failure
+    /// here returns Err (rather than a swallowed warning) so a broken ef sweep
+    /// surfaces immediately instead of producing misleading results.
     fn setup_search(
         &self,
         client: &reqwest::blocking::Client,
@@ -310,28 +322,58 @@ impl WeaviateEngine {
             .and_then(|v| v.get("ef"))
             .and_then(|v| v.as_i64());
 
-        if let Some(ef_val) = ef {
-            let body = serde_json::json!({
-                "vectorIndexConfig": {
-                    "ef": ef_val,
-                }
-            });
+        let Some(ef_val) = ef else {
+            return Ok(());
+        };
 
-            let url = format!("{}/v1/schema/{}", self.base_url, self.class_name);
-            let req = client
-                .put(&url)
-                .header("Content-Type", "application/json")
-                .json(&body);
-            let resp = self.add_auth(req).send().map_err(|e| e.to_string())?;
+        let url = format!("{}/v1/schema/{}", self.base_url, self.class_name);
 
-            if !resp.status().is_success() {
-                eprintln!(
-                    "Warning: failed to update vectorIndexConfig ef={}: {} {}",
-                    ef_val,
-                    resp.status(),
-                    resp.text().unwrap_or_default()
-                );
-            }
+        // 1. Fetch the current class definition.
+        let get_req = client.get(&url);
+        let get_resp = self
+            .add_auth(get_req)
+            .send()
+            .map_err(|e| format!("Failed to GET class for ef update: {}", e))?;
+        if !get_resp.status().is_success() {
+            return Err(format!(
+                "Failed to GET class {} for ef update: {} {}",
+                self.class_name,
+                get_resp.status(),
+                get_resp.text().unwrap_or_default()
+            ));
+        }
+        let mut class_obj: serde_json::Value = get_resp
+            .json()
+            .map_err(|e| format!("Failed to parse class JSON for ef update: {}", e))?;
+
+        // 2. Merge the new ef into vectorIndexConfig (creating it if absent).
+        let obj = class_obj
+            .as_object_mut()
+            .ok_or_else(|| "class definition is not a JSON object".to_string())?;
+        let vic = obj
+            .entry("vectorIndexConfig")
+            .or_insert_with(|| serde_json::json!({}));
+        let vic_obj = vic
+            .as_object_mut()
+            .ok_or_else(|| "vectorIndexConfig is not a JSON object".to_string())?;
+        vic_obj.insert("ef".to_string(), serde_json::json!(ef_val));
+
+        // 3. PUT the full class object back.
+        let put_req = client
+            .put(&url)
+            .header("Content-Type", "application/json")
+            .json(&class_obj);
+        let put_resp = self
+            .add_auth(put_req)
+            .send()
+            .map_err(|e| format!("Failed to PUT class for ef update: {}", e))?;
+        if !put_resp.status().is_success() {
+            return Err(format!(
+                "Failed to update vectorIndexConfig ef={}: {} {}",
+                ef_val,
+                put_resp.status(),
+                put_resp.text().unwrap_or_default()
+            ));
         }
 
         Ok(())
