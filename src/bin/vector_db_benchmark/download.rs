@@ -7,9 +7,42 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
+
+/// Number of times to attempt a dataset download before giving up.
+const MAX_DOWNLOAD_ATTEMPTS: usize = 15;
+
+/// Run `op` up to `max_attempts` times, calling `sleep(attempt)` between failures.
+/// Returns the last error (prefixed with the attempt count) if every attempt fails.
+fn with_retries<F, S>(max_attempts: usize, mut op: F, mut sleep: S) -> Result<(), String>
+where
+    F: FnMut() -> Result<(), String>,
+    S: FnMut(usize),
+{
+    let mut last_err = String::new();
+    for attempt in 1..=max_attempts {
+        match op() {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = e;
+                if attempt < max_attempts {
+                    eprintln!(
+                        "Download attempt {}/{} failed: {}. Retrying...",
+                        attempt, max_attempts, last_err
+                    );
+                    sleep(attempt);
+                }
+            }
+        }
+    }
+    Err(format!(
+        "Download failed after {} attempts: {}",
+        max_attempts, last_err
+    ))
+}
 
 /// Convert an S3 URL to an HTTPS URL for public bucket access.
 ///
@@ -46,8 +79,40 @@ pub fn download_dataset(link: &str, target_path: &Path) -> Result<(), String> {
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
+    // Download to temp file, retrying transient network failures. Extraction is
+    // deterministic once the file is on disk, so only the fetch is retried.
+    let tmp_dir = std::env::temp_dir();
+    let tmp_path = tmp_dir.join(format!("vdb_download_{}", std::process::id()));
+
+    let fetch_result = with_retries(
+        MAX_DOWNLOAD_ATTEMPTS,
+        || fetch_to_file(&client, &url, &tmp_path),
+        |attempt| std::thread::sleep(Duration::from_secs((attempt as u64).min(10))),
+    );
+    if let Err(e) = fetch_result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // Extract or move
+    extract_or_move(&tmp_path, target_path, &url)?;
+
+    // Clean up temp file
+    let _ = fs::remove_file(&tmp_path);
+
+    Ok(())
+}
+
+/// Fetch `url` into `tmp_path` in a single attempt, streaming with a progress bar.
+/// Returns an error on connection failure, non-success status, or a mid-stream
+/// read/write error — any of which `with_retries` will retry.
+fn fetch_to_file(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    tmp_path: &Path,
+) -> Result<(), String> {
     let response = client
-        .get(&url)
+        .get(url)
         .send()
         .map_err(|e| format!("Failed to download: {}", e))?;
 
@@ -78,11 +143,8 @@ pub fn download_dataset(link: &str, target_path: &Path) -> Result<(), String> {
         pb
     };
 
-    // Download to temp file
-    let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join(format!("vdb_download_{}", std::process::id()));
     let mut tmp_file =
-        fs::File::create(&tmp_path).map_err(|e| format!("Failed to create temp file: {}", e))?;
+        fs::File::create(tmp_path).map_err(|e| format!("Failed to create temp file: {}", e))?;
 
     let mut reader = response;
     let mut buffer = [0u8; 8192];
@@ -103,13 +165,6 @@ pub fn download_dataset(link: &str, target_path: &Path) -> Result<(), String> {
     }
 
     pb.finish_with_message("Downloaded");
-
-    // Extract or move
-    extract_or_move(&tmp_path, target_path, &url)?;
-
-    // Clean up temp file
-    let _ = fs::remove_file(&tmp_path);
-
     Ok(())
 }
 
@@ -201,5 +256,43 @@ mod tests {
     fn test_normalize_s3_url_http_passthrough() {
         let url = "http://example.com/file.tar.gz";
         assert_eq!(normalize_s3_url(url), url);
+    }
+
+    #[test]
+    fn retry_succeeds_after_transient_failures() {
+        let mut calls = 0;
+        let mut sleeps = 0;
+        let res = with_retries(
+            5,
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(format!("transient {}", calls))
+                } else {
+                    Ok(())
+                }
+            },
+            |_| sleeps += 1,
+        );
+        assert!(res.is_ok());
+        assert_eq!(calls, 3, "should stop retrying once it succeeds");
+        assert_eq!(sleeps, 2, "should sleep between the two failures");
+    }
+
+    #[test]
+    fn retry_gives_up_after_max_attempts() {
+        let mut calls = 0;
+        let res = with_retries(
+            4,
+            || {
+                calls += 1;
+                Err("always fails".to_string())
+            },
+            |_| {},
+        );
+        assert_eq!(calls, 4, "should attempt exactly max_attempts times");
+        let err = res.unwrap_err();
+        assert!(err.contains("after 4 attempts"), "got: {}", err);
+        assert!(err.contains("always fails"), "should carry last error");
     }
 }
