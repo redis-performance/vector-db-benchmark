@@ -35,7 +35,8 @@ pub struct QdrantEngine {
     parallel: usize,
     #[allow(dead_code)]
     grpc_url: String,
-    #[allow(dead_code)]
+    /// REST base URL (e.g. http://host:6333) for the /metrics and /telemetry endpoints
+    rest_url: String,
     api_key: Option<String>,
     search_params: Vec<SearchParams>,
     /// Raw collection_params JSON to pass through to Qdrant
@@ -92,6 +93,18 @@ impl QdrantEngine {
             format!("http://{}:{}", clean_host, grpc_port)
         };
 
+        // REST endpoint (default port 6333) for /metrics and /telemetry. Overridable
+        // via QDRANT_REST_URL, or QDRANT_REST_PORT for just the port.
+        let rest_url = if let Ok(url) = std::env::var("QDRANT_REST_URL") {
+            url.trim_end_matches('/').to_string()
+        } else {
+            let rest_port: u16 = std::env::var("QDRANT_REST_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6333);
+            format!("http://{}:{}", clean_host, rest_port)
+        };
+
         let collection_params_extra = engine_config
             .collection_params
             .as_ref()
@@ -127,6 +140,7 @@ impl QdrantEngine {
             batch_size,
             parallel,
             grpc_url,
+            rest_url,
             api_key,
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             collection_params_extra,
@@ -878,13 +892,129 @@ impl Engine for QdrantEngine {
         self.delete_collection()
     }
 
+    /// Collect memory usage from Qdrant's REST observability endpoints, mirroring
+    /// the Redis wrapper's `{used_memory, index_info}` shape.
+    ///
+    /// - `/metrics` (Prometheus): jemalloc `memory_*_bytes` gauges + collection counts.
+    ///   `memory_resident_bytes` (RSS) is used as `used_memory`, the analog of
+    ///   Redis' `used_memory`.
+    /// - `/telemetry` (JSON): collection/cluster/segment state, the analog of FT.INFO.
+    ///
+    /// See https://qdrant.tech/documentation/cloud/cluster-monitoring/.
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
-        let info = self
+        let http = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .ok()?;
+
+        let get = |path: &str| -> Option<reqwest::blocking::Response> {
+            let mut req = http.get(format!("{}{}", self.rest_url, path));
+            if let Some(key) = &self.api_key {
+                req = req.header("api-key", key);
+            }
+            req.send().ok().filter(|r| r.status().is_success())
+        };
+
+        // Prometheus /metrics → curated gauge map.
+        let metrics = get("/metrics")
+            .and_then(|r| r.text().ok())
+            .map(|t| parse_qdrant_metrics(&t))
+            .unwrap_or_default();
+        let resident = metrics
+            .get("memory_resident_bytes")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as i64;
+
+        // Telemetry JSON → collection/cluster state.
+        let telemetry: Option<serde_json::Value> = get("/telemetry?anonymize=true")
+            .and_then(|r| r.json::<serde_json::Value>().ok())
+            .and_then(|mut v| v.get_mut("result").map(|r| r.take()));
+
+        // Per-collection info from the gRPC client (segments, vector counts, status).
+        let collection_info = self
             .rt
             .block_on(self.client.collection_info(&self.collection_name))
-            .ok()?;
+            .ok()
+            .map(|info| format!("{:?}", info.result));
+
         Some(serde_json::json!({
-            "collection_info": format!("{:?}", info.result),
+            "used_memory": [resident],
+            "index_info": telemetry,
+            "qdrant_metrics": metrics,
+            "collection_info": collection_info,
         }))
+    }
+}
+
+/// Parse the curated set of Qdrant `/metrics` (Prometheus text) gauges into a JSON
+/// map. Only memory and collection-count gauges are kept; labeled/histogram lines
+/// and comments are ignored.
+fn parse_qdrant_metrics(text: &str) -> serde_json::Map<String, serde_json::Value> {
+    const WANTED: &[&str] = &[
+        "memory_active_bytes",
+        "memory_allocated_bytes",
+        "memory_metadata_bytes",
+        "memory_resident_bytes",
+        "memory_retained_bytes",
+        "collections_total",
+        "collections_vector_total",
+    ];
+    let mut out = serde_json::Map::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Split off the trailing value: "metric_name{labels} 123" or "metric_name 123".
+        let mut it = line.rsplitn(2, char::is_whitespace);
+        let value_str = match it.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let name_part = it.next().unwrap_or("").trim();
+        let name = name_part.split('{').next().unwrap_or(name_part).trim();
+        if WANTED.contains(&name) {
+            if let Ok(v) = value_str.parse::<f64>() {
+                out.insert(name.to_string(), serde_json::json!(v));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_qdrant_metrics;
+
+    #[test]
+    fn parses_qdrant_memory_and_collection_gauges() {
+        let sample = "\
+# HELP memory_resident_bytes Resident memory
+# TYPE memory_resident_bytes gauge
+app_info{name=\"qdrant\",version=\"1.13.4\"} 1
+collections_total 3
+collections_vector_total 1500000
+cluster_enabled 0
+memory_active_bytes 57212928
+memory_allocated_bytes 48281048
+memory_resident_bytes 74133504
+rest_responses_total{method=\"GET\"} 42
+";
+        let m = parse_qdrant_metrics(sample);
+        assert_eq!(
+            m.get("memory_resident_bytes").unwrap().as_f64(),
+            Some(74133504.0)
+        );
+        assert_eq!(
+            m.get("collections_vector_total").unwrap().as_f64(),
+            Some(1500000.0)
+        );
+        assert_eq!(m.get("collections_total").unwrap().as_f64(), Some(3.0));
+        // Non-curated / labeled / comment lines are ignored.
+        assert!(m.get("app_info").is_none());
+        assert!(m.get("rest_responses_total").is_none());
+        assert!(m.get("cluster_enabled").is_none());
+        // 5 curated gauges present in the sample.
+        assert_eq!(m.len(), 5);
     }
 }
