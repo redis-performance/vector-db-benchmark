@@ -155,39 +155,6 @@ pub fn compute_search_stats(
     })
 }
 
-#[cfg(test)]
-mod stats_tests {
-    use super::compute_search_stats;
-
-    #[test]
-    fn empty_times_errors() {
-        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1).is_err());
-    }
-
-    #[test]
-    fn computes_means_rps_and_clamped_percentiles() {
-        let times = vec![0.1, 0.2, 0.3, 0.4];
-        let ones = vec![1.0, 1.0, 1.0, 1.0];
-        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4).unwrap();
-        assert_eq!(r.num_queries, 4);
-        assert!((r.rps - 2.0).abs() < 1e-9); // 4 / 2.0s
-        assert!((r.mean_recall - 1.0).abs() < 1e-9);
-        assert!((r.mean_time - 0.25).abs() < 1e-9);
-        assert!((r.min_time - 0.1).abs() < 1e-9 && (r.max_time - 0.4).abs() < 1e-9);
-        // percentile indices stay in-bounds (no panic, no 0.0 fallback)
-        assert!(r.p50_time > 0.0 && r.p95_time > 0.0 && r.p99_time > 0.0);
-        assert_eq!(r.parallel, 4);
-        assert_eq!(r.top, 10);
-        assert!(r.update_count.is_none());
-    }
-
-    #[test]
-    fn single_query_percentiles_dont_panic() {
-        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1).unwrap();
-        assert!((r.p99_time - 0.5).abs() < 1e-9);
-    }
-}
-
 /// Engine trait - equivalent to Python BaseClient
 ///
 /// Each engine implementation provides:
@@ -285,5 +252,38 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
             "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer'.",
             other
         )),
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::compute_search_stats;
+
+    #[test]
+    fn empty_times_errors() {
+        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1).is_err());
+    }
+
+    #[test]
+    fn computes_means_rps_and_clamped_percentiles() {
+        let times = vec![0.1, 0.2, 0.3, 0.4];
+        let ones = vec![1.0, 1.0, 1.0, 1.0];
+        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4).unwrap();
+        assert_eq!(r.num_queries, 4);
+        assert!((r.rps - 2.0).abs() < 1e-9); // 4 / 2.0s
+        assert!((r.mean_recall - 1.0).abs() < 1e-9);
+        assert!((r.mean_time - 0.25).abs() < 1e-9);
+        assert!((r.min_time - 0.1).abs() < 1e-9 && (r.max_time - 0.4).abs() < 1e-9);
+        // percentile indices stay in-bounds (no panic, no 0.0 fallback)
+        assert!(r.p50_time > 0.0 && r.p95_time > 0.0 && r.p99_time > 0.0);
+        assert_eq!(r.parallel, 4);
+        assert_eq!(r.top, 10);
+        assert!(r.update_count.is_none());
+    }
+
+    #[test]
+    fn single_query_percentiles_dont_panic() {
+        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1).unwrap();
+        assert!((r.p99_time - 0.5).abs() < 1e-9);
     }
 }
