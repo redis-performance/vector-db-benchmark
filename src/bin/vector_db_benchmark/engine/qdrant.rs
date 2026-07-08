@@ -420,7 +420,7 @@ impl QdrantEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
+                    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                         Ok(rt) => rt,
                         Err(e) => {
                             *error.lock().unwrap() = Some(e.to_string());
@@ -912,12 +912,17 @@ impl Engine for QdrantEngine {
 
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
-        let client = Arc::clone(&self.client);
+        // Each worker builds its own client/connection (like ES/OpenSearch) rather
+        // than sharing one gRPC connection, which would serialize parallel queries.
+        let grpc_url = self.grpc_url.clone();
+        let api_key = self.api_key.clone();
+        let timeout = self.timeout;
         let collection_name = self.collection_name.clone();
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
-                let client = Arc::clone(&client);
+                let grpc_url = grpc_url.clone();
+                let api_key = api_key.clone();
                 let collection_name = collection_name.clone();
                 let queries = &queries;
                 let sparse_queries = &sparse_queries;
@@ -932,9 +937,28 @@ impl Engine for QdrantEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
                         Ok(rt) => rt,
                         Err(_) => return,
+                    };
+
+                    // Per-worker client so each thread has an independent connection.
+                    let client = match rt.block_on(async {
+                        let mut b = Qdrant::from_url(&grpc_url)
+                            .timeout(std::time::Duration::from_secs(timeout));
+                        if let Some(k) = &api_key {
+                            b = b.api_key(k.clone());
+                        }
+                        b.build()
+                    }) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Qdrant worker client build failed: {}", e);
+                            return;
+                        }
                     };
 
                     loop {
