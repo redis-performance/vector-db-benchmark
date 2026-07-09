@@ -461,6 +461,12 @@ impl Engine for PgVectorEngine {
                         &[],
                     );
 
+                    // Enable iterative index scans (pgvector >= 0.8) so that
+                    // non-sargable filters (e.g. array contains-any) keep pulling
+                    // from the HNSW index until LIMIT is satisfied in exact order,
+                    // instead of post-filtering a bounded candidate set.
+                    let _ = conn.execute("SET hnsw.iterative_scan = strict_order", &[]);
+
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::SeqCst);
                         if idx >= num_to_run {
