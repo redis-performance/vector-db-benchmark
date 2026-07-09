@@ -556,14 +556,13 @@ fn build_filter(
     match condition_type {
         "match" => {
             // match_any: field value in a list (keywords or integers). Emit a
-            // `terms` query, the exact/case-sensitive OR-of-values semantics
-            // that mirror qdrant's Condition::matches(field, Vec). An empty
-            // list is a no-op (drop the clause) rather than an always-false
-            // `terms: []`, matching the other engines.
+            // `terms` query — the exact/case-sensitive OR-of-values semantics of
+            // qdrant's Condition::matches(field, Vec). An empty IN-set matches
+            // NOTHING, so we emit `terms: []` (a valid match-nothing query)
+            // rather than dropping the clause: dropping the sole clause would
+            // leave `bool.must:[]`, which OpenSearch treats as match-ALL —
+            // silently returning unfiltered results, the inverse of the filter.
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
-                if any.is_empty() {
-                    return None;
-                }
                 return Some(serde_json::json!({"terms": {field_name: any}}));
             }
             let value = criteria.get("value")?;
@@ -1012,8 +1011,10 @@ mod tests {
     }
 
     #[test]
-    fn test_match_any_empty_list_is_noop() {
-        assert!(build_filter("color", "match", &json!({"any": []})).is_none());
+    fn test_match_any_empty_list_matches_nothing() {
+        // Empty IN-set must match NOTHING (never invert to match-all): `terms: []`.
+        let c = build_filter("color", "match", &json!({"any": []})).unwrap();
+        assert_eq!(c, json!({"terms": {"color": []}}));
     }
 
     #[test]
