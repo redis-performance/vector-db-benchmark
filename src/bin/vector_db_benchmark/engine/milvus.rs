@@ -628,8 +628,11 @@ fn build_milvus_filter(
             // the OR-of-values semantics that mirror qdrant's
             // Condition::matches(field, Vec). Strings are quoted/escaped,
             // numbers inlined; bool/null/nested items are skipped so an invalid
-            // expression is never produced. Empty (or all-skipped) list is a
-            // clean no-op.
+            // expression is never produced. An empty (or all-skipped) IN-set
+            // matches NOTHING: we still emit `field in []` (a valid
+            // match-nothing expression) rather than dropping the clause, since
+            // dropping the sole clause would leave no filter and silently
+            // return every row (the inverse of the filter).
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 let items: Vec<String> = any
                     .iter()
@@ -646,9 +649,6 @@ fn build_milvus_filter(
                         }
                     })
                     .collect();
-                if items.is_empty() {
-                    return None;
-                }
                 return Some(format!("{} in [{}]", field_name, items.join(", ")));
             }
             let value = criteria.get("value")?;
@@ -952,9 +952,12 @@ mod tests {
     }
 
     #[test]
-    fn match_any_empty_list_is_noop() {
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set must match NOTHING (never invert to returning all rows):
+        // `field in []`, not a dropped clause.
         let e = json!({"and": [{"color": {"match": {"any": []}}}]});
-        assert!(parse_milvus_conditions(&e).is_none());
+        let expr = parse_milvus_conditions(&e).unwrap();
+        assert!(expr.contains("color in []"), "expr={}", expr);
     }
 
     #[test]
