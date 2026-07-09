@@ -1447,6 +1447,7 @@ impl Engine for MongoDBEngine {
             update_p99_time: update_p99,
             update_latencies: Some(u_times.to_vec()),
             update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
+            ..Default::default()
         })
     }
 

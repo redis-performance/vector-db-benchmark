@@ -445,15 +445,32 @@ fn run_single_experiment(
                     );
                 }
 
+                // Sample client CPU around the search so we can flag runs where
+                // the benchmark client — not the database — was the bottleneck.
+                let cpu_before = crate::proc_cpu::sample();
                 let search_result = match phase {
                     Some(ratio) => {
                         engine.search_mixed(dataset, effective_params, args.queries, ratio)
                     }
                     None => engine.search(dataset, effective_params, args.queries),
                 };
+                let cpu_after = crate::proc_cpu::sample();
 
                 match search_result {
-                    Ok(results) => {
+                    Ok(mut results) => {
+                        // Attach CPU / oversubscription / saturation coverage.
+                        let sat = crate::proc_cpu::compute(
+                            cpu_before,
+                            cpu_after,
+                            results.parallel,
+                            crate::proc_cpu::available_cores(),
+                        );
+                        results.available_cores = sat.available_cores;
+                        results.oversubscribed = sat.oversubscribed;
+                        results.client_cpu_cores_used = sat.client_cpu_cores_used;
+                        results.system_cpu_pct = sat.system_cpu_pct;
+                        results.client_saturated = sat.client_saturated;
+                        results.saturation_reason = sat.saturation_reason;
                         if skip_vector_index {
                             println!("\t→ QPS: {:.1} (filter-only, no precision)", results.rps);
                         } else {
@@ -473,6 +490,20 @@ fn run_single_experiment(
                                 results.failed_queries,
                                 results.requested_queries,
                                 results.num_queries,
+                            );
+                        }
+                        // Flag client-side saturation: when the benchmark client is
+                        // the bottleneck the QPS/latency above are not clean
+                        // server-side measurements.
+                        if results.client_saturated {
+                            let cpu = results
+                                .client_cpu_cores_used
+                                .map(|c| format!("{:.1} cores", c))
+                                .unwrap_or_else(|| "cpu n/a".to_string());
+                            eprintln!(
+                                "\t⚠ WARNING: CLIENT LIKELY SATURATED ({}) — client used {}; \
+                                 QPS/latency may reflect the client, not the database",
+                                results.saturation_reason, cpu,
                             );
                         }
                         save_search_results(
@@ -639,6 +670,16 @@ fn save_search_results(
             "requested_queries": results.requested_queries,
             "succeeded_queries": results.num_queries,
             "failed_queries": results.failed_queries,
+            // Client CPU / concurrency-saturation coverage: client_saturated=true
+            // means the run was likely client-bound and the numbers below should
+            // not be read as clean server-side measurements.
+            "parallel": results.parallel,
+            "available_cores": results.available_cores,
+            "oversubscribed": results.oversubscribed,
+            "client_cpu_cores_used": results.client_cpu_cores_used,
+            "system_cpu_pct": results.system_cpu_pct,
+            "client_saturated": results.client_saturated,
+            "saturation_reason": results.saturation_reason,
             "mean_precisions": results.mean_precision,
             "mean_recall": results.mean_recall,
             "mean_mrr": results.mean_mrr,
