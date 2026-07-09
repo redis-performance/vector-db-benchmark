@@ -1707,7 +1707,9 @@ fn test_binary_redis_mixed_benchmark() {
         .query(&mut conn)
         .unwrap();
 
-    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles)
+    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles).
+    // --repetitions 1: this test asserts the exact per-run FT.SEARCH/HSET call
+    // counts, so it must measure a single pass (the default is 3 warm reps).
     let output = Command::new(&bin)
         .args([
             "--engines",
@@ -1718,6 +1720,8 @@ fn test_binary_redis_mixed_benchmark() {
             "localhost",
             "--update-search-ratio",
             "1:5",
+            "--repetitions",
+            "1",
         ])
         .env("REDIS_PORT", TEST_PORT.to_string())
         .current_dir(&project_root)
