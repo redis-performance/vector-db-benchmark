@@ -580,34 +580,41 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
         for (condition_type, criteria) in filter_obj {
             match condition_type.as_str() {
                 "match" => {
-                    // match_any: field value in a list -> SQL `IN (...)`, the
-                    // OR-of-values semantics that mirror qdrant's
-                    // Condition::matches(field, Vec). Strings are single-quote
-                    // escaped, numbers inlined verbatim; bool/null/nested items
-                    // are skipped so we never emit invalid SQL.
+                    // match_any: OR-of-values, mirroring qdrant's
+                    // Condition::matches(field, Vec).
                     if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
-                        let items: Vec<String> = any
-                            .iter()
-                            .filter_map(|v| {
-                                if let Some(s) = v.as_str() {
-                                    Some(format!("'{}'", s.replace('\'', "''")))
-                                } else if v.is_number() {
-                                    Some(v.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !items.is_empty() {
-                            parts.push(format!("\"{}\" IN ({})", field_name, items.join(", ")));
+                        if !any.is_empty() && any.iter().all(|v| v.is_number()) {
+                            // Numeric IN-set on a scalar numeric column.
+                            let nums: Vec<String> = any.iter().map(|v| v.to_string()).collect();
+                            parts.push(format!("\"{}\" IN ({})", field_name, nums.join(", ")));
                         } else {
-                            // Empty (or all-skipped) IN-set matches NOTHING. A
-                            // bare `false` preserves that in both AND (x AND
-                            // false) and OR (false OR x) contexts, instead of
-                            // dropping the clause — which, as the sole
-                            // condition, would leave no WHERE and silently
-                            // return every row (the inverse of the filter).
-                            parts.push("false".to_string());
+                            // Keyword contains-any. Multi-valued keyword payloads
+                            // are stored as a single ';'-joined TEXT scalar (see
+                            // copy_field), so a scalar `IN` can never match an
+                            // array-valued doc. Split the column on ';' and test
+                            // set intersection with the query values — correct for
+                            // both single-valued ('red' -> {red}) and multi-valued
+                            // ('red;green' -> {red,green}) keyword fields, mirroring
+                            // qdrant's array-contains-any semantics.
+                            let elems: Vec<String> = any
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .map(|s| format!("'{}'", s.replace('\'', "''")))
+                                .collect();
+                            if elems.is_empty() {
+                                // Empty (or no representable) IN-set matches
+                                // NOTHING; a bare `false` keeps that in both AND
+                                // and OR contexts instead of dropping the clause
+                                // (which as the sole condition would return every
+                                // row — the inverse of the filter).
+                                parts.push("false".to_string());
+                            } else {
+                                parts.push(format!(
+                                    "string_to_array(\"{}\", ';') && ARRAY[{}]::text[]",
+                                    field_name,
+                                    elems.join(", ")
+                                ));
+                            }
                         }
                     } else if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
@@ -706,10 +713,16 @@ mod tests {
     }
 
     #[test]
-    fn match_any_string_list_emits_in() {
+    fn match_any_string_list_emits_array_overlap() {
+        // Contains-any via set intersection, so it matches both single-valued
+        // and ';'-joined multi-valued keyword columns.
         let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
         let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(sql.contains("\"color\" IN ('red', 'blue')"), "sql={}", sql);
+        assert!(
+            sql.contains("string_to_array(\"color\", ';') && ARRAY['red', 'blue']::text[]"),
+            "sql={}",
+            sql
+        );
     }
 
     #[test]
