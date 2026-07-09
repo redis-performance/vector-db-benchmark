@@ -491,19 +491,31 @@ fn test_binary_weaviate_match_any() {
     );
 
     let port = std::env::var("WEAVIATE_HTTP_PORT").unwrap_or_else(|_| WEAVIATE_PORT.to_string());
-    assert!(
-        common::run_binary(
-            &proj.root,
+    // Run directly (not common::run_binary) so we always surface the engine's
+    // stdout/stderr — the filtered search's per-query errors print to stderr and
+    // would otherwise be hidden on a zero-exit run that produced no results.
+    let out = std::process::Command::new(common::binary_path())
+        .args([
+            "--engines",
             "weaviate-ma",
+            "--datasets",
             "match-any-test",
+            "--host",
             WEAVIATE_HOST,
-            &[
-                ("WEAVIATE_HTTP_PORT", port.as_str()),
-                ("WEAVIATE_CLASS_NAME", "BenchMatchany"),
-            ],
-        ),
-        "weaviate match_any run failed"
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("WEAVIATE_HTTP_PORT", &port)
+        .env("WEAVIATE_CLASS_NAME", "BenchMatchany")
+        .current_dir(&proj.root)
+        .output()
+        .expect("run vector-db-benchmark");
+    println!(
+        "weaviate stdout:\n{}\nweaviate stderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+    assert!(out.status.success(), "weaviate match_any run failed");
 
     let recall = common::read_recall(&proj.root, "weaviate-ma");
     println!("weaviate match_any recall={:.3}", recall);
