@@ -636,7 +636,7 @@ impl Engine for VectorSetsEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -911,6 +911,8 @@ impl Engine for VectorSetsEngine {
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
+            requested_queries: num_to_run,
+            failed_queries: num_to_run.saturating_sub(times.len()),
             parallel,
             update_count,
             update_rps,

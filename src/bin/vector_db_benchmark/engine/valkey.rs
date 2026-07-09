@@ -1343,11 +1343,18 @@ impl Engine for ValkeyEngine {
             vectors.len() as f64 / upload_time
         );
 
+        // Include the index-build wait in total_time for cross-engine
+        // comparability (mirrors mongodb; matches v0's post_upload() timing).
         let expected = vectors.len();
+        let index_start = Instant::now();
         self.wait_for_indexing(expected)?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
-        println!("Total time: {:.3}s", total_time);
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         // Verify no HSET failures occurred during upload
         let mut conn = self.get_connection()?;
@@ -1530,7 +1537,7 @@ impl Engine for ValkeyEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -1804,6 +1811,8 @@ impl Engine for ValkeyEngine {
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
+            requested_queries: num_to_run,
+            failed_queries: num_to_run.saturating_sub(times.len()),
             parallel,
             update_count,
             update_rps,

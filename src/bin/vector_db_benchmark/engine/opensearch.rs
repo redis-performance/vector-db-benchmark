@@ -837,11 +837,19 @@ impl Engine for OpenSearchEngine {
         );
 
         // Explicit refresh (refresh_interval is disabled during upload) so the
-        // documents are searchable, then merge segments.
+        // documents are searchable, then merge segments. Include this
+        // refresh+merge time in total_time for cross-engine comparability
+        // (mirrors mongodb; matches v0's post_upload() timing).
+        let index_start = Instant::now();
         self.refresh()?;
         self.force_merge()?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         Ok(UploadStats {
             upload_time,
@@ -984,7 +992,7 @@ impl Engine for OpenSearchEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 

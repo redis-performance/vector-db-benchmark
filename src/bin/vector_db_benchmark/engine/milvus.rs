@@ -729,18 +729,27 @@ impl Engine for MilvusEngine {
             vectors.len() as f64 / upload_time
         );
 
-        // Create index after upload
+        // Create index after upload, then load the collection into memory. Both
+        // are part of the ingest cost and are included in total_time for
+        // cross-engine comparability (mirrors mongodb; matches v0's post_upload()
+        // timing).
         let client = self.create_client()?;
         println!(
             "Creating {} index (M={}, efConstruction={}, metric={})...",
             self.index_type, self.index_m, self.index_ef_construction, self.metric_type
         );
+        let index_start = Instant::now();
         self.create_index(&client)?;
 
         // Load collection into memory
         self.load_collection(&client)?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         Ok(UploadStats {
             upload_time,
@@ -891,7 +900,7 @@ impl Engine for MilvusEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 

@@ -378,11 +378,14 @@ impl QdrantEngine {
         }
         pb.finish_with_message("Upload complete");
         let upload_time = upload_start.elapsed().as_secs_f64();
+        // Include the index-build wait in total_time (see upload()).
+        let index_start = Instant::now();
         self.wait_collection_green()?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
         Ok(UploadStats {
             upload_time,
-            total_time: read_time + upload_time,
+            total_time: read_time + upload_time + index_time,
             upload_count: vectors.len(),
             parallel: 1,
             batch_size: self.batch_size,
@@ -797,10 +800,18 @@ impl Engine for QdrantEngine {
             vectors.len() as f64 / upload_time
         );
 
-        // Wait for indexing to complete
+        // Wait for indexing to complete. Include this wait in total_time for
+        // cross-engine comparability (mirrors mongodb; matches v0's post_upload()
+        // timing) — the HNSW build is the dominant part of Qdrant ingest cost.
+        let index_start = Instant::now();
         self.wait_collection_green()?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         Ok(UploadStats {
             upload_time,
@@ -1075,7 +1086,7 @@ impl Engine for QdrantEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
