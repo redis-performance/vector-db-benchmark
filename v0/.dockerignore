@@ -1,0 +1,122 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Poetry
+poetry.lock.bak
+
+# Test and coverage files
+.coverage
+.pytest_cache/
+.tox/
+.nox/
+htmlcov/
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Results and data
+results/
+# Include datasets.json and random-100 dataset for basic functionality
+datasets/*
+!datasets/datasets.json
+!datasets/random-100/
+*.h5
+*.hdf5
+*.json.gz
+*.csv
+*.parquet
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+.project
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Git files
+.git/
+.gitignore
+
+# CI/CD files
+.github/
+
+# Documentation
+# README.md and LICENSE are needed for Poetry package metadata
+*.md
+!README.md
+!LICENSE
+docs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Log files
+*.log
+logs/
+
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+*.bz2
+
+# Database files
+*.sql
+*.sqlite
+*.db
+
+# Docker files themselves
+Dockerfile*
+.dockerignore
+docker-*.sh

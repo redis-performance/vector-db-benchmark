@@ -1,0 +1,39 @@
+name: Validate Datasets
+
+on:
+  push:
+    paths:
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/validate-datasets.yml'
+  pull_request:
+    paths:
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/validate-datasets.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - name: Cache Rust toolchain and dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Validate datasets
+      run: cargo run --release --bin vector-db-benchmark -- --describe datasets
+
+    - name: Validate engine configurations
+      run: cargo run --release --bin vector-db-benchmark -- --describe engines

@@ -1,0 +1,251 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'tests/**'
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  check:
+    name: Check (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Check formatting
+      run: cargo fmt --check
+
+    - name: Run clippy
+      run: cargo clippy --all-targets -- -D warnings
+
+    - name: Security audit (advisories)
+      # Non-blocking: reports known-vulnerable/unmaintained crates without
+      # failing CI on advisories in transitive deps we can't immediately fix.
+      continue-on-error: true
+      run: |
+        cargo install cargo-audit --locked || true
+        cargo audit
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Run unit tests
+      run: cargo test --lib --release
+
+  integration-redis:
+    name: Integration tests (Redis)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Redis
+      run: docker compose -f tests/docker-compose.test.yml up -d redis --wait
+
+    - name: Run Redis integration tests
+      run: cargo test --test integration_redis --release -- --test-threads=1
+
+    - name: Stop Redis
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-pgvector:
+    name: Integration tests (PgVector)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start PgVector
+      run: docker compose -f tests/docker-compose.test.yml up -d pgvector --wait
+
+    - name: Run PgVector integration tests
+      run: PGVECTOR_PORT=5433 cargo test --test integration_pgvector --release -- --test-threads=1
+
+    - name: Stop PgVector
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-qdrant:
+    name: Integration tests (Qdrant)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Qdrant
+      run: docker compose -f tests/docker-compose.test.yml up -d qdrant --wait
+
+    - name: Run Qdrant integration tests
+      run: QDRANT_GRPC_PORT=6335 cargo test --test integration_qdrant --release -- --test-threads=1
+
+    - name: Stop Qdrant
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-elasticsearch:
+    name: Integration tests (Elasticsearch)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Elasticsearch
+      run: docker compose -f tests/docker-compose.test.yml up -d elasticsearch --wait
+
+    - name: Run Elasticsearch integration tests
+      run: ELASTIC_PORT=9201 cargo test --test integration_elasticsearch --release -- --test-threads=1
+
+    - name: Stop Elasticsearch
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-milvus:
+    name: Integration tests (Milvus)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Milvus
+      run: docker compose -f tests/docker-compose.test.yml up -d milvus --wait
+
+    - name: Run Milvus integration tests
+      run: MILVUS_PORT=19531 cargo test --test integration_milvus --release -- --test-threads=1
+
+    - name: Stop Milvus
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-weaviate:
+    name: Integration tests (Weaviate)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Weaviate
+      run: docker compose -f tests/docker-compose.test.yml up -d weaviate --wait
+
+    - name: Run Weaviate integration tests
+      run: WEAVIATE_HTTP_PORT=8081 cargo test --test integration_weaviate --release -- --test-threads=1
+
+    - name: Stop Weaviate
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-opensearch:
+    name: Integration tests (OpenSearch)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start OpenSearch
+      run: docker compose -f tests/docker-compose.test.yml up -d opensearch --wait
+
+    - name: Run OpenSearch integration tests
+      run: OPENSEARCH_PORT=9202 cargo test --test integration_opensearch --release -- --test-threads=1
+
+    - name: Stop OpenSearch
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-mongodb:
+    name: Integration tests (MongoDB)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start MongoDB
+      run: docker compose -f tests/docker-compose.test.yml up -d mongodb-search --wait
+
+    - name: Run MongoDB integration tests
+      run: MONGODB_PORT=27018 cargo test --test integration_mongodb --release -- --test-threads=1
+
+    - name: Stop MongoDB
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-valkey:
+    name: Integration tests (Valkey)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Valkey
+      run: docker compose -f tests/docker-compose.test.yml up -d valkey --wait
+
+    - name: Run Valkey integration tests
+      run: VALKEY_PORT=6380 cargo test --test integration_valkey --release -- --test-threads=1
+
+    - name: Stop Valkey
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down

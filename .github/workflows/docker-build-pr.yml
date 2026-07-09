@@ -1,0 +1,111 @@
+name: Docker Build - PR Validation
+
+on:
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'datasets/datasets.json'
+      - 'experiments/configurations/**'
+      - '.github/workflows/docker-build-pr.yml'
+
+env:
+  IMAGE_NAME: vector-db-benchmark-pr
+
+jobs:
+  docker-build-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (amd64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test --help
+        run: |
+          echo "Testing --help command..."
+          docker run --rm ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} --help
+
+      - name: Test --describe datasets
+        run: |
+          echo "Testing --describe datasets..."
+          docker run --rm ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} --describe datasets
+
+      - name: Run integration test (random-100 + Redis)
+        run: |
+          export IMAGE_NAME=${{ env.IMAGE_NAME }}
+          export IMAGE_TAG=pr-${{ github.event.number }}
+
+          echo "Starting Redis..."
+          docker compose -f tests/docker-compose.ci-test.yml up -d redis --wait
+
+          echo "Configuring Redis search-workers..."
+          docker compose -f tests/docker-compose.ci-test.yml exec redis redis-cli CONFIG SET search-workers 8
+
+          echo "Running benchmark..."
+          docker compose -f tests/docker-compose.ci-test.yml run --rm benchmark
+
+          echo "Stopping services..."
+          docker compose -f tests/docker-compose.ci-test.yml down
+
+      - name: Validate multi-platform build (amd64 + arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }}-multiplatform
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `## Docker Build Validation
+
+            **Platforms tested:**
+            - linux/amd64 (built and tested)
+            - linux/arm64 (build validated)
+
+            **Tests performed:**
+            - \`--help\` command
+            - \`--describe datasets\` command
+            - Integration test (random-100 dataset + Redis)
+            - Multi-platform build validation (amd64 + arm64)`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rmi ${{ env.IMAGE_NAME }}:pr-${{ github.event.number }} || true

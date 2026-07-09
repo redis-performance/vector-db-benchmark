@@ -6,3 +6,19 @@ NOTES.md
 
 results/*
 tools/custom/data.json
+
+*.png
+venv/
+rust/target/
+
+dist/
+
+.claude/
+
+
+#memory-bank/*
+#.specsmd/
+target/
+
+
+v0/results/
