@@ -557,14 +557,15 @@ fn test_binary_pgvector_match_any_multivalue_and_numeric() {
     wait_for_postgres();
 
     let dim = 8usize;
-    let n = 200usize;
+    let n = 400usize;
     let top = 10usize;
+    let n_q = 10usize; // queries per condition; averaging smooths HNSW recall variance
     let mut rng = StdRng::seed_from_u64(0xBEEF);
     let gen =
         |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
     let vectors: Vec<Vec<f32>> = (0..n).map(|_| gen(&mut rng)).collect();
-    let q_color = gen(&mut rng);
-    let q_size = gen(&mut rng);
+    let q_colors: Vec<Vec<f32>> = (0..n_q).map(|_| gen(&mut rng)).collect();
+    let q_sizes: Vec<Vec<f32>> = (0..n_q).map(|_| gen(&mut rng)).collect();
 
     // Per-doc payloads: id%4==0 is MULTI-valued ["red","green"] (stored
     // "red;green"); others are single-valued. size = id%3.
@@ -611,18 +612,21 @@ fn test_binary_pgvector_match_any_multivalue_and_numeric() {
         .join("\n");
     fs::write(ds.join("payloads.jsonl"), payloads).unwrap();
 
-    let tests = [
-        serde_json::json!({
-            "query": q_color.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+    let mut tests: Vec<serde_json::Value> = Vec::new();
+    for q in &q_colors {
+        tests.push(serde_json::json!({
+            "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
             "conditions": {"and": [{"color": {"match": {"any": ["red", "yellow"]}}}]},
-            "closest_ids": gt(&q_color, &color_matches),
-        }),
-        serde_json::json!({
-            "query": q_size.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+            "closest_ids": gt(q, &color_matches),
+        }));
+    }
+    for q in &q_sizes {
+        tests.push(serde_json::json!({
+            "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
             "conditions": {"and": [{"size": {"match": {"any": [0, 2]}}}]},
-            "closest_ids": gt(&q_size, &size_matches),
-        }),
-    ];
+            "closest_ids": gt(q, &size_matches),
+        }));
+    }
     fs::write(
         ds.join("tests.jsonl"),
         tests
