@@ -785,11 +785,90 @@ fn build_filter(
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
     match condition_type {
-        "match" => build_exact_match_filter(field_name, criteria, counter),
+        "match" => {
+            // match_any (IN-list) takes precedence over exact {value}.
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                Some(build_match_any_filter(field_name, any, counter))
+            } else {
+                build_exact_match_filter(field_name, criteria, counter)
+            }
+        }
         "range" => build_range_filter(field_name, criteria, counter),
         "geo" => build_geo_filter(field_name, criteria, counter),
         _ => None,
     }
+}
+
+/// Build a `match_any` (IN-list) filter, the OR-of-values semantics that mirror
+/// qdrant's `Condition::matches(field, Vec)`.
+///
+/// - All-integer list -> NUMERIC OR of single-value ranges
+///   `(@f:[$a $a] | @f:[$b $b])` (field indexed NUMERIC).
+/// - Otherwise -> TAG OR `@f:{$a | $b}` over the (non-empty) string values
+///   (field indexed TAG). Empty-string tokens are dropped (they are invalid
+///   TAG syntax and can never match an exact keyword).
+/// - Empty / no representable values -> a never-match `(@f:{$s} -@f:{$s})`
+///   (a tag AND not-that-tag contradiction) so an empty IN-set matches NOTHING
+///   rather than being dropped — dropping the sole clause would leave no
+///   prefilter and run kNN over ALL docs (the inverse of the filter). This
+///   assumes a TAG field, the realistic case for a keyword IN-list.
+///
+/// NOTE: RediSearch TAG matching is case-INSENSITIVE, whereas qdrant keyword
+/// match is case-sensitive; for mixed-case data the two engines can select
+/// different documents. All shipped keyword datasets use consistent casing.
+fn build_match_any_filter(
+    field_name: &str,
+    any: &[serde_json::Value],
+    counter: &mut usize,
+) -> ParsedFilter {
+    let mut params = HashMap::new();
+
+    // All-integer list -> NUMERIC OR.
+    if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
+        let clauses: Vec<String> = any
+            .iter()
+            .filter_map(|v| v.as_i64())
+            .map(|i| {
+                let p = format!("{}_{}", field_name, counter);
+                *counter += 1;
+                params.insert(p.clone(), FilterParamValue::Int(i));
+                format!("@{}:[${} ${}]", field_name, p, p)
+            })
+            .collect();
+        return (format!("({})", clauses.join(" | ")), params);
+    }
+
+    // Otherwise TAG OR over the non-empty string values.
+    let tokens: Vec<String> = any
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let p = format!("{}_{}", field_name, counter);
+            *counter += 1;
+            params.insert(p.clone(), FilterParamValue::Str(s.to_string()));
+            format!("${}", p)
+        })
+        .collect();
+
+    if tokens.is_empty() {
+        // Never-match: `@f:{$s} -@f:{$s}` is an unsatisfiable contradiction.
+        let p = format!("{}_{}", field_name, counter);
+        *counter += 1;
+        params.insert(
+            p.clone(),
+            FilterParamValue::Str("__match_any_never_match__".to_string()),
+        );
+        return (
+            format!("(@{0}:{{${1}}} -@{0}:{{${1}}})", field_name, p),
+            params,
+        );
+    }
+
+    (
+        format!("@{}:{{{}}}", field_name, tokens.join(" | ")),
+        params,
+    )
 }
 
 /// Build exact match filter: string → @field:{$param}, numeric → @field:[$param $param]
@@ -1766,7 +1845,59 @@ impl Engine for RedisEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_vector;
+    use super::{encode_vector, parse_conditions, FilterParamValue};
+
+    #[test]
+    fn match_any_string_list_emits_tag_or() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":["red","blue"]}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{$color_0 | $color_1}"), "q={}", q);
+        assert!(matches!(params.get("color_0"), Some(FilterParamValue::Str(s)) if s == "red"));
+        assert!(matches!(params.get("color_1"), Some(FilterParamValue::Str(s)) if s == "blue"));
+    }
+
+    #[test]
+    fn match_any_int_list_emits_numeric_or() {
+        let cond = serde_json::json!({"and":[{"size":{"match":{"any":[1,2]}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@size:[$size_0 $size_0]"), "q={}", q);
+        assert!(q.contains("@size:[$size_1 $size_1]"), "q={}", q);
+        assert!(q.contains(" | "), "q={}", q);
+        assert!(matches!(
+            params.get("size_0"),
+            Some(FilterParamValue::Int(1))
+        ));
+        assert!(matches!(
+            params.get("size_1"),
+            Some(FilterParamValue::Int(2))
+        ));
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set -> never-match contradiction, not a dropped clause.
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":[]}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("-@color:{"), "expected never-match, q={}", q);
+    }
+
+    #[test]
+    fn match_any_drops_empty_string_tokens() {
+        // Empty-string tokens are invalid TAG syntax; with only such tokens the
+        // clause degrades to the never-match rather than emitting `@f:{}`.
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":[""]}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(!q.contains("{$color_0 }") && !q.contains("{}"), "q={}", q);
+        assert!(q.contains("-@color:{"), "q={}", q);
+    }
+
+    #[test]
+    fn match_exact_value_still_emits_tag() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"value":"red"}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{$color_0}"), "q={}", q);
+        assert!(matches!(params.get("color_0"), Some(FilterParamValue::Str(s)) if s == "red"));
+    }
 
     #[test]
     fn encodes_float32_by_default() {
