@@ -584,8 +584,7 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                     // OR-of-values semantics that mirror qdrant's
                     // Condition::matches(field, Vec). Strings are single-quote
                     // escaped, numbers inlined verbatim; bool/null/nested items
-                    // are skipped so we never emit invalid SQL. Empty (or
-                    // all-skipped) list is a clean no-op.
+                    // are skipped so we never emit invalid SQL.
                     if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                         let items: Vec<String> = any
                             .iter()
@@ -601,6 +600,14 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                             .collect();
                         if !items.is_empty() {
                             parts.push(format!("\"{}\" IN ({})", field_name, items.join(", ")));
+                        } else {
+                            // Empty (or all-skipped) IN-set matches NOTHING. A
+                            // bare `false` preserves that in both AND (x AND
+                            // false) and OR (false OR x) contexts, instead of
+                            // dropping the clause — which, as the sole
+                            // condition, would leave no WHERE and silently
+                            // return every row (the inverse of the filter).
+                            parts.push("false".to_string());
                         }
                     } else if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
@@ -720,9 +727,11 @@ mod tests {
     }
 
     #[test]
-    fn match_any_empty_list_is_noop() {
-        // An empty any-list produces no clause; with nothing else, no WHERE.
+    fn match_any_empty_list_matches_nothing() {
+        // An empty IN-set must match NOTHING (never invert to returning all
+        // rows), so the clause is a bare `false` rather than being dropped.
         let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
-        assert!(parse_pg_conditions(&cond).is_none());
+        let sql = parse_pg_conditions(&cond).unwrap();
+        assert!(sql.contains("false"), "sql={}", sql);
     }
 }
