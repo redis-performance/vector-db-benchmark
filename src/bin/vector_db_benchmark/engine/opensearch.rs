@@ -555,6 +555,16 @@ fn build_filter(
 ) -> Option<serde_json::Value> {
     match condition_type {
         "match" => {
+            // match_any: field value in a list (keywords or integers). Emit a
+            // `terms` query — the exact/case-sensitive OR-of-values semantics of
+            // qdrant's Condition::matches(field, Vec). An empty IN-set matches
+            // NOTHING, so we emit `terms: []` (a valid match-nothing query)
+            // rather than dropping the clause: dropping the sole clause would
+            // leave `bool.must:[]`, which OpenSearch treats as match-ALL —
+            // silently returning unfiltered results, the inverse of the filter.
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                return Some(serde_json::json!({"terms": {field_name: any}}));
+            }
             let value = criteria.get("value")?;
             Some(serde_json::json!({"match": {field_name: value}}))
         }
@@ -987,6 +997,31 @@ impl Engine for OpenSearchEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_match_any_string_list_emits_terms() {
+        let c = build_filter("color", "match", &json!({"any": ["red", "blue"]})).unwrap();
+        assert_eq!(c, json!({"terms": {"color": ["red", "blue"]}}));
+    }
+
+    #[test]
+    fn test_match_any_int_list_emits_terms() {
+        let c = build_filter("size", "match", &json!({"any": [1, 2, 3]})).unwrap();
+        assert_eq!(c, json!({"terms": {"size": [1, 2, 3]}}));
+    }
+
+    #[test]
+    fn test_match_any_empty_list_matches_nothing() {
+        // Empty IN-set must match NOTHING (never invert to match-all): `terms: []`.
+        let c = build_filter("color", "match", &json!({"any": []})).unwrap();
+        assert_eq!(c, json!({"terms": {"color": []}}));
+    }
+
+    #[test]
+    fn test_match_exact_value_still_works() {
+        let c = build_filter("color", "match", &json!({"value": "red"})).unwrap();
+        assert_eq!(c, json!({"match": {"color": "red"}}));
+    }
 
     // Regression for qdrant/vector-db-benchmark#167: the filter must land inside
     // the kNN clause (efficient filtering), not in an outer bool wrapper
