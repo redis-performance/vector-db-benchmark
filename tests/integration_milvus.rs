@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -407,4 +409,47 @@ fn test_milvus_full_cycle() {
             .and_then(|h| h.as_bool()),
         Some(false)
     );
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `in [...]` expr arm.
+#[test]
+fn test_binary_milvus_match_any() {
+    wait_for_milvus();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-ma", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_matchany"),
+            ],
+        ),
+        "milvus match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "milvus-ma");
+    println!("milvus match_any recall={:.3}", recall);
+    assert!(recall >= 0.9, "milvus match_any recall {:.3} < 0.9", recall);
 }

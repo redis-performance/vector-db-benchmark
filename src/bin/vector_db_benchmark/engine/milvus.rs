@@ -624,6 +624,33 @@ fn build_milvus_filter(
 ) -> Option<String> {
     match condition_type {
         "match" => {
+            // match_any: field value in a list -> Milvus `in [...]` expression,
+            // the OR-of-values semantics that mirror qdrant's
+            // Condition::matches(field, Vec). Strings are quoted/escaped,
+            // numbers inlined; bool/null/nested items are skipped so an invalid
+            // expression is never produced. Empty (or all-skipped) list is a
+            // clean no-op.
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                let items: Vec<String> = any
+                    .iter()
+                    .filter_map(|v| {
+                        if let Some(s) = v.as_str() {
+                            Some(format!(
+                                "\"{}\"",
+                                s.replace('\\', "\\\\").replace('"', "\\\"")
+                            ))
+                        } else if v.is_number() {
+                            Some(v.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if items.is_empty() {
+                    return None;
+                }
+                return Some(format!("{} in [{}]", field_name, items.join(", ")));
+            }
             let value = criteria.get("value")?;
             if value.is_string() {
                 Some(format!("{} == \"{}\"", field_name, value.as_str().unwrap()))
@@ -898,5 +925,43 @@ impl Engine for MilvusEngine {
     fn delete(&mut self) -> Result<(), String> {
         let client = self.create_client()?;
         self.drop_collection(&client)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn match_any_string_list_emits_in() {
+        let e = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        let expr = parse_milvus_conditions(&e).unwrap();
+        assert!(
+            expr.contains(r#"color in ["red", "blue"]"#),
+            "expr={}",
+            expr
+        );
+    }
+
+    #[test]
+    fn match_any_int_list_emits_in() {
+        let e = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
+        let expr = parse_milvus_conditions(&e).unwrap();
+        assert!(expr.contains("size in [1, 2, 3]"), "expr={}", expr);
+    }
+
+    #[test]
+    fn match_any_empty_list_is_noop() {
+        let e = json!({"and": [{"color": {"match": {"any": []}}}]});
+        assert!(parse_milvus_conditions(&e).is_none());
+    }
+
+    #[test]
+    fn match_exact_value_still_works() {
+        assert_eq!(
+            build_milvus_filter("color", "match", &json!({"value": "red"})).unwrap(),
+            r#"color == "red""#
+        );
     }
 }
