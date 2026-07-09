@@ -1039,7 +1039,7 @@ fn ft_search_knn(
     conn: &mut Connection,
     query_vector: &[f32],
     top: usize,
-    _ef: i64,
+    ef: i64,
     _algorithm: &str,
     _hybrid_policy: &str,
     query_timeout: i64,
@@ -1047,14 +1047,19 @@ fn ft_search_knn(
 ) -> Result<Vec<(i64, f64)>, String> {
     let vec_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-    // Valkey Search KNN query syntax (no EF_RUNTIME, no HYBRID_POLICY):
-    // "*=>[KNN $K @vector $vec_param AS vector_score]"
+    // Valkey Search KNN query syntax. EF_RUNTIME is a supported per-query HNSW
+    // attribute (validated by valkey-search ft_search_parser.cc) — without it,
+    // every ef in the search sweep runs at the index default, collapsing the
+    // precision/recall curve to a single point. Passed as a $EF param below.
     let prefilter = filter
         .as_ref()
         .map(|(expr, _)| expr.as_str())
         .unwrap_or("*");
 
-    let query_str = format!("{}=>[KNN $K @vector $vec_param AS vector_score]", prefilter);
+    let query_str = format!(
+        "{}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]",
+        prefilter
+    );
 
     // Valkey Search: DIALECT 2 only, no SORTBY on computed fields
     let mut cmd = redis::cmd("FT.SEARCH");
@@ -1071,13 +1076,14 @@ fn ft_search_knn(
         .arg("TIMEOUT")
         .arg(query_timeout);
 
-    // Params: vec_param + K + filter params
+    // Params: vec_param + K + EF + filter params
     let filter_param_count = filter.as_ref().map(|(_, p)| p.len() * 2).unwrap_or(0);
-    let total_param_count = 4 + filter_param_count; // vec_param(2) + K(2) + filter params
+    let total_param_count = 6 + filter_param_count; // vec_param(2) + K(2) + EF(2) + filter params
 
     cmd.arg("PARAMS").arg(total_param_count);
     cmd.arg("vec_param").arg(&vec_bytes[..]);
     cmd.arg("K").arg(top.to_string());
+    cmd.arg("EF").arg(ef.to_string());
 
     if let Some((_, params)) = filter {
         for (name, value) in params {
