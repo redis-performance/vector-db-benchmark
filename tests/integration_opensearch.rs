@@ -711,7 +711,10 @@ fn test_binary_opensearch_match_any() {
             &proj.root,
             "os-ma",
             "match-any-test",
-            "127.0.0.1",
+            // Explicit http:// scheme: the OpenSearch engine defaults to https
+            // for a bare host, but the CI container runs plaintext http (security
+            // plugin disabled).
+            "http://127.0.0.1",
             &[
                 ("OPENSEARCH_PORT", "9202"),
                 ("OPENSEARCH_INDEX", "bench_matchany"),
