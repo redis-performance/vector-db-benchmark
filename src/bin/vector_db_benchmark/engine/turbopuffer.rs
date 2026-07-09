@@ -622,7 +622,8 @@ impl Engine for TurbopufferEngine {
         let mut sorted_latencies = latencies.clone();
         sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let pct = |q: f64| sorted_latencies[((succeeded as f64 * q) as usize).min(succeeded - 1)];
+        // numpy-linear percentiles, consistent with compute_search_stats / v0.
+        let pct = |q: f64| crate::engine::percentile_linear(&sorted_latencies, q);
         let p50_time = pct(0.50);
         let p95_time = pct(0.95);
         let p99_time = pct(0.99);
