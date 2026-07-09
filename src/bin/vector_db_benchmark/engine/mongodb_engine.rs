@@ -853,7 +853,16 @@ fn build_mongo_filter_entry(entry: &serde_json::Value) -> Option<Document> {
         for (condition_type, criteria) in filter_obj {
             match condition_type.as_str() {
                 "match" => {
-                    if let Some(value) = criteria.get("value") {
+                    // match_any: field value in a list -> Mongo `$in`, the
+                    // OR-of-values semantics that mirror qdrant's
+                    // Condition::matches(field, Vec). An empty IN-set matches
+                    // NOTHING: `{$in: []}` is a valid never-match, so we never
+                    // drop the clause (which, as the sole condition, would leave
+                    // no filter and return every doc — the inverse of intent).
+                    if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                        let arr: Vec<mongodb::bson::Bson> = any.iter().map(json_to_bson).collect();
+                        clauses.insert(field_name.clone(), doc! { "$in": arr });
+                    } else if let Some(value) = criteria.get("value") {
                         clauses.insert(field_name.clone(), json_to_bson(value));
                     }
                 }
@@ -1450,5 +1459,56 @@ impl Engine for MongoDBEngine {
 
     fn delete(&mut self) -> Result<(), String> {
         self.drop_collection()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // A single AND clause is returned unwrapped: {"color": {"$in": [...]}}.
+    #[test]
+    fn match_any_string_list_emits_in() {
+        let e = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        let vals = doc.get_document("color").unwrap().get_array("$in").unwrap();
+        assert_eq!(vals.len(), 2);
+        assert_eq!(vals[0].as_str(), Some("red"));
+        assert_eq!(vals[1].as_str(), Some("blue"));
+    }
+
+    #[test]
+    fn match_any_int_list_emits_in() {
+        let e = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        assert_eq!(
+            doc.get_document("size")
+                .unwrap()
+                .get_array("$in")
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set -> {$in: []} (matches nothing), clause not dropped.
+        let e = json!({"and": [{"color": {"match": {"any": []}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        assert!(doc
+            .get_document("color")
+            .unwrap()
+            .get_array("$in")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn match_exact_value_still_works() {
+        let e = json!({"and": [{"color": {"match": {"value": "red"}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        assert_eq!(doc.get_str("color").unwrap(), "red");
     }
 }
