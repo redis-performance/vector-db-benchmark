@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -461,4 +463,53 @@ fn test_weaviate_full_cycle() {
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `ContainsAny` arm.
+#[test]
+fn test_binary_weaviate_match_any() {
+    wait_for_weaviate();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "weaviate-ma", "engine": "weaviate",
+        "connection_params": {},
+        "search_params": [{"parallel": 1, "vectorIndexConfig": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = std::env::var("WEAVIATE_HTTP_PORT").unwrap_or_else(|_| WEAVIATE_PORT.to_string());
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "weaviate-ma",
+            "match-any-test",
+            WEAVIATE_HOST,
+            &[
+                ("WEAVIATE_HTTP_PORT", port.as_str()),
+                ("WEAVIATE_CLASS_NAME", "BenchMatchany"),
+            ],
+        ),
+        "weaviate match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "weaviate-ma");
+    println!("weaviate match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate match_any recall {:.3} < 0.9",
+        recall
+    );
 }

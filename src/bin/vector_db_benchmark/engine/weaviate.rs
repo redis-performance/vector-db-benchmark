@@ -615,6 +615,32 @@ fn build_weaviate_filter(
 ) -> Option<serde_json::Value> {
     match condition_type {
         "match" => {
+            // match_any: field value in a list -> Weaviate `ContainsAny`, the
+            // OR-of-values semantics that mirror qdrant's
+            // Condition::matches(field, Vec). An all-integer list uses
+            // valueIntArray; otherwise the string elements go in valueTextArray.
+            // An empty (or no-representable-items) set is a `ContainsAny` of
+            // nothing, which matches NOTHING — so the clause is never dropped
+            // (dropping the sole clause would return every object).
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
+                    let vals: Vec<i64> = any.iter().filter_map(|v| v.as_i64()).collect();
+                    return Some(serde_json::json!({
+                        "path": [field_name],
+                        "operator": "ContainsAny",
+                        "valueIntArray": vals,
+                    }));
+                }
+                let vals: Vec<String> = any
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                return Some(serde_json::json!({
+                    "path": [field_name],
+                    "operator": "ContainsAny",
+                    "valueTextArray": vals,
+                }));
+            }
             let value = criteria.get("value")?;
             let value_key = if value.is_string() {
                 "valueString"
@@ -918,5 +944,41 @@ impl Engine for WeaviateEngine {
     fn delete(&mut self) -> Result<(), String> {
         let client = self.create_client()?;
         self.delete_class(&client)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn match_any_string_list_emits_contains_any() {
+        let c = build_weaviate_filter("color", "match", &json!({"any": ["red", "blue"]})).unwrap();
+        assert_eq!(c["operator"], "ContainsAny");
+        assert_eq!(c["path"], json!(["color"]));
+        assert_eq!(c["valueTextArray"], json!(["red", "blue"]));
+    }
+
+    #[test]
+    fn match_any_int_list_emits_contains_any() {
+        let c = build_weaviate_filter("size", "match", &json!({"any": [1, 2, 3]})).unwrap();
+        assert_eq!(c["operator"], "ContainsAny");
+        assert_eq!(c["valueIntArray"], json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set -> ContainsAny of []: matches nothing (clause not dropped).
+        let c = build_weaviate_filter("color", "match", &json!({"any": []})).unwrap();
+        assert_eq!(c["operator"], "ContainsAny");
+        assert_eq!(c["valueTextArray"], json!([]));
+    }
+
+    #[test]
+    fn match_exact_value_still_works() {
+        let c = build_weaviate_filter("color", "match", &json!({"value": "red"})).unwrap();
+        assert_eq!(c["operator"], "Equal");
+        assert_eq!(c["valueString"], "red");
     }
 }
