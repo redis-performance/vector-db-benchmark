@@ -18,6 +18,7 @@ mod turbopuffer;
 mod valkey;
 mod vectorsets;
 mod weaviate;
+mod weaviate_grpc;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;

@@ -1,8 +1,11 @@
 //! Weaviate engine implementation.
 //!
-//! Uses Weaviate's REST API (v1) via reqwest::blocking.
-//! Supports HNSW vector index with configurable efConstruction/maxConnections,
-//! schema-based properties, and near_vector search.
+//! Schema/upload/ef-tuning use Weaviate's REST API (v1) via reqwest::blocking.
+//! Vector search uses Weaviate's **gRPC** API (port 50051) by default — the
+//! high-throughput query path used by the official clients — falling back to
+//! GraphQL over HTTP when a metadata filter is present or WEAVIATE_USE_GRAPHQL
+//! is set. (GraphQL with a stringified query vector is markedly slower and caps
+//! throughput, which is why gRPC is the default for the benchmark.)
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +14,9 @@ use std::time::Instant;
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use uuid::Uuid;
 
+use super::weaviate_grpc::weaviate_v1::{
+    weaviate_client::WeaviateClient, MetadataRequest, NearVector, SearchRequest,
+};
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
@@ -25,6 +31,8 @@ pub struct WeaviateEngine {
     batch_size: usize,
     parallel: usize,
     base_url: String,
+    /// gRPC endpoint (http://host:50051) for the search RPC.
+    grpc_endpoint: String,
     api_key: Option<String>,
     search_params: Vec<SearchParams>,
     /// vectorIndexConfig from collection_params
@@ -70,6 +78,20 @@ impl WeaviateEngine {
             format!("http://{}:{}", host, port)
         };
 
+        // gRPC endpoint: same host, port 50051 (override via WEAVIATE_GRPC_PORT),
+        // always plaintext h2c (self-hosted). Strip any scheme/port from `host`.
+        let grpc_port: u16 = std::env::var("WEAVIATE_GRPC_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50051);
+        let host_only = host
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap_or(host);
+        let grpc_endpoint = format!("http://{}:{}", host_only, grpc_port);
+
         // Extract vectorIndexConfig from collection_params.extra
         let vector_index_config = engine_config
             .collection_params
@@ -86,6 +108,7 @@ impl WeaviateEngine {
             batch_size,
             parallel,
             base_url,
+            grpc_endpoint,
             api_key,
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             vector_index_config,
@@ -568,6 +591,59 @@ fn near_vector_search(
     Ok(hits)
 }
 
+/// Search Weaviate over gRPC (near_vector). Sends the query vector as packed
+/// little-endian f32 bytes (`vector_bytes`) and requests uuid + distance metadata.
+/// This is the high-throughput query path; the class-level `ef` set via the REST
+/// schema update still governs recall. Returns (int-id, distance) pairs, mapping
+/// the object UUID back through `uuid_to_int` (inverse of the upload id_to_uuid).
+fn near_vector_search_grpc(
+    handle: &tokio::runtime::Handle,
+    client: &mut WeaviateClient<tonic::transport::Channel>,
+    class_name: &str,
+    api_key: Option<&str>,
+    query_vector: &[f32],
+    top: usize,
+) -> Result<Vec<(i64, f64)>, String> {
+    let vector_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+    let search = SearchRequest {
+        collection: class_name.to_string(),
+        limit: top as u32,
+        near_vector: Some(NearVector {
+            vector_bytes,
+            ..Default::default()
+        }),
+        metadata: Some(MetadataRequest {
+            uuid: true,
+            distance: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let mut request = tonic::Request::new(search);
+    if let Some(key) = api_key {
+        let val = format!("Bearer {}", key)
+            .parse()
+            .map_err(|e| format!("bad api key header: {}", e))?;
+        request.metadata_mut().insert("authorization", val);
+    }
+
+    let reply = handle
+        .block_on(client.search(request))
+        .map_err(|e| format!("gRPC search failed: {}", e))?
+        .into_inner();
+
+    let mut hits = Vec::with_capacity(reply.results.len());
+    for r in reply.results {
+        if let Some(m) = r.metadata {
+            let id = uuid_to_int(&m.id)?;
+            hits.push((id, m.distance as f64));
+        }
+    }
+    Ok(hits)
+}
+
 /// Parse conditions into Weaviate where filter format.
 fn parse_weaviate_conditions(conditions: &serde_json::Value) -> Option<serde_json::Value> {
     let obj = conditions.as_object()?;
@@ -862,6 +938,35 @@ impl Engine for WeaviateEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
+
+        // gRPC search setup (default). One shared multi-thread tokio runtime drives
+        // the async RPCs; each worker thread gets its own lazily-connected channel
+        // and calls block_on via the shared handle. Disable with WEAVIATE_USE_GRAPHQL.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {}", e))?;
+        let handle = rt.handle().clone();
+        let grpc_ep: Option<tonic::transport::Endpoint> = if std::env::var("WEAVIATE_USE_GRAPHQL")
+            .is_ok()
+        {
+            None
+        } else {
+            match tonic::transport::Endpoint::from_shared(self.grpc_endpoint.clone()) {
+                Ok(ep) => Some(
+                    ep.timeout(std::time::Duration::from_secs(self.timeout))
+                        .connect_timeout(std::time::Duration::from_secs(30)),
+                ),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: invalid gRPC endpoint {} ({}); falling back to GraphQL",
+                        self.grpc_endpoint, e
+                    );
+                    None
+                }
+            }
+        };
+
         let start_time = Instant::now();
 
         std::thread::scope(|s| {
@@ -870,6 +975,8 @@ impl Engine for WeaviateEngine {
                 let class_name = self.class_name.clone();
                 let api_key = self.api_key.clone();
                 let timeout = self.timeout;
+                let handle = handle.clone();
+                let grpc_ep = grpc_ep.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
@@ -890,6 +997,15 @@ impl Engine for WeaviateEngine {
                         Err(_) => return,
                     };
 
+                    // Enter the runtime context for this thread so the lazily
+                    // connected channel (and its background hyper tasks/timers)
+                    // have a reactor. Guard lives for the whole worker closure.
+                    let _rt_guard = handle.enter();
+                    // Per-thread gRPC client (own channel; multiplexes over one
+                    // connection). None => GraphQL path (filters / opt-out).
+                    let mut grpc_client =
+                        grpc_ep.as_ref().map(|ep| WeaviateClient::new(ep.connect_lazy()));
+
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::SeqCst);
                         if idx >= num_to_run {
@@ -906,15 +1022,27 @@ impl Engine for WeaviateEngine {
                         });
 
                         let query_start = Instant::now();
-                        let results = near_vector_search(
-                            &client,
-                            &base_url,
-                            &class_name,
-                            api_key.as_deref(),
-                            &queries[idx],
-                            top,
-                            parsed_filters[idx].as_ref(),
-                        );
+                        // gRPC for plain kNN; GraphQL when a filter is present
+                        // (gRPC filter translation not implemented) or gRPC disabled.
+                        let results = match (grpc_client.as_mut(), parsed_filters[idx].as_ref()) {
+                            (Some(gc), None) => near_vector_search_grpc(
+                                &handle,
+                                gc,
+                                &class_name,
+                                api_key.as_deref(),
+                                &queries[idx],
+                                top,
+                            ),
+                            _ => near_vector_search(
+                                &client,
+                                &base_url,
+                                &class_name,
+                                api_key.as_deref(),
+                                &queries[idx],
+                                top,
+                                parsed_filters[idx].as_ref(),
+                            ),
+                        };
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         match results {
