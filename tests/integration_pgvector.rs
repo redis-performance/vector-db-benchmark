@@ -684,6 +684,36 @@ fn test_binary_pgvector_match_any_multivalue_and_numeric() {
         "pgvector match_any recall — multi-value keyword={:.3}, numeric={:.3}",
         kw_recall, num_recall
     );
+
+    // DIAGNOSTIC: inspect what the last run actually stored + what the overlap
+    // filter matches, to distinguish a storage/filter bug from HNSW recall.
+    {
+        let mut conn = connect();
+        for id in [0i64, 1, 3, 4, 8] {
+            let c: Option<String> = conn
+                .query_opt("SELECT color FROM items WHERE id = $1", &[&id])
+                .unwrap()
+                .and_then(|row| row.get(0));
+            eprintln!("DIAG id={} (id%4={}) color={:?}", id, id % 4, c);
+        }
+        let overlap_cnt: i64 = conn
+            .query_one(
+                "SELECT count(*) FROM items WHERE string_to_array(color, ';') && ARRAY['red','yellow']::text[]",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        let multi_cnt: i64 = conn
+            .query_one("SELECT count(*) FROM items WHERE color LIKE '%;%'", &[])
+            .unwrap()
+            .get(0);
+        let expected = (0..n).filter(|id| color_matches(*id)).count();
+        eprintln!(
+            "DIAG overlap-filter matches {} rows (expected ~{}); multi-valued rows={}",
+            overlap_cnt, expected, multi_cnt
+        );
+    }
+
     assert!(
         kw_recall >= 0.9,
         "multi-value keyword overlap recall {:.3} < 0.9",
