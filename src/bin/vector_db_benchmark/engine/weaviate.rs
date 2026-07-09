@@ -4,6 +4,7 @@
 //! Supports HNSW vector index with configurable efConstruction/maxConnections,
 //! schema-based properties, and near_vector search.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -164,34 +165,9 @@ impl WeaviateEngine {
             if let Some(schema_obj) = schema.as_object() {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
-                    let wv_type = match ft {
-                        "int" => "int",
-                        "keyword" => "text",
-                        "text" => "text",
-                        "float" => "number",
-                        "geo" => "geoCoordinates",
-                        _ => continue,
-                    };
-                    let mut prop = serde_json::json!({
-                        "name": field_name,
-                        "dataType": [wv_type],
-                        "indexInverted": true,
-                    });
-                    // Keyword fields must match on the WHOLE value (exact
-                    // keyword equality, like qdrant). Weaviate's default `word`
-                    // tokenization turns `Equal` into token-containment, so
-                    // `Equal "Blue"` would also match "Dark Blue". Force `field`
-                    // tokenization for keyword; keep `word` for full-text.
-                    if let Some(tok) = match ft {
-                        "keyword" => Some("field"),
-                        "text" => Some("word"),
-                        _ => None,
-                    } {
-                        prop.as_object_mut()
-                            .unwrap()
-                            .insert("tokenization".to_string(), serde_json::json!(tok));
+                    if let Some(prop) = weaviate_property(field_name, ft) {
+                        properties.push(prop);
                     }
-                    properties.push(prop);
                 }
             }
         }
@@ -241,6 +217,7 @@ impl WeaviateEngine {
         ids: &[i64],
         vectors: &[Vec<f32>],
         metadata: &[Option<MetadataItem>],
+        schema_types: &HashMap<String, String>,
     ) -> Result<(), String> {
         let pb = self.create_progress_bar(ids.len());
         let batches: Vec<(usize, usize)> = (0..ids.len())
@@ -261,6 +238,7 @@ impl WeaviateEngine {
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
+                let schema_types = schema_types.clone();
                 let pb = &pb;
 
                 s.spawn(move || {
@@ -293,6 +271,7 @@ impl WeaviateEngine {
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
                             &metadata[batch_start..batch_end],
+                            &schema_types,
                         ) {
                             *error.lock().unwrap() = Some(e);
                             break;
@@ -353,6 +332,79 @@ impl WeaviateEngine {
     }
 }
 
+/// Build a Weaviate schema property from a dataset schema `field_type`.
+///
+/// Returns `None` for unsupported field types (skipped). Filtering requires an
+/// inverted index: modern Weaviate (>= 1.19, incl. 1.38) replaced the
+/// deprecated `indexInverted` flag with `indexFilterable` (roaring-bitmap
+/// filter index) and `indexSearchable` (BM25). `Equal` filters read the
+/// FILTERABLE index, so it must be enabled explicitly. `indexSearchable` is
+/// only valid on text-backed properties, so it is set only for those.
+fn weaviate_property(field_name: &str, field_type: &str) -> Option<serde_json::Value> {
+    let wv_type = match field_type {
+        "int" => "int",
+        "keyword" | "text" => "text",
+        "float" => "number",
+        "geo" => "geoCoordinates",
+        _ => return None,
+    };
+    let mut prop = serde_json::json!({
+        "name": field_name,
+        "dataType": [wv_type],
+        "indexFilterable": true,
+    });
+    let obj = prop.as_object_mut().unwrap();
+    // Keyword fields must match on the WHOLE value (exact keyword equality,
+    // like qdrant). Weaviate's default `word` tokenization turns `Equal` into
+    // token-containment, so `Equal "Blue"` would also match "Dark Blue". Force
+    // `field` tokenization for keyword; keep `word` for full-text. Tokenization
+    // and `indexSearchable` apply only to text-backed properties.
+    if let Some(tok) = match field_type {
+        "keyword" => Some("field"),
+        "text" => Some("word"),
+        _ => None,
+    } {
+        obj.insert("tokenization".to_string(), serde_json::json!(tok));
+        obj.insert("indexSearchable".to_string(), serde_json::json!(true));
+    }
+    Some(prop)
+}
+
+/// Convert a dataset metadata value into a JSON value typed for Weaviate's
+/// strict schema. Numbers arrive from the reader as strings (see
+/// `parse_metadata_from_json`); Weaviate rejects a whole object if e.g. an
+/// `int` property receives a string, so numeric fields must be coerced back to
+/// JSON numbers using the dataset `schema_type`. Non-numeric fields pass
+/// through unchanged.
+fn coerce_metadata_value(
+    schema_type: Option<&str>,
+    value: &vector_db_benchmark::readers::metadata::MetadataValue,
+) -> serde_json::Value {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+    match value {
+        MetadataValue::String(s) => match schema_type {
+            Some("int") => s
+                .parse::<i64>()
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+            Some("float") => s
+                .parse::<f64>()
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+            _ => serde_json::Value::String(s.clone()),
+        },
+        MetadataValue::Labels(labels) => serde_json::Value::Array(
+            labels
+                .iter()
+                .map(|l| serde_json::Value::String(l.clone()))
+                .collect(),
+        ),
+        MetadataValue::Geo { lon, lat } => {
+            serde_json::json!({"latitude": lat, "longitude": lon})
+        }
+    }
+}
+
 /// Convert integer ID to UUID (matches Python uuid.UUID(int=id))
 fn id_to_uuid(id: i64) -> String {
     Uuid::from_u128(id as u128).to_string()
@@ -366,6 +418,7 @@ fn uuid_to_int(uuid_str: &str) -> Result<i64, String> {
 }
 
 /// Upload a batch of objects via Weaviate's batch API.
+#[allow(clippy::too_many_arguments)]
 fn upload_batch_objects(
     client: &reqwest::blocking::Client,
     base_url: &str,
@@ -374,9 +427,8 @@ fn upload_batch_objects(
     ids: &[i64],
     vectors: &[Vec<f32>],
     metadata: &[Option<MetadataItem>],
+    schema_types: &HashMap<String, String>,
 ) -> Result<(), String> {
-    use vector_db_benchmark::readers::metadata::MetadataValue;
-
     let mut objects = Vec::with_capacity(ids.len());
     for i in 0..ids.len() {
         let uuid = id_to_uuid(ids[i]);
@@ -384,18 +436,7 @@ fn upload_batch_objects(
         let mut properties = serde_json::Map::new();
         if let Some(meta) = &metadata[i] {
             for (k, v) in &meta.fields {
-                let val = match v {
-                    MetadataValue::String(s) => serde_json::Value::String(s.clone()),
-                    MetadataValue::Labels(labels) => serde_json::Value::Array(
-                        labels
-                            .iter()
-                            .map(|l| serde_json::Value::String(l.clone()))
-                            .collect(),
-                    ),
-                    MetadataValue::Geo { lon, lat } => {
-                        serde_json::json!({"latitude": lat, "longitude": lon})
-                    }
-                };
+                let val = coerce_metadata_value(schema_types.get(k).map(|s| s.as_str()), v);
                 properties.insert(k.clone(), val);
             }
         }
@@ -426,12 +467,38 @@ fn upload_batch_objects(
         .send()
         .map_err(|e| format!("Batch upload failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Batch upload error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Batch upload error: {} {}", status, text));
+    }
+
+    // The batch API returns HTTP 200 even when individual objects fail schema
+    // validation (e.g. a value whose type does not match the property). Those
+    // objects are silently NOT stored, which would leave the collection empty
+    // and make every filtered search return zero hits. Inspect each object's
+    // per-item `result.status` and surface the first failure.
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(arr) = parsed.as_array() {
+            for obj in arr {
+                let status = obj
+                    .get("result")
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str());
+                if let Some(st) = status {
+                    if st != "SUCCESS" {
+                        let msg = obj
+                            .pointer("/result/errors/error/0/message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown error");
+                        return Err(format!(
+                            "Batch object import failed (status {}): {}",
+                            st, msg
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -850,8 +917,22 @@ impl Engine for WeaviateEngine {
             "Starting upload with {} threads, batch size {}...",
             self.parallel, self.batch_size
         );
+        // Map field name -> dataset schema type so uploads can coerce values
+        // to the types Weaviate's strict schema expects (e.g. int, not string).
+        let schema_types: HashMap<String, String> = dataset
+            .config
+            .schema
+            .as_ref()
+            .and_then(|s| s.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let upload_start = Instant::now();
-        self.upload_parallel(&ids, &vectors, &metadata)?;
+        self.upload_parallel(&ids, &vectors, &metadata, &schema_types)?;
         let upload_time = upload_start.elapsed().as_secs_f64();
 
         println!(
@@ -1081,5 +1162,54 @@ mod tests {
         let c = build_weaviate_filter("color", "match", &json!({"value": "red"})).unwrap();
         assert_eq!(c["operator"], "Equal");
         assert_eq!(c["valueText"], "red");
+    }
+
+    #[test]
+    fn keyword_property_is_filterable_with_field_tokenization() {
+        // Modern Weaviate needs `indexFilterable` (not the deprecated
+        // `indexInverted`) for `Equal` filters to match; keyword uses `field`
+        // tokenization so `Equal "red"` matches the whole value exactly.
+        let p = weaviate_property("color", "keyword").unwrap();
+        assert_eq!(p["dataType"], json!(["text"]));
+        assert_eq!(p["indexFilterable"], true);
+        assert_eq!(p["tokenization"], "field");
+        assert_eq!(p["indexSearchable"], true);
+        assert!(p.get("indexInverted").is_none(), "p={}", p);
+    }
+
+    #[test]
+    fn int_property_is_filterable_without_searchable() {
+        // `indexSearchable` is invalid on non-text properties and would make
+        // Weaviate reject the whole schema; it must be omitted for int.
+        let p = weaviate_property("size", "int").unwrap();
+        assert_eq!(p["dataType"], json!(["int"]));
+        assert_eq!(p["indexFilterable"], true);
+        assert!(p.get("indexSearchable").is_none(), "p={}", p);
+        assert!(p.get("tokenization").is_none(), "p={}", p);
+    }
+
+    #[test]
+    fn unsupported_property_type_is_skipped() {
+        assert!(weaviate_property("x", "bogus").is_none());
+    }
+
+    #[test]
+    fn coerce_int_string_to_json_number() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        // The reader hands numbers over as strings; an `int` schema field must
+        // become a JSON number or Weaviate rejects the whole object.
+        let v = MetadataValue::String("1".to_string());
+        assert_eq!(coerce_metadata_value(Some("int"), &v), json!(1));
+        let f = MetadataValue::String("1.5".to_string());
+        assert_eq!(coerce_metadata_value(Some("float"), &f), json!(1.5));
+    }
+
+    #[test]
+    fn coerce_keyword_stays_string() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let v = MetadataValue::String("red".to_string());
+        assert_eq!(coerce_metadata_value(Some("keyword"), &v), json!("red"));
+        // Unknown/unmapped fields pass through unchanged.
+        assert_eq!(coerce_metadata_value(None, &v), json!("red"));
     }
 }
