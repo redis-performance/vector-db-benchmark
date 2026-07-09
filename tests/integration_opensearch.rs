@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -678,4 +680,51 @@ fn test_opensearch_full_cycle() {
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `terms` filter arm.
+#[test]
+fn test_binary_opensearch_match_any() {
+    wait_for_opensearch();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-ma", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_matchany"),
+            ],
+        ),
+        "opensearch match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "os-ma");
+    println!("opensearch match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "opensearch match_any recall {:.3} < 0.9",
+        recall
+    );
 }
