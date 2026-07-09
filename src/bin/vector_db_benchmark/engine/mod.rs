@@ -104,6 +104,31 @@ pub struct SearchResults {
     pub update_search_ratio: Option<String>,
 }
 
+/// `numpy.percentile` with linear interpolation — the method v0 uses
+/// (`np.percentile(..., 50/95/99)` defaults to linear). `sorted` must be
+/// ascending and `q` a fraction in `[0, 1]`. The percentile position is
+/// `q * (N - 1)`, interpolating between the two neighbouring samples.
+///
+/// This replaces nearest-rank indexing (`sorted[floor(N*q)]`), which biased
+/// every percentile upward and made `p99 == max` for any `N <= 100` (e.g. with
+/// N=100, `floor(0.99*100)=99` always selected the single largest sample).
+pub fn percentile_linear(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let rank = q * (sorted.len() - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        return sorted[lo];
+    }
+    let frac = rank - lo as f64;
+    sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+}
+
 /// Build `SearchResults` for a search-only run from the per-query samples
 /// collected by an engine's parallel harness. Centralizes rps/means/std/
 /// percentile computation so every engine reports metrics identically.
@@ -146,8 +171,7 @@ pub fn compute_search_stats(
 
     let mut sorted = times.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    // Nearest-rank percentile, clamped to a valid index.
-    let pct = |q: f64| sorted[((sorted.len() as f64 * q) as usize).min(sorted.len() - 1)];
+    let pct = |q: f64| percentile_linear(&sorted, q);
 
     Ok(SearchResults {
         total_time,
@@ -309,5 +333,32 @@ mod stats_tests {
     fn single_query_percentiles_dont_panic() {
         let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1, 1).unwrap();
         assert!((r.p99_time - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percentile_linear_matches_numpy() {
+        use super::percentile_linear;
+        // np.percentile([1..=4], [50,95,99]) with linear interpolation:
+        // position = q*(N-1) = q*3.
+        let v = [1.0, 2.0, 3.0, 4.0];
+        assert!((percentile_linear(&v, 0.50) - 2.5).abs() < 1e-9); // 1.5 -> 2.5
+        assert!((percentile_linear(&v, 0.95) - 3.85).abs() < 1e-9); // 2.85 -> 3.85
+        assert!((percentile_linear(&v, 0.99) - 3.97).abs() < 1e-9); // 2.97 -> 3.97
+                                                                    // Degenerate cases.
+        assert_eq!(percentile_linear(&[], 0.5), 0.0);
+        assert_eq!(percentile_linear(&[7.0], 0.99), 7.0);
+    }
+
+    #[test]
+    fn p99_is_not_max_for_n100() {
+        use super::percentile_linear;
+        // The nearest-rank pathology: with N=100, floor(0.99*100)=99 always
+        // returned the single max. Linear gives position 0.99*99=98.01, i.e.
+        // just above sorted[98], strictly below the max at sorted[99].
+        let sorted: Vec<f64> = (1..=100).map(|i| i as f64).collect();
+        let p99 = percentile_linear(&sorted, 0.99);
+        assert!(p99 < 100.0, "p99={} should be below max", p99);
+        assert!(p99 > 99.0, "p99={} should be above sorted[98]", p99);
+        assert!((p99 - 99.01).abs() < 1e-9, "p99={}", p99);
     }
 }
