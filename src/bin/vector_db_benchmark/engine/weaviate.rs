@@ -166,8 +166,8 @@ impl WeaviateEngine {
                     let ft = field_type.as_str().unwrap_or("");
                     let wv_type = match ft {
                         "int" => "int",
-                        "keyword" => "string",
-                        "text" => "string",
+                        "keyword" => "text",
+                        "text" => "text",
                         "float" => "number",
                         "geo" => "geoCoordinates",
                         _ => continue,
@@ -670,7 +670,7 @@ fn build_weaviate_filter(
             // Value typing shared by exact match and match_any.
             let value_key = |v: &serde_json::Value| -> &'static str {
                 if v.is_string() {
-                    "valueString"
+                    "valueText"
                 } else if v.is_i64() {
                     "valueInt"
                 } else if v.is_number() {
@@ -678,7 +678,7 @@ fn build_weaviate_filter(
                 } else if v.is_boolean() {
                     "valueBoolean"
                 } else {
-                    "valueString"
+                    "valueText"
                 }
             };
 
@@ -706,8 +706,8 @@ fn build_weaviate_filter(
                         serde_json::json!({
                             "operator": "And",
                             "operands": [
-                                {"path": [field_name], "operator": "Equal", "valueString": NEVER},
-                                {"path": [field_name], "operator": "NotEqual", "valueString": NEVER},
+                                {"path": [field_name], "operator": "Equal", "valueText": NEVER},
+                                {"path": [field_name], "operator": "NotEqual", "valueText": NEVER},
                             ]
                         })
                     }
@@ -1022,7 +1022,7 @@ mod tests {
         assert!(g.contains("operator: Or"), "g={}", g);
         assert!(g.contains("operator: Equal"), "g={}", g);
         assert!(g.contains("path: [\"color\"]"), "g={}", g);
-        assert!(g.contains("valueString: \"red\""), "g={}", g);
+        assert!(g.contains("valueText: \"red\""), "g={}", g);
         assert!(!g.contains("\"operator\""), "g={}", g);
         assert!(!g.contains("\"path\""), "g={}", g);
     }
@@ -1043,8 +1043,8 @@ mod tests {
         assert_eq!(ops.len(), 2);
         assert_eq!(ops[0]["operator"], "Equal");
         assert_eq!(ops[0]["path"], json!(["color"]));
-        assert_eq!(ops[0]["valueString"], "red");
-        assert_eq!(ops[1]["valueString"], "blue");
+        assert_eq!(ops[0]["valueText"], "red");
+        assert_eq!(ops[1]["valueText"], "blue");
     }
 
     #[test]
@@ -1061,7 +1061,7 @@ mod tests {
     fn match_any_single_element_is_bare_equal() {
         let c = build_weaviate_filter("color", "match", &json!({"any": ["red"]})).unwrap();
         assert_eq!(c["operator"], "Equal");
-        assert_eq!(c["valueString"], "red");
+        assert_eq!(c["valueText"], "red");
     }
 
     #[test]
@@ -1073,13 +1073,13 @@ mod tests {
         let ops = c["operands"].as_array().unwrap();
         assert_eq!(ops[0]["operator"], "Equal");
         assert_eq!(ops[1]["operator"], "NotEqual");
-        assert_eq!(ops[0]["valueString"], ops[1]["valueString"]);
+        assert_eq!(ops[0]["valueText"], ops[1]["valueText"]);
     }
 
     #[test]
     fn match_exact_value_still_works() {
         let c = build_weaviate_filter("color", "match", &json!({"value": "red"})).unwrap();
         assert_eq!(c["operator"], "Equal");
-        assert_eq!(c["valueString"], "red");
+        assert_eq!(c["valueText"], "red");
     }
 }
