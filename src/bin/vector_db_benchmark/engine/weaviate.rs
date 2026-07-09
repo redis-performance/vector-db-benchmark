@@ -440,7 +440,7 @@ fn near_vector_search(
         .join(", ");
 
     let where_clause = if let Some(f) = filter {
-        format!(", where: {}", serde_json::to_string(f).unwrap_or_default())
+        format!(", where: {}", json_to_graphql_literal(f))
     } else {
         String::new()
     };
@@ -605,6 +605,43 @@ fn build_weaviate_entry_filter(entry: &serde_json::Value) -> Option<serde_json::
             "operator": "And",
             "operands": filters,
         }))
+    }
+}
+
+/// Serialize a where-filter `Value` as a **GraphQL object literal** (not JSON).
+///
+/// Weaviate's GraphQL `where` argument requires object keys as bare names and
+/// the `operator` value as an unquoted enum (`operator: Equal`), whereas
+/// `serde_json::to_string` emits quoted keys/values (`"operator":"Equal"`),
+/// which the GraphQL parser rejects with a syntax error. Object keys are
+/// emitted unquoted, the `operator` field's value is emitted as an unquoted
+/// enum, and every other scalar keeps normal JSON quoting/formatting.
+fn json_to_graphql_literal(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Object(map) => {
+            let fields: Vec<String> = map
+                .iter()
+                .map(|(k, val)| {
+                    if k == "operator" {
+                        // GraphQL enum value: unquoted.
+                        format!("{}: {}", k, val.as_str().unwrap_or_default())
+                    } else {
+                        format!("{}: {}", k, json_to_graphql_literal(val))
+                    }
+                })
+                .collect();
+            format!("{{{}}}", fields.join(", "))
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_graphql_literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::String(s) => {
+            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
     }
 }
 
@@ -962,6 +999,26 @@ impl Engine for WeaviateEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn graphql_literal_uses_bare_keys_and_enum_operator() {
+        let f = build_weaviate_filter("color", "match", &json!({"any": ["red", "blue"]})).unwrap();
+        let g = json_to_graphql_literal(&f);
+        assert!(g.contains("operator: Or"), "g={}", g);
+        assert!(g.contains("operator: Equal"), "g={}", g);
+        assert!(g.contains("path: [\"color\"]"), "g={}", g);
+        assert!(g.contains("valueString: \"red\""), "g={}", g);
+        assert!(!g.contains("\"operator\""), "g={}", g);
+        assert!(!g.contains("\"path\""), "g={}", g);
+    }
+
+    #[test]
+    fn graphql_literal_numbers_unquoted() {
+        let f = json!({"path": ["size"], "operator": "Equal", "valueInt": 3});
+        let g = json_to_graphql_literal(&f);
+        assert!(g.contains("valueInt: 3"), "g={}", g);
+        assert!(!g.contains("\"valueInt\""), "g={}", g);
+    }
 
     #[test]
     fn match_any_string_list_emits_or_of_equal() {
