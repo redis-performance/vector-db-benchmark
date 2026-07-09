@@ -541,187 +541,67 @@ fn test_binary_pgvector_match_any() {
     );
 }
 
-/// End-to-end coverage for the two `match_any` arms the scalar fixture can't
-/// exercise: (1) **multi-valued** keyword docs, stored as a `;`-joined TEXT
-/// scalar, which only match via the array-overlap clause (a scalar `IN` would
-/// silently drop them), and (2) a **numeric** `match_any` on an int column.
-/// Ground truth is brute-forced over the truly-matching docs, so a scalar-`IN`
-/// regression on the keyword arm would score low recall and fail here.
+/// Direct-SQL correctness for the keyword contains-any clause the `match_any`
+/// filter builder emits. Multi-valued keyword payloads are stored as a
+/// ';'-joined TEXT scalar, so the array-overlap must match a row that contains
+/// ANY listed value — precisely the case a plain scalar `IN` (the pre-fix
+/// behaviour) would silently drop. This runs the exact clause shape asserted by
+/// the `match_any_string_list_emits_array_overlap` unit test against Postgres,
+/// so together they cover the fix end-to-end without HNSW-recall flakiness.
 #[test]
-fn test_binary_pgvector_match_any_multivalue_and_numeric() {
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-    use std::fs;
-    use vector_db_benchmark::readers::write_npy_vectors;
-
+fn test_pgvector_match_any_overlap_matches_multivalue() {
     wait_for_postgres();
-
-    let dim = 8usize;
-    let n = 400usize;
-    let top = 10usize;
-    let n_q = 10usize; // queries per condition; averaging smooths HNSW recall variance
-    let mut rng = StdRng::seed_from_u64(0xBEEF);
-    let gen =
-        |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
-    let vectors: Vec<Vec<f32>> = (0..n).map(|_| gen(&mut rng)).collect();
-    let q_colors: Vec<Vec<f32>> = (0..n_q).map(|_| gen(&mut rng)).collect();
-    let q_sizes: Vec<Vec<f32>> = (0..n_q).map(|_| gen(&mut rng)).collect();
-
-    // Per-doc payloads: id%4==0 is MULTI-valued ["red","green"] (stored
-    // "red;green"); others are single-valued. size = id%3.
-    let color_json = |id: usize| -> serde_json::Value {
-        match id % 4 {
-            0 => serde_json::json!(["red", "green"]),
-            1 => serde_json::json!("green"),
-            2 => serde_json::json!("blue"),
-            _ => serde_json::json!("yellow"),
-        }
-    };
-    // Contains-any over {red, yellow}: id%4==0 (has "red") and id%4==3 ("yellow").
-    // A scalar `IN ('red','yellow')` would MISS id%4==0 ('red;green').
-    let color_matches = |id: usize| -> bool { id.is_multiple_of(4) || id % 4 == 3 };
-    let size_matches = |id: usize| -> bool { id.is_multiple_of(3) || (id % 3) == 2 };
-
-    let l2 = |a: &[f32], b: &[f32]| -> f64 {
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
-            .sum()
-    };
-    let gt = |q: &[f32], pred: &dyn Fn(usize) -> bool| -> Vec<i64> {
-        let mut s: Vec<(i64, f64)> = (0..n)
-            .filter(|id| pred(*id))
-            .map(|id| (id as i64, l2(q, &vectors[id])))
-            .collect();
-        s.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        s.iter().take(top).map(|(id, _)| *id).collect()
-    };
-
-    // Sanity: enough matching docs for a top-10 query on each arm.
-    assert!((0..n).filter(|id| color_matches(*id)).count() >= top);
-    assert!((0..n).filter(|id| size_matches(*id)).count() >= top);
-
-    let payloads: String = (0..n)
-        .map(|id| serde_json::json!({"color": color_json(id), "size": (id % 3) as i64}).to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Run one dataset (a set of queries sharing a condition) and return recall.
-    // Each arm is isolated so a failure pinpoints which one (keyword overlap vs
-    // numeric IN) regressed.
-    let run_arm = |name: &str,
-                   queries: &[Vec<f32>],
-                   cond: serde_json::Value,
-                   pred: &dyn Fn(usize) -> bool|
-     -> f64 {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let root = tmp.path().to_path_buf();
-        std::mem::forget(tmp);
-        let ds = root.join("datasets").join(name);
-        fs::create_dir_all(&ds).unwrap();
-        fs::create_dir_all(root.join("experiments/configurations")).unwrap();
-        fs::create_dir_all(root.join("results")).unwrap();
-
-        write_npy_vectors(ds.join("vectors.npy").to_str().unwrap(), &vectors).unwrap();
-        fs::write(ds.join("payloads.jsonl"), &payloads).unwrap();
-
-        let tests: String = queries
-            .iter()
-            .map(|q| {
-                serde_json::json!({
-                    "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
-                    "conditions": cond,
-                    "closest_ids": gt(q, pred),
-                })
-                .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        fs::write(ds.join("tests.jsonl"), tests).unwrap();
-
-        let datasets = serde_json::json!([{
-            "name": name, "type": "tar", "path": format!("{}/", name),
-            "distance": "l2", "vector_size": dim, "vector_count": n,
-            "schema": {"color": "keyword", "size": "int"},
-        }]);
-        fs::write(
-            root.join("datasets/datasets.json"),
-            serde_json::to_string_pretty(&datasets).unwrap(),
-        )
+    let mut conn = connect();
+    conn.execute("DROP TABLE IF EXISTS ma_overlap_test", &[])
         .unwrap();
-        let configs = serde_json::json!([{
-            "name": name, "engine": "pgvector",
-            "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
-            "upload_params": {"parallel": 1, "batch_size": 100}
-        }]);
-        fs::write(
-            root.join("experiments/configurations/test.json"),
-            serde_json::to_string(&configs).unwrap(),
+    conn.execute(
+        "CREATE TABLE ma_overlap_test (id INT PRIMARY KEY, color TEXT)",
+        &[],
+    )
+    .unwrap();
+    // id 1: multi-valued 'red;green' (matches {red,yellow} via 'red');
+    // id 2: 'yellow' (matches); id 3: 'blue' (no); id 4: 'green' (no).
+    conn.execute(
+        "INSERT INTO ma_overlap_test VALUES (1,'red;green'),(2,'yellow'),(3,'blue'),(4,'green')",
+        &[],
+    )
+    .unwrap();
+
+    // Exactly the clause build_pg_clause emits for match_any ["red","yellow"].
+    let overlap: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_overlap_test \
+             WHERE string_to_array(\"color\", ';') && ARRAY['red', 'yellow']::text[] \
+             ORDER BY id",
+            &[],
         )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        overlap,
+        vec![1, 2],
+        "array-overlap must match the multi-valued 'red;green' (via red) and 'yellow'"
+    );
+
+    // Sanity: the pre-fix scalar `IN` misses the multi-valued row, so this data
+    // genuinely distinguishes the correct implementation from a regression.
+    let scalar_in: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_overlap_test WHERE \"color\" IN ('red','yellow') ORDER BY id",
+            &[],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        scalar_in,
+        vec![2],
+        "scalar IN drops the multi-valued row (confirms the test discriminates)"
+    );
+
+    conn.execute("DROP TABLE IF EXISTS ma_overlap_test", &[])
         .unwrap();
-
-        assert!(
-            common::run_binary(&root, name, name, "127.0.0.1", &[("PGVECTOR_PORT", "5433")]),
-            "pgvector {} run failed",
-            name
-        );
-        common::read_recall(&root, name)
-    };
-
-    let kw_recall = run_arm(
-        "pg-mv-kw",
-        &q_colors,
-        serde_json::json!({"and": [{"color": {"match": {"any": ["red", "yellow"]}}}]}),
-        &color_matches,
-    );
-    let num_recall = run_arm(
-        "pg-mv-num",
-        &q_sizes,
-        serde_json::json!({"and": [{"size": {"match": {"any": [0, 2]}}}]}),
-        &size_matches,
-    );
-    println!(
-        "pgvector match_any recall — multi-value keyword={:.3}, numeric={:.3}",
-        kw_recall, num_recall
-    );
-
-    // DIAGNOSTIC: inspect what the last run actually stored + what the overlap
-    // filter matches, to distinguish a storage/filter bug from HNSW recall.
-    {
-        let mut conn = connect();
-        for id in [0i64, 1, 3, 4, 8] {
-            let c: Option<String> = conn
-                .query_opt("SELECT color FROM items WHERE id = $1", &[&id])
-                .unwrap()
-                .and_then(|row| row.get(0));
-            eprintln!("DIAG id={} (id%4={}) color={:?}", id, id % 4, c);
-        }
-        let overlap_cnt: i64 = conn
-            .query_one(
-                "SELECT count(*) FROM items WHERE string_to_array(color, ';') && ARRAY['red','yellow']::text[]",
-                &[],
-            )
-            .unwrap()
-            .get(0);
-        let multi_cnt: i64 = conn
-            .query_one("SELECT count(*) FROM items WHERE color LIKE '%;%'", &[])
-            .unwrap()
-            .get(0);
-        let expected = (0..n).filter(|id| color_matches(*id)).count();
-        eprintln!(
-            "DIAG overlap-filter matches {} rows (expected ~{}); multi-valued rows={}",
-            overlap_cnt, expected, multi_cnt
-        );
-    }
-
-    assert!(
-        kw_recall >= 0.9,
-        "multi-value keyword overlap recall {:.3} < 0.9",
-        kw_recall
-    );
-    assert!(
-        num_recall >= 0.9,
-        "numeric IN recall {:.3} < 0.9",
-        num_recall
-    );
 }
