@@ -830,11 +830,86 @@ fn build_filter(
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
     match condition_type {
-        "match" => build_exact_match_filter(field_name, criteria, counter),
+        "match" => {
+            // match_any (IN-list) takes precedence over exact {value}.
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                Some(build_match_any_filter(field_name, any, counter))
+            } else {
+                build_exact_match_filter(field_name, criteria, counter)
+            }
+        }
         "range" => build_range_filter(field_name, criteria, counter),
         "geo" => build_geo_filter(field_name, criteria, counter),
         _ => None,
     }
+}
+
+/// Escape the TAG-structural characters when inlining a value into a `{…}`
+/// clause (Valkey Search does not accept `$param` refs inside TAG brackets, so
+/// values are inlined). Only the characters that would otherwise break the OR
+/// (`|`) or the braces are escaped; other characters are passed raw, matching
+/// the exact-match path.
+fn escape_tag_value(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('{', "\\{")
+        .replace('}', "\\}")
+}
+
+/// Build a `match_any` (IN-list) filter, the OR-of-values semantics that mirror
+/// qdrant's `Condition::matches(field, Vec)`.
+///
+/// - All-integer list -> NUMERIC OR `(@f:[$a $a] | @f:[$b $b])` (params).
+/// - Otherwise -> TAG OR `@f:{a | b}` over the non-empty string values, inlined
+///   (Valkey Search rejects `$param` inside TAG `{…}`). Empty-string tokens are
+///   dropped (invalid TAG syntax).
+/// - Empty / no representable values -> a never-match `(@f:{s} -@f:{s})`
+///   contradiction so an empty IN-set matches NOTHING rather than being dropped
+///   (which, as the sole clause, would run kNN over ALL docs). Assumes a TAG
+///   field, the realistic case for a keyword IN-list.
+///
+/// NOTE: Valkey Search TAG matching is case-INSENSITIVE, whereas qdrant keyword
+/// match is case-sensitive; all shipped keyword datasets use consistent casing.
+fn build_match_any_filter(
+    field_name: &str,
+    any: &[serde_json::Value],
+    counter: &mut usize,
+) -> ParsedFilter {
+    let mut params = HashMap::new();
+
+    if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
+        let clauses: Vec<String> = any
+            .iter()
+            .filter_map(|v| v.as_i64())
+            .map(|i| {
+                let p = format!("{}_{}", field_name, counter);
+                *counter += 1;
+                params.insert(p.clone(), FilterParamValue::Int(i));
+                format!("@{}:[${} ${}]", field_name, p, p)
+            })
+            .collect();
+        return (format!("({})", clauses.join(" | ")), params);
+    }
+
+    let tokens: Vec<String> = any
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(escape_tag_value)
+        .collect();
+
+    if tokens.is_empty() {
+        let never = "__match_any_never_match__";
+        return (
+            format!("(@{0}:{{{1}}} -@{0}:{{{1}}})", field_name, never),
+            params,
+        );
+    }
+
+    (
+        format!("@{}:{{{}}}", field_name, tokens.join(" | ")),
+        params,
+    )
 }
 
 fn build_exact_match_filter(
@@ -1765,5 +1840,52 @@ impl Engine for ValkeyEngine {
             "used_memory": [used_memory],
             "index_info": ft_info,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_conditions, FilterParamValue};
+
+    #[test]
+    fn match_any_string_list_emits_inlined_tag_or() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":["red","blue"]}}}]});
+        let (q, _params) = parse_conditions(&cond).unwrap();
+        // Values inlined (no $param inside TAG braces on Valkey Search).
+        assert!(q.contains("@color:{red | blue}"), "q={}", q);
+    }
+
+    #[test]
+    fn match_any_int_list_emits_numeric_or() {
+        let cond = serde_json::json!({"and":[{"size":{"match":{"any":[1,2]}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@size:[$size_0 $size_0]"), "q={}", q);
+        assert!(q.contains("@size:[$size_1 $size_1]"), "q={}", q);
+        assert!(matches!(
+            params.get("size_0"),
+            Some(FilterParamValue::Int(1))
+        ));
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":[]}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("-@color:{"), "expected never-match, q={}", q);
+    }
+
+    #[test]
+    fn match_any_escapes_or_delimiter() {
+        // A value containing '|' must not break the OR structure.
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":["a|b"]}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("a\\|b"), "q={}", q);
+    }
+
+    #[test]
+    fn match_exact_value_still_inlined_tag() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"value":"red"}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{red}"), "q={}", q);
     }
 }
