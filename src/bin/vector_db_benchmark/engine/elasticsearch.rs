@@ -487,6 +487,16 @@ fn build_filter(
 ) -> Option<serde_json::Value> {
     match condition_type {
         "match" => {
+            // match_any: field value in a list (keywords or integers). Emit a
+            // `terms` query — the exact/case-sensitive OR-of-values semantics of
+            // qdrant's Condition::matches(field, Vec). An empty IN-set matches
+            // NOTHING, so we emit `terms: []` (a valid match-nothing query)
+            // rather than dropping the clause: dropping the sole clause would
+            // leave `bool.must:[]`, which ES treats as match-ALL — silently
+            // returning unfiltered results, the inverse of the intended filter.
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                return Some(serde_json::json!({"terms": {field_name: any}}));
+            }
             let value = criteria.get("value")?;
             Some(serde_json::json!({"match": {field_name: value}}))
         }
@@ -898,6 +908,36 @@ mod tests {
     #[test]
     fn test_id_to_uuid_hex_zero() {
         assert_eq!(id_to_uuid_hex(0), "00000000000000000000000000000000");
+    }
+
+    #[test]
+    fn test_match_any_string_list_emits_terms() {
+        let c = build_filter(
+            "color",
+            "match",
+            &serde_json::json!({"any": ["red", "blue"]}),
+        )
+        .unwrap();
+        assert_eq!(c, serde_json::json!({"terms": {"color": ["red", "blue"]}}));
+    }
+
+    #[test]
+    fn test_match_any_int_list_emits_terms() {
+        let c = build_filter("size", "match", &serde_json::json!({"any": [1, 2, 3]})).unwrap();
+        assert_eq!(c, serde_json::json!({"terms": {"size": [1, 2, 3]}}));
+    }
+
+    #[test]
+    fn test_match_any_empty_list_matches_nothing() {
+        // Empty IN-set must match NOTHING (never invert to match-all): `terms: []`.
+        let c = build_filter("color", "match", &serde_json::json!({"any": []})).unwrap();
+        assert_eq!(c, serde_json::json!({"terms": {"color": []}}));
+    }
+
+    #[test]
+    fn test_match_exact_value_still_works() {
+        let c = build_filter("color", "match", &serde_json::json!({"value": "red"})).unwrap();
+        assert_eq!(c, serde_json::json!({"match": {"color": "red"}}));
     }
 
     #[test]
