@@ -1408,19 +1408,26 @@ impl Engine for RedisEngine {
             queries.len()
         };
 
-        // Search execution
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Search execution. Each worker accumulates samples into thread-local
+        // buffers and returns them on join; the main thread concatenates. This
+        // keeps the timed hot loop free of the per-query cross-thread Mutex<Vec>
+        // pushes (5 locks/query) that serialized workers at high parallelism.
+        // Metrics are order-independent (percentiles sort), so results are
+        // unchanged. The work counter stays a single atomic but uses Relaxed
+        // (only its own monotonicity matters, not ordering against other memory).
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut nds: Vec<f64> = Vec::with_capacity(num_to_run);
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
                 let algorithm = self.config.algorithm.clone();
@@ -1429,26 +1436,29 @@ impl Engine for RedisEngine {
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    // Thread-local sample buffers — no cross-thread synchronization
+                    // in the timed loop.
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
 
                     loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
@@ -1484,14 +1494,14 @@ impl Engine for RedisEngine {
                         // a 0-recall / fast-latency sample.
                         match results {
                             Ok(result_ids) => {
-                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                t.push(query_time);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1499,19 +1509,22 @@ impl Engine for RedisEngine {
                         }
                         pb.inc(1);
                     }
-                });
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrs.extend(mr);
+                nds.extend(nd);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
-
-        // Calculate statistics
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrs = mrrs.lock().unwrap();
-        let nds = ndcgs.lock().unwrap();
 
         if times.is_empty() {
             return Err("No searches completed".to_string());
