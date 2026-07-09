@@ -580,7 +580,29 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
         for (condition_type, criteria) in filter_obj {
             match condition_type.as_str() {
                 "match" => {
-                    if let Some(value) = criteria.get("value") {
+                    // match_any: field value in a list -> SQL `IN (...)`, the
+                    // OR-of-values semantics that mirror qdrant's
+                    // Condition::matches(field, Vec). Strings are single-quote
+                    // escaped, numbers inlined verbatim; bool/null/nested items
+                    // are skipped so we never emit invalid SQL. Empty (or
+                    // all-skipped) list is a clean no-op.
+                    if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                        let items: Vec<String> = any
+                            .iter()
+                            .filter_map(|v| {
+                                if let Some(s) = v.as_str() {
+                                    Some(format!("'{}'", s.replace('\'', "''")))
+                                } else if v.is_number() {
+                                    Some(v.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !items.is_empty() {
+                            parts.push(format!("\"{}\" IN ({})", field_name, items.join(", ")));
+                        }
+                    } else if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
                             parts.push(format!("\"{}\" = '{}'", field_name, s.replace('\'', "''")));
                         } else {
@@ -674,5 +696,33 @@ mod tests {
         let cond = json!({"and": [{"name": {"match": {"value": "O'Brien"}}}]});
         let sql = parse_pg_conditions(&cond).unwrap();
         assert!(sql.contains("'O''Brien'"), "sql={}", sql);
+    }
+
+    #[test]
+    fn match_any_string_list_emits_in() {
+        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        let sql = parse_pg_conditions(&cond).unwrap();
+        assert!(sql.contains("\"color\" IN ('red', 'blue')"), "sql={}", sql);
+    }
+
+    #[test]
+    fn match_any_int_list_emits_in() {
+        let cond = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
+        let sql = parse_pg_conditions(&cond).unwrap();
+        assert!(sql.contains("\"size\" IN (1, 2, 3)"), "sql={}", sql);
+    }
+
+    #[test]
+    fn match_any_escapes_single_quotes() {
+        let cond = json!({"and": [{"name": {"match": {"any": ["O'Brien"]}}}]});
+        let sql = parse_pg_conditions(&cond).unwrap();
+        assert!(sql.contains("'O''Brien'"), "sql={}", sql);
+    }
+
+    #[test]
+    fn match_any_empty_list_is_noop() {
+        // An empty any-list produces no clause; with nothing else, no WHERE.
+        let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
+        assert!(parse_pg_conditions(&cond).is_none());
     }
 }

@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -492,4 +494,48 @@ fn test_pgvector_full_cycle() {
         .unwrap();
     let count: i64 = row.get(0);
     assert_eq!(count, 0, "items table should be deleted");
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the SQL `IN (...)` arm.
+#[test]
+fn test_binary_pgvector_match_any() {
+    wait_for_postgres();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-ma", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")],
+        ),
+        "pgvector match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "pg-ma");
+    println!("pgvector match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector match_any recall {:.3} < 0.9",
+        recall
+    );
 }
