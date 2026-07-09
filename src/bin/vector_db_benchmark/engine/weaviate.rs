@@ -172,11 +172,26 @@ impl WeaviateEngine {
                         "geo" => "geoCoordinates",
                         _ => continue,
                     };
-                    properties.push(serde_json::json!({
+                    let mut prop = serde_json::json!({
                         "name": field_name,
                         "dataType": [wv_type],
                         "indexInverted": true,
-                    }));
+                    });
+                    // Keyword fields must match on the WHOLE value (exact
+                    // keyword equality, like qdrant). Weaviate's default `word`
+                    // tokenization turns `Equal` into token-containment, so
+                    // `Equal "Blue"` would also match "Dark Blue". Force `field`
+                    // tokenization for keyword; keep `word` for full-text.
+                    if let Some(tok) = match ft {
+                        "keyword" => Some("field"),
+                        "text" => Some("word"),
+                        _ => None,
+                    } {
+                        prop.as_object_mut()
+                            .unwrap()
+                            .insert("tokenization".to_string(), serde_json::json!(tok));
+                    }
+                    properties.push(prop);
                 }
             }
         }
