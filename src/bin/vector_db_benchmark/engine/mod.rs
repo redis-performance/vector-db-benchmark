@@ -84,6 +84,15 @@ pub struct SearchResults {
     /// are over a partial set (e.g. a saturated client shedding timeouts).
     pub failed_queries: usize,
     pub parallel: usize,
+    // Client CPU / concurrency-saturation coverage (filled by the runner after
+    // the timed window; see proc_cpu). When client_saturated is true the latency
+    // and QPS above reflect a client-bound run, not clean server-side numbers.
+    pub available_cores: usize,
+    pub oversubscribed: bool,
+    pub client_cpu_cores_used: Option<f64>,
+    pub system_cpu_pct: Option<f64>,
+    pub client_saturated: bool,
+    pub saturation_reason: String,
     // Mixed benchmark update metrics (None when search-only)
     pub update_count: Option<usize>,
     pub update_rps: Option<f64>,

@@ -32,6 +32,8 @@ struct PrecisionBucket {
     recall: f64,
     mrr: f64,
     ndcg: f64,
+    /// The run behind this bucket was flagged client-saturated.
+    saturated: bool,
 }
 
 /// Format a precision value into a bucket key (matches Python v0 format_precision_key).
@@ -67,11 +69,19 @@ fn analyze_precision_performance(entries: &[SearchEntry]) -> Vec<PrecisionBucket
             recall: entry.results.mean_recall,
             mrr: entry.results.mean_mrr,
             ndcg: entry.results.mean_ndcg,
+            saturated: entry.results.client_saturated,
         };
 
-        // Keep the entry with best QPS for this precision bucket
+        // Keep the best entry for this precision bucket. Prefer a NON-saturated
+        // point over a saturated one so the headline "best QPS" is never a
+        // client-bound data point; only fall back to a saturated point when it is
+        // the sole candidate. Within the same saturation class, keep higher QPS.
         let replace = match buckets.get(&key) {
-            Some(existing) => candidate.qps > existing.qps,
+            Some(existing) => match (candidate.saturated, existing.saturated) {
+                (false, true) => true,
+                (true, false) => false,
+                _ => candidate.qps > existing.qps,
+            },
             None => true,
         };
         if replace {
@@ -85,11 +95,91 @@ fn analyze_precision_performance(entries: &[SearchEntry]) -> Vec<PrecisionBucket
     result
 }
 
+/// Detect and describe client/throughput-saturation problems across a set of
+/// runs. Two independent signals:
+///  1. any single run the client-CPU coverage flagged (`client_saturated`); and
+///  2. throughput that stops scaling — grouped by `ef`, when raising `parallel`
+///     gains <10% QPS while p95 rises, the higher-parallel point is not a clean
+///     scaling data point (client or server saturated).
+fn saturation_warnings(entries: &[SearchEntry]) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    let mut flagged: Vec<(&str, i64, &str)> = entries
+        .iter()
+        .filter(|e| e.results.client_saturated)
+        .map(|e| {
+            (
+                e.ef.as_str(),
+                e.parallel,
+                e.results.saturation_reason.as_str(),
+            )
+        })
+        .collect();
+    flagged.sort_by_key(|f| f.1);
+    for (ef, parallel, reason) in flagged {
+        warnings.push(format!(
+            "client-saturated: ef={} parallel={} ({}) — QPS/latency reflect the client, not the DB",
+            ef, parallel, reason
+        ));
+    }
+
+    // Throughput scaling collapse, per ef.
+    let mut by_ef: BTreeMap<&str, Vec<(i64, f64, f64)>> = BTreeMap::new();
+    for e in entries {
+        by_ef.entry(e.ef.as_str()).or_default().push((
+            e.parallel,
+            e.results.rps,
+            e.results.p95_time,
+        ));
+    }
+    for (ef, mut pts) in by_ef {
+        if pts.len() < 2 {
+            continue;
+        }
+        pts.sort_by_key(|p| p.0);
+        for w in pts.windows(2) {
+            let (p_prev, q_prev, p95_prev) = w[0];
+            let (p_cur, q_cur, p95_cur) = w[1];
+            if p_cur > p_prev && q_prev > 0.0 && p95_prev > 0.0 {
+                let gain = (q_cur - q_prev) / q_prev;
+                if gain < 0.10 && p95_cur > p95_prev {
+                    warnings.push(format!(
+                        "throughput saturated: ef={} parallel {}→{} gained only {:.0}% QPS \
+                         while p95 rose {:.0}% — higher concurrency is not paying off",
+                        ef,
+                        p_prev,
+                        p_cur,
+                        gain * 100.0,
+                        (p95_cur / p95_prev - 1.0) * 100.0
+                    ));
+                }
+            }
+        }
+    }
+
+    warnings
+}
+
+/// Print saturation warnings, if any, under a clear header.
+fn print_saturation_warnings(entries: &[SearchEntry]) {
+    let warnings = saturation_warnings(entries);
+    if warnings.is_empty() {
+        return;
+    }
+    eprintln!("\n⚠ CONCURRENCY / CPU SATURATION WARNINGS (results below may be untrustworthy):");
+    for w in &warnings {
+        eprintln!("  - {}", w);
+    }
+    eprintln!();
+}
+
 /// Display a results summary table and ASCII scatter plot.
 pub fn display_results_summary(engine_name: &str, dataset_name: &str, entries: &[SearchEntry]) {
     if entries.is_empty() {
         return;
     }
+
+    print_saturation_warnings(entries);
 
     // Filter-only mode: precision is not applicable (mean_precision == -1.0)
     let filter_only = entries.iter().all(|e| e.results.mean_precision < 0.0);
@@ -274,6 +364,11 @@ pub fn save_summary(
                 "p50_time": e.results.p50_time,
                 "p95_time": e.results.p95_time,
                 "p99_time": e.results.p99_time,
+                "client_saturated": e.results.client_saturated,
+                "saturation_reason": e.results.saturation_reason,
+                "oversubscribed": e.results.oversubscribed,
+                "available_cores": e.results.available_cores,
+                "client_cpu_cores_used": e.results.client_cpu_cores_used,
             })
         })
         .collect();

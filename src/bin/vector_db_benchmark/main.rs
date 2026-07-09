@@ -10,6 +10,7 @@ mod download;
 mod engine;
 mod experiment;
 mod metrics;
+mod proc_cpu;
 mod summary;
 
 use clap::Parser;
