@@ -649,7 +649,11 @@ impl Engine for TurbopufferEngine {
             ndcgs,
             latencies,
             top,
-            num_queries: num_to_run,
+            // num_queries = successes folded into the stats (matches
+            // compute_search_stats); requested/failed track the full workload.
+            num_queries: succeeded,
+            requested_queries: num_to_run,
+            failed_queries: failed,
             parallel,
             ..Default::default()
         })

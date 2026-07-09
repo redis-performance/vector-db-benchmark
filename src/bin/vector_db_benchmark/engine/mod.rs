@@ -75,7 +75,14 @@ pub struct SearchResults {
     pub precisions: Vec<f64>,
     pub latencies: Vec<f64>,
     pub top: usize,
+    /// Number of *successful* queries folded into the latency/quality stats.
     pub num_queries: usize,
+    /// Number of queries requested for this run (num_to_run).
+    pub requested_queries: usize,
+    /// requested_queries - num_queries: queries that errored/timed out and were
+    /// excluded from the latency percentiles. Nonzero means the reported numbers
+    /// are over a partial set (e.g. a saturated client shedding timeouts).
+    pub failed_queries: usize,
     pub parallel: usize,
     // Mixed benchmark update metrics (None when search-only)
     pub update_count: Option<usize>,
@@ -94,7 +101,10 @@ pub struct SearchResults {
 ///
 /// `times`/`precisions`/`recalls`/`mrrs`/`ndcgs` are the per-successful-query
 /// samples (see the engines' search loops), `total_time` the wall clock,
-/// `top` the k used, and `parallel` the client concurrency.
+/// `top` the k used, `parallel` the client concurrency, and `requested_queries`
+/// the number of queries dispatched (num_to_run) so failures can be counted as
+/// `requested_queries - times.len()`. RPS stays successes/wall-clock; a nonzero
+/// `failed_queries` flags that the stats cover only the successful subset.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_search_stats(
     times: &[f64],
@@ -105,6 +115,7 @@ pub fn compute_search_stats(
     total_time: f64,
     top: usize,
     parallel: usize,
+    requested_queries: usize,
 ) -> Result<SearchResults, String> {
     if times.is_empty() {
         return Err("No searches completed".to_string());
@@ -150,6 +161,8 @@ pub fn compute_search_stats(
         latencies: times.to_vec(),
         top,
         num_queries: times.len(),
+        requested_queries,
+        failed_queries: requested_queries.saturating_sub(times.len()),
         parallel,
         ..Default::default()
     })
@@ -261,15 +274,17 @@ mod stats_tests {
 
     #[test]
     fn empty_times_errors() {
-        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1).is_err());
+        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1, 0).is_err());
     }
 
     #[test]
     fn computes_means_rps_and_clamped_percentiles() {
         let times = vec![0.1, 0.2, 0.3, 0.4];
         let ones = vec![1.0, 1.0, 1.0, 1.0];
-        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4).unwrap();
+        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4, 5).unwrap();
         assert_eq!(r.num_queries, 4);
+        assert_eq!(r.requested_queries, 5);
+        assert_eq!(r.failed_queries, 1); // 5 requested, 4 succeeded
         assert!((r.rps - 2.0).abs() < 1e-9); // 4 / 2.0s
         assert!((r.mean_recall - 1.0).abs() < 1e-9);
         assert!((r.mean_time - 0.25).abs() < 1e-9);
@@ -283,7 +298,7 @@ mod stats_tests {
 
     #[test]
     fn single_query_percentiles_dont_panic() {
-        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1).unwrap();
+        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1, 1).unwrap();
         assert!((r.p99_time - 0.5).abs() < 1e-9);
     }
 }

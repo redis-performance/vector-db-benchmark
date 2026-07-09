@@ -462,6 +462,19 @@ fn run_single_experiment(
                                 results.rps, results.mean_recall, results.mean_precision, results.mean_mrr, results.mean_ndcg
                             );
                         }
+                        // Surface dropped queries loudly: latency percentiles and
+                        // recall above cover only the successful subset, so a
+                        // nonzero count means the numbers are not over the full
+                        // requested workload.
+                        if results.failed_queries > 0 {
+                            eprintln!(
+                                "\t⚠ WARNING: {}/{} queries FAILED (only {} succeeded); \
+                                 latency/recall/QPS above reflect the successful subset only",
+                                results.failed_queries,
+                                results.requested_queries,
+                                results.num_queries,
+                            );
+                        }
                         save_search_results(
                             engine.name(),
                             &dataset.config.name,
@@ -618,6 +631,14 @@ fn save_search_results(
         "results": {
             "total_time": results.total_time,
             "mean_time": results.mean_time,
+            // Query accounting: rps and the latency percentiles are computed over
+            // succeeded_queries only, while total_time (the rps denominator) spans
+            // the whole run. A nonzero failed_queries means the reported latency
+            // distribution covers a partial set — typically the regime where a
+            // saturated client or an overloaded server sheds timeouts.
+            "requested_queries": results.requested_queries,
+            "succeeded_queries": results.num_queries,
+            "failed_queries": results.failed_queries,
             "mean_precisions": results.mean_precision,
             "mean_recall": results.mean_recall,
             "mean_mrr": results.mean_mrr,
