@@ -20,7 +20,13 @@ use rand::{Rng, SeedableRng};
 use vector_db_benchmark::readers::write_npy_vectors;
 
 /// Keyword values assigned round-robin to documents by `id % 4`.
-const COLORS: [&str; 4] = ["red", "green", "blue", "yellow"];
+///
+/// The last value is intentionally MULTI-WORD ("dark blue"): keyword matching
+/// must be whole-value/exact, so `match_any ["red","blue"]` must NOT select a
+/// "dark blue" doc. This makes the recall test sensitive to an engine that
+/// tokenizes keyword fields (e.g. a regression to Weaviate's default `word`
+/// tokenization, under which `Equal "blue"` would wrongly match "dark blue").
+const COLORS: [&str; 4] = ["red", "green", "blue", "dark blue"];
 /// The `match_any` set every query filters on (COLORS indices 0 and 2).
 pub const MATCH_ANY_COLORS: [&str; 2] = ["red", "blue"];
 
