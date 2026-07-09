@@ -597,89 +597,101 @@ fn test_binary_pgvector_match_any_multivalue_and_numeric() {
         s.iter().take(top).map(|(id, _)| *id).collect()
     };
 
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let root = tmp.path().to_path_buf();
-    std::mem::forget(tmp);
-    let ds = root.join("datasets").join("pg-mv");
-    fs::create_dir_all(&ds).unwrap();
-    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
-    fs::create_dir_all(root.join("results")).unwrap();
-
-    write_npy_vectors(ds.join("vectors.npy").to_str().unwrap(), &vectors).unwrap();
-    let payloads: String = (0..n)
-        .map(|id| serde_json::json!({"color": color_json(id), "size": (id % 3) as i64}).to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(ds.join("payloads.jsonl"), payloads).unwrap();
-
-    let mut tests: Vec<serde_json::Value> = Vec::new();
-    for q in &q_colors {
-        tests.push(serde_json::json!({
-            "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
-            "conditions": {"and": [{"color": {"match": {"any": ["red", "yellow"]}}}]},
-            "closest_ids": gt(q, &color_matches),
-        }));
-    }
-    for q in &q_sizes {
-        tests.push(serde_json::json!({
-            "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
-            "conditions": {"and": [{"size": {"match": {"any": [0, 2]}}}]},
-            "closest_ids": gt(q, &size_matches),
-        }));
-    }
-    fs::write(
-        ds.join("tests.jsonl"),
-        tests
-            .iter()
-            .map(|t| t.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-    .unwrap();
-
-    let datasets = serde_json::json!([{
-        "name": "pg-mv", "type": "tar", "path": "pg-mv/",
-        "distance": "l2", "vector_size": dim, "vector_count": n,
-        "schema": {"color": "keyword", "size": "int"},
-    }]);
-    fs::write(
-        root.join("datasets/datasets.json"),
-        serde_json::to_string_pretty(&datasets).unwrap(),
-    )
-    .unwrap();
-    let configs = serde_json::json!([{
-        "name": "pg-mv", "engine": "pgvector",
-        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
-        "upload_params": {"parallel": 1, "batch_size": 100}
-    }]);
-    fs::write(
-        root.join("experiments/configurations/test.json"),
-        serde_json::to_string(&configs).unwrap(),
-    )
-    .unwrap();
-
     // Sanity: enough matching docs for a top-10 query on each arm.
     assert!((0..n).filter(|id| color_matches(*id)).count() >= top);
     assert!((0..n).filter(|id| size_matches(*id)).count() >= top);
 
-    assert!(
-        common::run_binary(
-            &root,
-            "pg-mv",
-            "pg-mv",
-            "127.0.0.1",
-            &[("PGVECTOR_PORT", "5433")]
-        ),
-        "pgvector multi-value/numeric match_any run failed"
+    let payloads: String = (0..n)
+        .map(|id| serde_json::json!({"color": color_json(id), "size": (id % 3) as i64}).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Run one dataset (a set of queries sharing a condition) and return recall.
+    // Each arm is isolated so a failure pinpoints which one (keyword overlap vs
+    // numeric IN) regressed.
+    let run_arm = |name: &str,
+                   queries: &[Vec<f32>],
+                   cond: serde_json::Value,
+                   pred: &dyn Fn(usize) -> bool|
+     -> f64 {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let root = tmp.path().to_path_buf();
+        std::mem::forget(tmp);
+        let ds = root.join("datasets").join(name);
+        fs::create_dir_all(&ds).unwrap();
+        fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+        fs::create_dir_all(root.join("results")).unwrap();
+
+        write_npy_vectors(ds.join("vectors.npy").to_str().unwrap(), &vectors).unwrap();
+        fs::write(ds.join("payloads.jsonl"), &payloads).unwrap();
+
+        let tests: String = queries
+            .iter()
+            .map(|q| {
+                serde_json::json!({
+                    "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+                    "conditions": cond,
+                    "closest_ids": gt(q, pred),
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(ds.join("tests.jsonl"), tests).unwrap();
+
+        let datasets = serde_json::json!([{
+            "name": name, "type": "tar", "path": format!("{}/", name),
+            "distance": "l2", "vector_size": dim, "vector_count": n,
+            "schema": {"color": "keyword", "size": "int"},
+        }]);
+        fs::write(
+            root.join("datasets/datasets.json"),
+            serde_json::to_string_pretty(&datasets).unwrap(),
+        )
+        .unwrap();
+        let configs = serde_json::json!([{
+            "name": name, "engine": "pgvector",
+            "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+            "upload_params": {"parallel": 1, "batch_size": 100}
+        }]);
+        fs::write(
+            root.join("experiments/configurations/test.json"),
+            serde_json::to_string(&configs).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            common::run_binary(&root, name, name, "127.0.0.1", &[("PGVECTOR_PORT", "5433")]),
+            "pgvector {} run failed",
+            name
+        );
+        common::read_recall(&root, name)
+    };
+
+    let kw_recall = run_arm(
+        "pg-mv-kw",
+        &q_colors,
+        serde_json::json!({"and": [{"color": {"match": {"any": ["red", "yellow"]}}}]}),
+        &color_matches,
     );
-    let recall = common::read_recall(&root, "pg-mv");
+    let num_recall = run_arm(
+        "pg-mv-num",
+        &q_sizes,
+        serde_json::json!({"and": [{"size": {"match": {"any": [0, 2]}}}]}),
+        &size_matches,
+    );
     println!(
-        "pgvector multi-value+numeric match_any recall={:.3}",
-        recall
+        "pgvector match_any recall — multi-value keyword={:.3}, numeric={:.3}",
+        kw_recall, num_recall
     );
     assert!(
-        recall >= 0.9,
-        "recall {:.3} < 0.9 (multi-value overlap or numeric IN regressed)",
-        recall
+        kw_recall >= 0.9,
+        "multi-value keyword overlap recall {:.3} < 0.9",
+        kw_recall
+    );
+    assert!(
+        num_recall >= 0.9,
+        "numeric IN recall {:.3} < 0.9",
+        num_recall
     );
 }
