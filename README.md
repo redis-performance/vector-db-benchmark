@@ -10,9 +10,9 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 | **VectorSets** | `redis` 0.27 | Redis protocol | L2, Cosine | Yes |
 | **Elasticsearch** | `elasticsearch` 8.15 | HTTP/REST | L2, Cosine | Yes |
 | **OpenSearch** | `opensearch` 2.3 | HTTP/REST | L2, Cosine | Yes |
-| **Qdrant** | `qdrant-client` 1.13 | gRPC | L2, Cosine, Dot | Yes |
+| **Qdrant** | `qdrant-client` 1.17 | gRPC | L2, Cosine, Dot | Yes |
 | **PgVector** | `postgres` 0.19 + `pgvector` 0.4 | PostgreSQL | L2, Cosine | Yes |
-| **Weaviate** | `reqwest` (REST API) | HTTP/REST + GraphQL | L2, Cosine, Dot | Yes |
+| **Weaviate** | `tonic` 0.12 / `prost` 0.13 (gRPC) + `reqwest` (REST) | gRPC (search) + HTTP/REST (schema) [\*\*](#weaviate-protocol-note) | L2, Cosine, Dot | Yes |
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST | L2, Cosine, IP | Yes |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
 | **Valkey** (Valkey Search) | `redis` 0.27 [\*](#valkey-client-note) | RESP protocol | L2, Cosine, IP | Yes |
@@ -20,6 +20,9 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 
 <a id="valkey-client-note"></a>
 \* **Valkey client note:** Valkey GLIDE has no published Rust crate ([valkey-io/valkey-glide#828](https://github.com/valkey-io/valkey-glide/issues/828), closed NOT_PLANNED). The GLIDE maintainers recommend using `redis-rs` for Rust and upstream their improvements to it. The `redis` crate works with Valkey since it speaks the same RESP protocol.
+
+<a id="weaviate-protocol-note"></a>
+\*\* **Weaviate protocol note:** Vector search runs over Weaviate's **gRPC** API (port 50051) by default — the high-throughput query path used by the official clients (packed binary vectors). Schema management, upload, and search-time `ef` tuning use the REST API (v1). The tool falls back to the slower GraphQL-over-HTTP search path when a metadata filter is present (gRPC filter translation is not implemented) or when `WEAVIATE_USE_GRAPHQL` is set. Override the gRPC port with `WEAVIATE_GRPC_PORT`.
 
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
@@ -68,7 +71,7 @@ docker run --rm --network=host \
 
 ```bash
 # Start Redis
-docker run -d --name redis -p 6379:6379 redis:8.6.0
+docker run -d --name redis -p 6379:6379 redis:8.8.0
 
 # Run benchmark
 docker run --rm --network=host \
@@ -300,14 +303,14 @@ make docker-build       # Build Docker image
 Each engine has a dedicated integration test that runs against a Docker container:
 
 ```bash
-make integration-test                  # Redis (default)
-make integration-test-elasticsearch    # Elasticsearch 8.10.2
-make integration-test-opensearch       # OpenSearch 2.19.2
-make integration-test-pgvector         # PgVector (PostgreSQL 16)
-make integration-test-qdrant           # Qdrant v1.13.4
-make integration-test-weaviate         # Weaviate 1.28.9
-make integration-test-milvus           # Milvus 2.5.6
-make integration-test-mongodb          # MongoDB Atlas Local 8.0.4
+make integration-test                  # Redis 8.8.0 (default)
+make integration-test-elasticsearch    # Elasticsearch 9.4.3
+make integration-test-opensearch       # OpenSearch 3.7.0
+make integration-test-pgvector         # PgVector (PostgreSQL 18)
+make integration-test-qdrant           # Qdrant v1.18.2
+make integration-test-weaviate         # Weaviate 1.38.2
+make integration-test-milvus           # Milvus v2.6.19
+make integration-test-mongodb          # MongoDB Atlas Local 8.0.17
 make integration-test-valkey           # Valkey Bundle (latest)
 ```
 
@@ -339,7 +342,8 @@ src/
         opensearch.rs                 # OpenSearch engine
         qdrant.rs                     # Qdrant engine (gRPC)
         pgvector.rs                   # PgVector engine (PostgreSQL)
-        weaviate.rs                   # Weaviate engine (REST)
+        weaviate_grpc.rs              # Weaviate gRPC client (generated from vendored v1 protos)
+        weaviate.rs                   # Weaviate engine (gRPC search + REST schema)
         milvus.rs                     # Milvus engine (REST)
         mongodb_engine.rs             # MongoDB Atlas Search engine
         valkey.rs                     # Valkey engine (RESP protocol)
