@@ -62,6 +62,9 @@ services:
       CLUSTER_HOSTNAME: "node1"
     ports:
       - "8081:8080"
+      # gRPC search port (the engine's default query path); exposed so the
+      # gRPC path is reachable when benchmarking/testing against this service.
+      - "50051:50051"
     healthcheck:
       # The weaviate image has no curl; use its bundled wget in spider mode to
       # probe the readiness endpoint.

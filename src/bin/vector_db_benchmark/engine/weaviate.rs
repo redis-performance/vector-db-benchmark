@@ -1,8 +1,11 @@
 //! Weaviate engine implementation.
 //!
-//! Uses Weaviate's REST API (v1) via reqwest::blocking.
-//! Supports HNSW vector index with configurable efConstruction/maxConnections,
-//! schema-based properties, and near_vector search.
+//! Schema/upload/ef-tuning use Weaviate's REST API (v1) via reqwest::blocking.
+//! Vector search uses Weaviate's **gRPC** API (port 50051) by default — the
+//! high-throughput query path used by the official clients — falling back to
+//! GraphQL over HTTP when a metadata filter is present or WEAVIATE_USE_GRAPHQL
+//! is set. (GraphQL with a stringified query vector is markedly slower and caps
+//! throughput, which is why gRPC is the default for the benchmark.)
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,6 +15,9 @@ use std::time::Instant;
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use uuid::Uuid;
 
+use super::weaviate_grpc::weaviate_v1::{
+    weaviate_client::WeaviateClient, MetadataRequest, NearVector, SearchRequest,
+};
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
@@ -26,6 +32,8 @@ pub struct WeaviateEngine {
     batch_size: usize,
     parallel: usize,
     base_url: String,
+    /// gRPC endpoint (http://host:50051) for the search RPC.
+    grpc_endpoint: String,
     api_key: Option<String>,
     search_params: Vec<SearchParams>,
     /// vectorIndexConfig from collection_params
@@ -71,6 +79,20 @@ impl WeaviateEngine {
             format!("http://{}:{}", host, port)
         };
 
+        // gRPC endpoint: same host, port 50051 (override via WEAVIATE_GRPC_PORT),
+        // always plaintext h2c (self-hosted). Strip any scheme/port from `host`.
+        let grpc_port: u16 = std::env::var("WEAVIATE_GRPC_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50051);
+        let host_only = host
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .unwrap_or(host);
+        let grpc_endpoint = format!("http://{}:{}", host_only, grpc_port);
+
         // Extract vectorIndexConfig from collection_params.extra
         let vector_index_config = engine_config
             .collection_params
@@ -87,6 +109,7 @@ impl WeaviateEngine {
             batch_size,
             parallel,
             base_url,
+            grpc_endpoint,
             api_key,
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             vector_index_config,
@@ -650,6 +673,64 @@ fn near_vector_search(
     Ok(hits)
 }
 
+/// Search Weaviate over gRPC (near_vector). Sends the query vector as packed
+/// little-endian f32 bytes (`vector_bytes`) and requests uuid + distance metadata.
+/// This is the high-throughput query path; the class-level `ef` set via the REST
+/// schema update still governs recall. Returns (int-id, distance) pairs, mapping
+/// the object UUID back through `uuid_to_int` (inverse of the upload id_to_uuid).
+///
+/// `NearVector::vector_bytes` is marked deprecated in the newer weaviate protos
+/// (superseded by a multi-vector `vectors` field) but remains the accepted
+/// packed-vector input on the 1.29–1.38 servers this targets, so we allow it.
+#[allow(deprecated)]
+async fn near_vector_search_grpc(
+    client: &mut WeaviateClient<tonic::transport::Channel>,
+    class_name: &str,
+    api_key: Option<&str>,
+    query_vector: &[f32],
+    top: usize,
+) -> Result<Vec<(i64, f64)>, String> {
+    let vector_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+    let search = SearchRequest {
+        collection: class_name.to_string(),
+        limit: top as u32,
+        near_vector: Some(NearVector {
+            vector_bytes,
+            ..Default::default()
+        }),
+        metadata: Some(MetadataRequest {
+            uuid: true,
+            distance: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let mut request = tonic::Request::new(search);
+    if let Some(key) = api_key {
+        let val = format!("Bearer {}", key)
+            .parse()
+            .map_err(|e| format!("bad api key header: {}", e))?;
+        request.metadata_mut().insert("authorization", val);
+    }
+
+    let reply = client
+        .search(request)
+        .await
+        .map_err(|e| format!("gRPC search failed: {}", e))?
+        .into_inner();
+
+    let mut hits = Vec::with_capacity(reply.results.len());
+    for r in reply.results {
+        if let Some(m) = r.metadata {
+            let id = uuid_to_int(&m.id)?;
+            hits.push((id, m.distance as f64));
+        }
+    }
+    Ok(hits)
+}
+
 /// Parse conditions into Weaviate where filter format.
 fn parse_weaviate_conditions(conditions: &serde_json::Value) -> Option<serde_json::Value> {
     let obj = conditions.as_object()?;
@@ -1029,103 +1110,230 @@ impl Engine for WeaviateEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
+
+        // Vector search runs over gRPC by default (packed vectors — the
+        // high-throughput path); GraphQL is the fallback for filtered datasets
+        // (gRPC filter translation not implemented) or when WEAVIATE_USE_GRAPHQL
+        // is set. gRPC concurrency is async tasks on a shared runtime (one
+        // connection per task, HTTP/2); GraphQL concurrency is blocking OS threads.
+        let grpc_ep: Option<tonic::transport::Endpoint> =
+            if std::env::var("WEAVIATE_USE_GRAPHQL").is_ok() {
+                None
+            } else {
+                match tonic::transport::Endpoint::from_shared(self.grpc_endpoint.clone()) {
+                    Ok(ep) => Some(
+                        ep.timeout(std::time::Duration::from_secs(self.timeout))
+                            .connect_timeout(std::time::Duration::from_secs(30)),
+                    ),
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: invalid gRPC endpoint {} ({}); falling back to GraphQL",
+                            self.grpc_endpoint, e
+                        );
+                        None
+                    }
+                }
+            };
+        let use_grpc = grpc_ep.is_some() && parsed_filters.iter().all(|f| f.is_none());
+
+        let queries = Arc::new(queries);
+        let neighbors = Arc::new(neighbors);
+        let parsed_filters = Arc::new(parsed_filters);
+
         let start_time = Instant::now();
 
+        // Per-thread sample buffers merged after the workers finish — no per-query
+        // Mutex<Vec> contention in the timed loop (see redis.rs::search). Both the
+        // gRPC async tasks and the GraphQL OS threads accumulate locally and return
+        // their buffers; metrics are order-independent so results are unchanged.
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
 
-        std::thread::scope(|s| {
-            let mut handles = Vec::with_capacity(parallel);
-            for _ in 0..parallel {
-                let base_url = self.base_url.clone();
-                let class_name = self.class_name.clone();
-                let api_key = self.api_key.clone();
-                let timeout = self.timeout;
-                let queries = &queries;
-                let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
-                let query_idx = Arc::clone(&query_idx);
-                let pb = &pb;
+        type SampleBuffers = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
-                handles.push(s.spawn(move || {
-                    let mut t = Vec::new();
-                    let mut p = Vec::new();
-                    let mut r = Vec::new();
-                    let mut mr = Vec::new();
-                    let mut nd = Vec::new();
+        if use_grpc {
+            // ── gRPC: async task fan-out. `parallel` tasks, each its own
+            //     connection, awaiting searches off a shared atomic work queue.
+            //     This scales with concurrency (unlike thread-per-block_on). ──
+            let endpoint = grpc_ep.unwrap();
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to build tokio runtime: {}", e))?;
+            let collected: Vec<SampleBuffers> = rt.block_on(async {
+                let mut tasks = Vec::with_capacity(parallel);
+                for _ in 0..parallel {
+                    let endpoint = endpoint.clone();
+                    let class_name = self.class_name.clone();
+                    let api_key = self.api_key.clone();
+                    let queries = Arc::clone(&queries);
+                    let neighbors = Arc::clone(&neighbors);
+                    let query_idx = Arc::clone(&query_idx);
+                    let pb = pb.clone();
+                    tasks.push(tokio::spawn(async move {
+                        let mut t = Vec::new();
+                        let mut p = Vec::new();
+                        let mut r = Vec::new();
+                        let mut mr = Vec::new();
+                        let mut nd = Vec::new();
 
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .build()
-                    {
-                        Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
-                    };
-
-                    loop {
-                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
-                        if idx >= num_to_run {
-                            break;
-                        }
-
-                        let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
-                            }
-                        });
-
-                        let query_start = Instant::now();
-                        let results = near_vector_search(
-                            &client,
-                            &base_url,
-                            &class_name,
-                            api_key.as_deref(),
-                            &queries[idx],
-                            top,
-                            parsed_filters[idx].as_ref(),
-                        );
-                        let query_time = query_start.elapsed().as_secs_f64();
-
-                        match results {
-                            Ok(result_ids) => {
-                                let ordered_ids: Vec<i64> =
-                                    result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = crate::metrics::compute_metrics(
-                                    &ordered_ids,
-                                    &neighbors[idx],
-                                    top,
-                                );
-                                t.push(query_time);
-                                p.push(m.precision);
-                                r.push(m.recall);
-                                mr.push(m.mrr);
-                                nd.push(m.ndcg);
-                            }
+                        let channel = match endpoint.connect().await {
+                            Ok(c) => c,
                             Err(e) => {
-                                eprintln!("Search query {} failed: {}", idx, e);
+                                eprintln!("gRPC connect failed: {}", e);
+                                return (t, p, r, mr, nd);
                             }
+                        };
+                        let mut client = WeaviateClient::new(channel);
+                        loop {
+                            let idx = query_idx.fetch_add(1, Ordering::Relaxed);
+                            if idx >= num_to_run {
+                                break;
+                            }
+                            let top = explicit_top.unwrap_or_else(|| {
+                                let n = neighbors[idx].len();
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
+                            });
+                            let query_start = Instant::now();
+                            let results = near_vector_search_grpc(
+                                &mut client,
+                                &class_name,
+                                api_key.as_deref(),
+                                &queries[idx],
+                                top,
+                            )
+                            .await;
+                            let query_time = query_start.elapsed().as_secs_f64();
+                            match results {
+                                Ok(result_ids) => {
+                                    let ordered_ids: Vec<i64> =
+                                        result_ids.iter().map(|(id, _)| *id).collect();
+                                    let m = crate::metrics::compute_metrics(
+                                        &ordered_ids,
+                                        &neighbors[idx],
+                                        top,
+                                    );
+                                    t.push(query_time);
+                                    p.push(m.precision);
+                                    r.push(m.recall);
+                                    mr.push(m.mrr);
+                                    nd.push(m.ndcg);
+                                }
+                                Err(e) => eprintln!("Search query {} failed: {}", idx, e),
+                            }
+                            pb.inc(1);
                         }
-                        pb.inc(1);
+                        (t, p, r, mr, nd)
+                    }));
+                }
+                let mut out = Vec::with_capacity(tasks.len());
+                for task in tasks {
+                    match task.await {
+                        Ok(buf) => out.push(buf),
+                        Err(e) => eprintln!("gRPC search task failed: {}", e),
                     }
-                    (t, p, r, mr, nd)
-                }));
-            }
-
-            for h in handles {
-                let (t, p, r, mr, nd) = h.join().unwrap();
+                }
+                out
+            });
+            for (t, p, r, mr, nd) in collected {
                 times.extend(t);
                 precs.extend(p);
                 recs.extend(r);
                 mrr_vals.extend(mr);
                 ndcg_vals.extend(nd);
             }
-        });
+        } else {
+            // ── GraphQL: blocking OS-thread fan-out (each thread its own client). ──
+            std::thread::scope(|s| {
+                let mut handles = Vec::with_capacity(parallel);
+                for _ in 0..parallel {
+                    let base_url = self.base_url.clone();
+                    let class_name = self.class_name.clone();
+                    let api_key = self.api_key.clone();
+                    let timeout = self.timeout;
+                    let queries = Arc::clone(&queries);
+                    let neighbors = Arc::clone(&neighbors);
+                    let parsed_filters = Arc::clone(&parsed_filters);
+                    let query_idx = Arc::clone(&query_idx);
+                    let pb = &pb;
+
+                    handles.push(s.spawn(move || {
+                        let mut t = Vec::new();
+                        let mut p = Vec::new();
+                        let mut r = Vec::new();
+                        let mut mr = Vec::new();
+                        let mut nd = Vec::new();
+
+                        let client = match reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_secs(timeout))
+                            .build()
+                        {
+                            Ok(c) => c,
+                            Err(_) => return (t, p, r, mr, nd),
+                        };
+                        loop {
+                            let idx = query_idx.fetch_add(1, Ordering::Relaxed);
+                            if idx >= num_to_run {
+                                break;
+                            }
+                            let top = explicit_top.unwrap_or_else(|| {
+                                let n = neighbors[idx].len();
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
+                            });
+                            let query_start = Instant::now();
+                            let results = near_vector_search(
+                                &client,
+                                &base_url,
+                                &class_name,
+                                api_key.as_deref(),
+                                &queries[idx],
+                                top,
+                                parsed_filters[idx].as_ref(),
+                            );
+                            let query_time = query_start.elapsed().as_secs_f64();
+                            match results {
+                                Ok(result_ids) => {
+                                    let ordered_ids: Vec<i64> =
+                                        result_ids.iter().map(|(id, _)| *id).collect();
+                                    let m = crate::metrics::compute_metrics(
+                                        &ordered_ids,
+                                        &neighbors[idx],
+                                        top,
+                                    );
+                                    t.push(query_time);
+                                    p.push(m.precision);
+                                    r.push(m.recall);
+                                    mr.push(m.mrr);
+                                    nd.push(m.ndcg);
+                                }
+                                Err(e) => eprintln!("Search query {} failed: {}", idx, e),
+                            }
+                            pb.inc(1);
+                        }
+                        (t, p, r, mr, nd)
+                    }));
+                }
+                for h in handles {
+                    let (t, p, r, mr, nd) = h.join().unwrap();
+                    times.extend(t);
+                    precs.extend(p);
+                    recs.extend(r);
+                    mrr_vals.extend(mr);
+                    ndcg_vals.extend(nd);
+                }
+            });
+        }
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
