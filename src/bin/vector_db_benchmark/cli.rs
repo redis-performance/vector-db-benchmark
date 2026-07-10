@@ -92,6 +92,12 @@ pub struct Args {
     #[arg(long)]
     pub describe: Option<String>,
 
+    /// Instead of benchmarking, render a QPS-vs-precision trade-off chart (SVG)
+    /// from existing `*-summary.json` files in results/, filtered by --engines
+    /// and --datasets. One colored series per engine. Value is the output path.
+    #[arg(long, value_name = "OUTPUT.svg")]
+    pub plot: Option<String>,
+
     /// Show detailed information when using --describe
     #[arg(long, short)]
     pub verbose: bool,
