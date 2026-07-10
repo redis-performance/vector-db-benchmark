@@ -1346,8 +1346,7 @@
     "schema": {
       "tenant": "keyword"
     },
-    "vector_count": 1000000,
-    "description": "Multi-tenancy: many tenants share ONE index; every query is scoped to a single tenant via an exact keyword match on the `tenant` field (schema tenant:keyword), with recall measured against the nearest neighbours WITHIN that tenant only. Analogous to upstream qdrant/vector-db-benchmark random-768-*-tenants. NOTE: locally-generated dataset — no public download link yet (follow-up); the multi-tenancy engine path is exercised end-to-end by the tenancy integration tests (tests/common write_tenant_project + test_binary_{redis,valkey}_tenancy)."
+    "description": "Multi-tenancy: many tenants share ONE index; every query is scoped to a single tenant via an exact keyword match on the `tenant` field (schema tenant:keyword), with recall measured against the nearest neighbours WITHIN that tenant only. Analogous to upstream qdrant/vector-db-benchmark random-768-*-tenants. NOTE: locally-generated placeholder — no public download link yet (follow-up), so selecting this name without local files errors by design; the multi-tenancy engine path is exercised end-to-end by the tenancy integration tests (tests/common write_tenant_project + test_binary_{redis,valkey}_tenancy)."
   },
   {
     "name": "cohere-768-1M",

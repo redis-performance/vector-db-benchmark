@@ -187,6 +187,7 @@ fn write_filter_project(
         dataset_name,
         engine_configs_json,
         dim,
+        N_QUERIES,
         schema,
         payload_for,
         move |_q| condition.clone(),
@@ -202,10 +203,12 @@ fn write_filter_project(
 ///
 /// `matching_docs` is reported as the MINIMUM per-query match count, so the
 /// caller's `matching_docs >= top` sanity check bounds the smallest tenant.
+#[allow(clippy::too_many_arguments)]
 fn write_filter_project_multi(
     dataset_name: &str,
     engine_configs_json: &str,
     dim: usize,
+    n_queries: usize,
     schema: serde_json::Value,
     payload_for: impl Fn(usize) -> serde_json::Value,
     condition_for: impl Fn(usize) -> serde_json::Value,
@@ -215,7 +218,7 @@ fn write_filter_project_multi(
     let gen_vec =
         |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
     let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
-    let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..n_queries).map(|_| gen_vec(&mut rng)).collect();
 
     let l2 = |a: &[f32], b: &[f32]| -> f64 {
         a.iter()
@@ -287,7 +290,7 @@ fn write_filter_project_multi(
     .unwrap();
 
     // Smallest per-query match count (bounds the smallest tenant).
-    let matching_docs = (0..N_QUERIES)
+    let matching_docs = (0..n_queries)
         .map(|q_idx| (0..N_DOCS).filter(|id| matches_for(q_idx, *id)).count())
         .min()
         .unwrap_or(0);
@@ -425,10 +428,13 @@ pub fn write_tenant_project(
     engine_configs_json: &str,
     dim: usize,
 ) -> FilterProject {
+    // One query per tenant (N_TENANTS queries) so EVERY tenant label — including
+    // the two-digit ones — is exercised as a query scope, not just as documents.
     write_filter_project_multi(
         dataset_name,
         engine_configs_json,
         dim,
+        N_TENANTS,
         serde_json::json!({ "tenant": "keyword" }),
         |id| serde_json::json!({ "tenant": tenant_for(id) }),
         |q| {

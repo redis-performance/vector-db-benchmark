@@ -1953,11 +1953,13 @@ fn test_binary_redis_datetime() {
 ///
 /// STRONGER than the other filter recall tests: the ground truth is tenant-local,
 /// so a cross-tenant document that leaked into a result cannot count toward recall
-/// AND displaces a correct neighbour. We therefore assert (a) mean recall >= 0.9
-/// and (b) EVERY per-query recall >= 0.9 — i.e. no single tenant leaked or was
-/// mis-scoped. (The saved result JSON records per-query recalls but not the raw
-/// returned ids, so the per-query recall floor is the strongest available
-/// tenant-isolation check without changing engine result serialization.)
+/// AND displaces a correct neighbour. Search is exact (ef=400 over ~16 docs/tenant)
+/// and there is one query per tenant, so a correct engine scores EXACTLY 1.0 on
+/// every query. We therefore assert (a) mean recall == 1.0 and (b) EVERY per-query
+/// recall == 1.0 — any single leaked or mis-scoped tenant fails. (The saved result
+/// JSON records per-query recalls but not the raw returned ids, so the exact
+/// per-query recall is the strongest available tenant-isolation check without
+/// changing engine result serialization.)
 #[test]
 fn test_binary_redis_tenancy() {
     wait_for_redis();
@@ -1996,16 +1998,20 @@ fn test_binary_redis_tenancy() {
         "redis tenancy mean recall={:.3} per-query={:?}",
         recall, per_query
     );
+    // Search here is exact (ef=400 over ~16 docs/tenant), so a correct engine
+    // scores 1.0. Assert EXACT per-query recall: the ground truth is tenant-local,
+    // so a single leaked cross-tenant doc displaces a correct neighbour and drops
+    // recall below 1.0 — the strongest isolation check without id-level result
+    // serialization.
     assert!(
-        recall >= 0.9,
-        "redis tenancy mean recall {:.3} < 0.9",
+        recall > 0.999,
+        "redis tenancy mean recall {:.4} != 1.0 — cross-tenant leakage or mis-scope?",
         recall
     );
-    // Tenant isolation: no single tenant may leak / be mis-scoped.
     for (q, r) in per_query.iter().enumerate() {
         assert!(
-            *r >= 0.9,
-            "redis tenancy query {} recall {:.3} < 0.9 — cross-tenant leakage?",
+            *r > 0.999,
+            "redis tenancy query {} recall {:.4} != 1.0 — cross-tenant leakage?",
             q,
             r
         );
