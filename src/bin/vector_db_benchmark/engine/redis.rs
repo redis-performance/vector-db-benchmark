@@ -1171,7 +1171,9 @@ fn ft_search_knn(
         }
     }
 
-    let response: Vec<redis::Value> = cmd
+    // Query the raw Value (not Vec<Value>) so both a RESP2 array and a RESP3 map
+    // deserialize; parse_ft_search_response dispatches on the shape.
+    let response: redis::Value = cmd
         .query(conn)
         .map_err(|e| format!("FT.SEARCH error: {}", e))?;
 
@@ -1180,26 +1182,31 @@ fn ft_search_knn(
 
 /// Parse FT.SEARCH response into (id, score) pairs.
 /// Response format: [total_count, doc_id, [field_values...], doc_id, [field_values...], ...]
-fn parse_ft_search_response(response: &[redis::Value]) -> Result<Vec<(i64, f64)>, String> {
-    let mut results = Vec::new();
-    if response.is_empty() {
-        return Ok(results);
+/// Parse an FT.SEARCH reply under EITHER protocol:
+/// - RESP2: a flat array `[count, id, fields, id, fields, ...]`
+/// - RESP3: a map `{ results: [ { id, extra_attributes: { vector_score, .. }, .. } ], .. }`
+///
+/// The engine connects with RESP2 by default, but a caller can negotiate RESP3
+/// (e.g. `REDIS_URI=redis://host/?protocol=resp3`), which returns a completely
+/// different shape. Handling both keeps recall correct regardless of protocol.
+fn parse_ft_search_response(response: &redis::Value) -> Result<Vec<(i64, f64)>, String> {
+    match response {
+        redis::Value::Array(items) => Ok(parse_ft_search_resp2(items)),
+        redis::Value::Map(pairs) => Ok(parse_ft_search_resp3(pairs)),
+        // Nil (no index/empty) or any unexpected shape → no hits.
+        _ => Ok(Vec::new()),
     }
+}
 
-    // First element is total count
+/// RESP2 flat array: `[count, id, fields, id, fields, ...]`.
+fn parse_ft_search_resp2(response: &[redis::Value]) -> Vec<(i64, f64)> {
+    let mut results = Vec::new();
+    // First element is total count.
     let mut i = 1;
     while i < response.len() {
-        // doc_id
-        let id = match &response[i] {
-            redis::Value::BulkString(data) => {
-                String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0)
-            }
-            redis::Value::Int(n) => *n,
-            _ => 0,
-        };
+        let id = value_as_i64(&response[i]);
         i += 1;
 
-        // field values array
         if i < response.len() {
             let score = match &response[i] {
                 redis::Value::Array(fields) => extract_vector_score(fields),
@@ -1209,8 +1216,67 @@ fn parse_ft_search_response(response: &[redis::Value]) -> Result<Vec<(i64, f64)>
             i += 1;
         }
     }
+    results
+}
 
-    Ok(results)
+/// RESP3 map: top-level map with a `results` array; each result is a map with an
+/// `id` and an `extra_attributes` map carrying `vector_score`.
+fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f64)> {
+    let docs = match pairs
+        .iter()
+        .find(|(k, _)| value_as_string(k).as_deref() == Some("results"))
+        .map(|(_, v)| v)
+    {
+        Some(redis::Value::Array(docs)) => docs.as_slice(),
+        _ => return Vec::new(),
+    };
+
+    let mut out = Vec::with_capacity(docs.len());
+    for doc in docs {
+        let redis::Value::Map(fields) = doc else {
+            continue;
+        };
+        let mut id = 0i64;
+        let mut score = 0.0f64;
+        for (k, v) in fields {
+            match value_as_string(k).as_deref() {
+                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()).unwrap_or(0),
+                Some("extra_attributes") => {
+                    if let redis::Value::Map(attrs) = v {
+                        for (ak, av) in attrs {
+                            if value_as_string(ak).as_deref() == Some("vector_score") {
+                                score = value_as_string(av)
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push((id, score));
+    }
+    out
+}
+
+/// Best-effort string view of a RESP value (BulkString/SimpleString).
+fn value_as_string(v: &redis::Value) -> Option<String> {
+    match v {
+        redis::Value::BulkString(b) => Some(String::from_utf8_lossy(b).into_owned()),
+        redis::Value::SimpleString(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Parse a RESP value as an i64 doc id (bulk/simple string or integer).
+fn value_as_i64(v: &redis::Value) -> i64 {
+    match v {
+        redis::Value::BulkString(data) => String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0),
+        redis::Value::Int(n) => *n,
+        redis::Value::SimpleString(s) => s.parse().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// Extract vector_score from field values array
@@ -1967,23 +2033,59 @@ mod tests {
     }
 
     #[test]
-    fn parse_ft_search_response_reads_id_score_pairs() {
+    fn parse_ft_search_response_resp2_reads_id_score_pairs() {
         // RESP2 FT.SEARCH shape: [count, id1, fields1, id2, fields2, ...]
-        let resp = vec![
+        let resp = Value::Array(vec![
             Value::Int(2),
             bulk("7"),
             Value::Array(vec![bulk("vector_score"), bulk("0.25")]),
             Value::Int(42),
             Value::Array(vec![bulk("vector_score"), bulk("1.5")]),
-        ];
+        ]);
+        let hits = parse_ft_search_response(&resp).unwrap();
+        assert_eq!(hits, vec![(7, 0.25), (42, 1.5)]);
+    }
+
+    #[test]
+    fn parse_ft_search_response_resp3_map_reads_results() {
+        // RESP3 FT.SEARCH shape: a map whose `results` is an array of per-doc
+        // maps with `id` + `extra_attributes` (carrying vector_score).
+        let doc = |id: &str, score: &str| {
+            Value::Map(vec![
+                (bulk("id"), bulk(id)),
+                (
+                    bulk("extra_attributes"),
+                    Value::Map(vec![(bulk("vector_score"), bulk(score))]),
+                ),
+                (bulk("values"), Value::Array(vec![])),
+            ])
+        };
+        let resp = Value::Map(vec![
+            (bulk("attributes"), Value::Array(vec![])),
+            (
+                bulk("results"),
+                Value::Array(vec![doc("7", "0.25"), doc("42", "1.5")]),
+            ),
+            (bulk("total_results"), Value::Int(2)),
+        ]);
         let hits = parse_ft_search_response(&resp).unwrap();
         assert_eq!(hits, vec![(7, 0.25), (42, 1.5)]);
     }
 
     #[test]
     fn parse_ft_search_response_empty_and_unknown_variants() {
-        assert_eq!(parse_ft_search_response(&[]).unwrap(), vec![]);
-        let resp = vec![Value::Int(1), Value::Nil, Value::Nil];
+        assert_eq!(
+            parse_ft_search_response(&Value::Array(vec![])).unwrap(),
+            vec![]
+        );
+        assert_eq!(parse_ft_search_response(&Value::Nil).unwrap(), vec![]);
+        // RESP3 map with no `results` key → no hits.
+        assert_eq!(
+            parse_ft_search_response(&Value::Map(vec![(bulk("total_results"), Value::Int(0))]))
+                .unwrap(),
+            vec![]
+        );
+        let resp = Value::Array(vec![Value::Int(1), Value::Nil, Value::Nil]);
         assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(0, 0.0)]);
     }
 

@@ -1838,3 +1838,46 @@ fn test_binary_redis_match_any() {
     println!("redis match_any recall={:.3}", recall);
     assert!(recall >= 0.9, "redis match_any recall {:.3} < 0.9", recall);
 }
+
+/// Same filtered (`match_any`) search as above, but forces the **RESP3** protocol
+/// via `REDIS_URI=…?protocol=resp3`. RESP3 returns FT.SEARCH results as a map
+/// (`{results:[{id, extra_attributes:{vector_score}}]}`) rather than the RESP2
+/// flat array, so this exercises the RESP3 branch of the response parser
+/// end-to-end. Recall must match the RESP2 path.
+#[test]
+fn test_binary_redis_match_any_resp3() {
+    wait_for_redis();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "redis-ma-r3", "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test-r3",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let resp3_uri = format!("redis://localhost:{}/?protocol=resp3", TEST_PORT);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "redis-ma-r3",
+            "match-any-test-r3",
+            "localhost",
+            &[("REDIS_URI", &resp3_uri)],
+        ),
+        "redis match_any (RESP3) run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "redis-ma-r3");
+    println!("redis match_any RESP3 recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "redis RESP3 match_any recall {:.3} < 0.9 — RESP3 FT.SEARCH parsing broken?",
+        recall
+    );
+}
