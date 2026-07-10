@@ -1913,4 +1913,77 @@ mod tests {
         let (q, _) = parse_conditions(&cond).unwrap();
         assert!(q.contains("@color:{red}"), "q={}", q);
     }
+
+    // ── redis::Value response parsing ──────────────────────────────────────
+    // These guard the manual RESP-array parsing (the surface most exposed to a
+    // redis-crate upgrade / RESP2-vs-RESP3 change).
+    use super::{extract_vector_score, parse_ft_search_response, redis_value_to_json};
+    use redis::Value;
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn parse_ft_search_response_reads_id_score_pairs() {
+        // RESP2 FT.SEARCH shape: [count, id1, fields1, id2, fields2, ...]
+        let resp = vec![
+            Value::Int(2),
+            bulk("7"),
+            Value::Array(vec![bulk("vector_score"), bulk("0.25")]),
+            Value::Int(42), // id may also arrive as an integer
+            Value::Array(vec![bulk("vector_score"), bulk("1.5")]),
+        ];
+        let hits = parse_ft_search_response(&resp).unwrap();
+        assert_eq!(hits, vec![(7, 0.25), (42, 1.5)]);
+    }
+
+    #[test]
+    fn parse_ft_search_response_empty_and_unknown_variants() {
+        assert_eq!(parse_ft_search_response(&[]).unwrap(), vec![]);
+        // A non-string/int id falls back to 0; a non-array field block → score 0.
+        let resp = vec![Value::Int(1), Value::Nil, Value::Nil];
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(0, 0.0)]);
+    }
+
+    #[test]
+    fn extract_vector_score_finds_field_or_defaults_zero() {
+        let fields = vec![
+            bulk("__key"),
+            bulk("doc:1"),
+            bulk("vector_score"),
+            bulk("0.75"),
+        ];
+        assert!((extract_vector_score(&fields) - 0.75).abs() < 1e-9);
+        // Missing field → 0.0
+        assert_eq!(extract_vector_score(&[bulk("other"), bulk("x")]), 0.0);
+    }
+
+    #[test]
+    fn redis_value_to_json_covers_scalars_arrays_maps_and_fallthrough() {
+        assert_eq!(redis_value_to_json(&Value::Nil), serde_json::Value::Null);
+        assert_eq!(redis_value_to_json(&Value::Int(5)), serde_json::json!(5));
+        assert_eq!(
+            redis_value_to_json(&Value::Boolean(true)),
+            serde_json::json!(true)
+        );
+        assert_eq!(redis_value_to_json(&bulk("hi")), serde_json::json!("hi"));
+        assert_eq!(
+            redis_value_to_json(&Value::Array(vec![Value::Int(1), bulk("a")])),
+            serde_json::json!([1, "a"])
+        );
+        assert_eq!(
+            redis_value_to_json(&Value::Map(vec![(bulk("k"), Value::Int(9))])),
+            serde_json::json!({"k": 9})
+        );
+        // Non-exhaustive/other variants (e.g. Okay) must not panic and must not be
+        // silently dropped — they debug-format to a non-empty string rather than
+        // vanish. (The exact string is a redis-crate impl detail, so don't pin it.)
+        let okay = redis_value_to_json(&Value::Okay);
+        assert!(
+            okay.as_str().map(|s| !s.is_empty()).unwrap_or(false),
+            "Okay should map to a non-empty JSON string, got {:?}",
+            okay
+        );
+    }
 }

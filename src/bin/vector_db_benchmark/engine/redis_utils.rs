@@ -97,3 +97,38 @@ pub fn check_commandstats(
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_failed_calls;
+
+    #[test]
+    fn parses_failed_calls_and_uppercases_command() {
+        let info = "cmdstat_FT.SEARCH:calls=10,usec=1234,failed_calls=3\r\n\
+                    cmdstat_hset:calls=100,usec=50,rejected_calls=0,failed_calls=0\r\n";
+        let m = parse_failed_calls(info);
+        assert_eq!(m.get("FT.SEARCH"), Some(&3));
+        // lowercase `cmdstat_hset` → command name uppercased to HSET
+        assert_eq!(m.get("HSET"), Some(&0));
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn skips_lines_without_colon_or_failed_calls() {
+        // Header lines, blank lines, and stat lines with no failed_calls field
+        // must be ignored rather than producing spurious/zero entries.
+        let info = "# Commandstats\r\n\r\ncmdstat_ping:calls=1,usec=1\r\n";
+        let m = parse_failed_calls(info);
+        assert!(m.is_empty(), "got {:?}", m);
+    }
+
+    #[test]
+    fn handles_missing_cmdstat_prefix_and_bad_number() {
+        // A line without the `cmdstat_` prefix keeps its name as-is (uppercased);
+        // an unparseable failed_calls value is skipped.
+        let info = "FT.CREATE:failed_calls=2\r\ncmdstat_bad:failed_calls=notanumber";
+        let m = parse_failed_calls(info);
+        assert_eq!(m.get("FT.CREATE"), Some(&2));
+        assert!(!m.contains_key("BAD"));
+    }
+}

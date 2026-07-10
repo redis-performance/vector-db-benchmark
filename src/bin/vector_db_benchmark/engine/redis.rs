@@ -1955,4 +1955,55 @@ mod tests {
         let bytes = encode_vector("UINT8", &[0.0, 255.0, 300.0, -5.0, 12.6]);
         assert_eq!(bytes, vec![0, 255, 255, 0, 13]);
     }
+
+    // ── redis::Value (RESP FT.SEARCH) response parsing ─────────────────────
+    // Guards the manual RESP-array parsing against a redis-crate / RESP2-vs-RESP3
+    // change (the surface most exposed by the redis-rs 0.27 → 1.x upgrade).
+    use super::{extract_vector_score, parse_ft_search_response, redis_value_to_json};
+    use redis::Value;
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn parse_ft_search_response_reads_id_score_pairs() {
+        // RESP2 FT.SEARCH shape: [count, id1, fields1, id2, fields2, ...]
+        let resp = vec![
+            Value::Int(2),
+            bulk("7"),
+            Value::Array(vec![bulk("vector_score"), bulk("0.25")]),
+            Value::Int(42),
+            Value::Array(vec![bulk("vector_score"), bulk("1.5")]),
+        ];
+        let hits = parse_ft_search_response(&resp).unwrap();
+        assert_eq!(hits, vec![(7, 0.25), (42, 1.5)]);
+    }
+
+    #[test]
+    fn parse_ft_search_response_empty_and_unknown_variants() {
+        assert_eq!(parse_ft_search_response(&[]).unwrap(), vec![]);
+        let resp = vec![Value::Int(1), Value::Nil, Value::Nil];
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(0, 0.0)]);
+    }
+
+    #[test]
+    fn extract_vector_score_finds_field_or_defaults_zero() {
+        let fields = vec![bulk("vector_score"), bulk("0.75")];
+        assert!((extract_vector_score(&fields) - 0.75).abs() < 1e-9);
+        assert_eq!(extract_vector_score(&[bulk("other"), bulk("x")]), 0.0);
+    }
+
+    #[test]
+    fn redis_value_to_json_covers_scalars_and_fallthrough() {
+        assert_eq!(redis_value_to_json(&Value::Int(5)), serde_json::json!(5));
+        assert_eq!(redis_value_to_json(&bulk("hi")), serde_json::json!("hi"));
+        assert_eq!(
+            redis_value_to_json(&Value::Array(vec![Value::Int(1), bulk("a")])),
+            serde_json::json!([1, "a"])
+        );
+        // Non-exhaustive/other variant → non-empty JSON string, never dropped.
+        let okay = redis_value_to_json(&Value::Okay);
+        assert!(okay.as_str().map(|s| !s.is_empty()).unwrap_or(false));
+    }
 }
