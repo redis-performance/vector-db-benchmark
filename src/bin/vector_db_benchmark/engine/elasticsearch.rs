@@ -346,15 +346,30 @@ impl ElasticsearchEngine {
             .rt
             .block_on(submit.json())
             .map_err(|e| format!("Force merge submit parse failed: {}", e))?;
-        let task_id = body
-            .get("task")
-            .and_then(|t| t.as_str())
-            .ok_or_else(|| format!("Force merge: no task id in response: {}", body))?
-            .to_string();
-        println!("Force merge task {} submitted; polling until complete...", task_id);
+        let task_id = match body.get("task").and_then(|t| t.as_str()) {
+            Some(t) => t.to_string(),
+            // No task id => the merge completed inline (tiny index). Done.
+            None => {
+                println!("Force merge completed inline (no task id).");
+                return self.wait_for_cluster_health();
+            }
+        };
 
-        // Poll up to ~3h (2160 * 5s); a large HNSW single-segment merge is slow.
-        let max_polls = 2160;
+        // Poll only for a BOUNDED budget. Single-segment force-merge of a large
+        // HNSW index can take many hours — impractical to wait for. If the merge
+        // doesn't finish in the budget, CANCEL it (so it stops competing with
+        // the search phase for CPU) and proceed to search on the current,
+        // partially-merged segment state. A slow/failed merge must never abort
+        // the whole experiment. Budget is env-tunable (default 1800s = 30 min).
+        let budget_secs: u64 = std::env::var("ELASTIC_FORCEMERGE_BUDGET_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
+        let max_polls = budget_secs / 5;
+        println!(
+            "Force merge task {} submitted; polling up to {}s...",
+            task_id, budget_secs
+        );
         for i in 0..max_polls {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let poll = self.rt.block_on(
@@ -375,21 +390,34 @@ impl ElasticsearchEngine {
             };
             if tb.get("completed").and_then(|c| c.as_bool()).unwrap_or(false) {
                 if let Some(err) = tb.get("error") {
-                    return Err(format!("Force merge task failed: {}", err));
+                    // A merge error is non-fatal — warn and search anyway.
+                    println!("WARN: force merge task {} reported error ({}); proceeding.", task_id, err);
+                } else {
+                    println!("Force merge task {} completed after ~{}s.", task_id, i * 5);
                 }
-                println!("Force merge task {} completed after ~{}s.", task_id, i * 5);
-                self.wait_for_cluster_health()?;
-                return Ok(());
+                return self.wait_for_cluster_health();
             }
             if i % 24 == 0 {
-                println!("Force merge still running (~{}s)...", i * 5);
+                println!(
+                    "Force merge still running (~{}s of {}s budget)...",
+                    i * 5,
+                    budget_secs
+                );
             }
         }
-        Err(format!(
-            "Force merge task {} did not complete within {}s",
-            task_id,
-            max_polls * 5
-        ))
+        // Budget exhausted: cancel the merge and proceed on the current segment
+        // state (NON-FATAL — we still want search results for this config).
+        println!(
+            "WARN: force merge task {} exceeded {}s budget; cancelling and searching on current segment state.",
+            task_id, budget_secs
+        );
+        let _ = self.rt.block_on(
+            self.client
+                .tasks()
+                .cancel(elasticsearch::tasks::TasksCancelParts::TaskId(&task_id))
+                .send(),
+        );
+        self.wait_for_cluster_health()
     }
 
     fn wait_for_cluster_health(&self) -> Result<(), String> {
