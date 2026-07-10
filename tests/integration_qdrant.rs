@@ -690,3 +690,132 @@ fn test_binary_qdrant_match_any() {
     println!("qdrant match_any recall={:.3}", recall);
     assert!(recall >= 0.9, "qdrant match_any recall {:.3} < 0.9", recall);
 }
+
+// ---------------------------------------------------------------------------
+// Quantization coverage: SCALAR (int8), BINARY, and PRODUCT quantization all
+// run end-to-end through the real CLI against live qdrant on the SAME dataset.
+//
+// Quantization is LOSSY, so we use a realistic dimensionality (dim=64) and
+// enable `rescore:true` + generous `oversampling` in search_params: the
+// quantized index picks an oversampled candidate set, then qdrant re-ranks it
+// against the FULL-PRECISION vectors. With rescore on, recall recovers to a
+// high floor — a broken quantization arm (bad enum, wrong config) would make
+// create_collection error out (run fails) or collapse recall well below it.
+// ---------------------------------------------------------------------------
+
+/// The one shared dataset (data vectors + queries + brute-force ground truth)
+/// that every quantization mode is run against.
+struct QuantDataset {
+    vectors: Vec<Vec<f32>>,
+    queries: Vec<Vec<f32>>,
+    neighbors: Vec<Vec<i64>>,
+    dim: usize,
+}
+
+/// Run one quantization config end-to-end and return the reported recall.
+/// `quantization_config` is the `collection_params` quantization object;
+/// `oversampling` tunes the rescore candidate depth for that mode.
+fn run_quantization_mode(
+    engine_name: &str,
+    dataset: &str,
+    quantization_config: serde_json::Value,
+    oversampling: f64,
+    data: &QuantDataset,
+) -> f64 {
+    let configs = serde_json::json!([{
+        "name": engine_name, "engine": "qdrant",
+        "connection_params": {"timeout": 120}, "collection_params": {
+            "timeout": 120,
+            "quantization_config": quantization_config,
+        },
+        "search_params": [{"parallel": 1, "search_params": {
+            "hnsw_ef": 256,
+            "quantization": {"rescore": true, "oversampling": oversampling}
+        }}],
+        "upload_params": {"parallel": 1, "batch_size": 256}
+    }]);
+    let root = write_dense_project(
+        dataset,
+        &serde_json::to_string(&configs).unwrap(),
+        &data.vectors,
+        &data.queries,
+        &data.neighbors,
+        data.dim,
+    );
+    assert!(
+        run_qdrant_binary(&root, engine_name, dataset),
+        "{engine_name} run failed (quantized collection did not build/search)"
+    );
+    read_precision(&root, engine_name)
+}
+
+/// End-to-end SCALAR / BINARY / PRODUCT quantization coverage on one shared
+/// dataset. Each mode must build its quantized collection, search with rescore,
+/// and clear a recall floor tuned against live qdrant.
+#[test]
+fn test_binary_qdrant_quantization_modes() {
+    wait_for_qdrant();
+
+    // Lossy quantization needs real dimensionality to behave (dim=8 is
+    // meaningless). 64-d gaussian data + a 1000-doc corpus is enough that the
+    // quantized index has non-trivial work, while rescore recovers recall.
+    let dim = 64;
+    let (_ids, vectors) = generate_test_vectors(1000, dim);
+    // DISTINCT query vectors (NOT copies of stored points) so quantization loss
+    // actually matters: an exact-copy query is trivially recoverable even by a
+    // broken index, which would make the recall floor meaningless.
+    let (_qids, queries) = generate_test_vectors(20, dim);
+    let top = 10;
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors_l2(q, &vectors, top))
+        .collect();
+    let data = QuantDataset {
+        vectors,
+        queries,
+        neighbors,
+        dim,
+    };
+
+    // SCALAR int8: rescore recovers near-exact recall with modest oversampling.
+    let sq = run_quantization_mode(
+        "qdrant-quant-sq",
+        "quant-sq",
+        serde_json::json!({"scalar": {"type": "int8", "always_ram": true}}),
+        4.0,
+        &data,
+    );
+    println!("qdrant scalar(int8) quantization recall={sq:.3}");
+
+    // PRODUCT x16: coarser than scalar, still recovers well under rescore.
+    let pq = run_quantization_mode(
+        "qdrant-quant-pq",
+        "quant-pq",
+        serde_json::json!({"product": {"compression": "x16", "always_ram": true}}),
+        4.0,
+        &data,
+    );
+    println!("qdrant product(x16) quantization recall={pq:.3}");
+
+    // BINARY: 1-bit-per-dim is the lossiest mode, so on undifferentiated
+    // gaussian data the binary index needs the highest oversampling to surface
+    // the true neighbours into the rescore candidate set. With oversampling=8
+    // it still recovers ~0.99 recall against live qdrant.
+    let bq = run_quantization_mode(
+        "qdrant-quant-bq",
+        "quant-bq",
+        serde_json::json!({"binary": {"always_ram": true}}),
+        8.0,
+        &data,
+    );
+    println!("qdrant binary quantization recall={bq:.3}");
+
+    // Floors tuned against live qdrant. Observed recall (20 distinct queries,
+    // dim=64, 1000 docs, rescore on): scalar=1.000, product=1.000,
+    // binary=0.990-0.995 across repeated runs. All floors set to 0.9 — a
+    // meaningful bar (a broken quantization arm fails create_collection or
+    // collapses recall) with a comfortable margin on the noisiest (binary) mode.
+    assert!(sq >= 0.9, "scalar(int8) quantization recall {sq:.3} < 0.9");
+    assert!(pq >= 0.9, "product(x16) quantization recall {pq:.3} < 0.9");
+    assert!(bq >= 0.9, "binary quantization recall {bq:.3} < 0.9");
+}

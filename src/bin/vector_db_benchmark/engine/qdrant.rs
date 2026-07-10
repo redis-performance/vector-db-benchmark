@@ -12,12 +12,13 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use qdrant_client::qdrant::quantization_config::Quantization;
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
-    BinaryQuantization, Condition, CreateCollectionBuilder, DatetimeRange, DeleteCollectionBuilder,
-    Distance, FieldType, Filter, Fusion, HnswConfigDiff, MaxOptimizationThreads, NamedVectors,
-    OptimizersConfigDiff, PointStruct, PrefetchQueryBuilder, QuantizationSearchParams,
-    QuantizationType, Query, QueryPointsBuilder, ScalarQuantization,
-    SearchParams as QdrantSearchParams, SparseVectorParamsBuilder, SparseVectorsConfigBuilder,
-    Timestamp, Vector, VectorInput, VectorParamsBuilder, VectorsConfig, VectorsConfigBuilder,
+    BinaryQuantization, CompressionRatio, Condition, CreateCollectionBuilder, DatetimeRange,
+    DeleteCollectionBuilder, Distance, FieldType, Filter, Fusion, HnswConfigDiff,
+    MaxOptimizationThreads, NamedVectors, OptimizersConfigDiff, PointStruct, PrefetchQueryBuilder,
+    ProductQuantization, QuantizationSearchParams, QuantizationType, Query, QueryPointsBuilder,
+    ScalarQuantization, SearchParams as QdrantSearchParams, SparseVectorParamsBuilder,
+    SparseVectorsConfigBuilder, Timestamp, Vector, VectorInput, VectorParamsBuilder, VectorsConfig,
+    VectorsConfigBuilder,
 };
 use qdrant_client::{Payload, Qdrant};
 
@@ -278,6 +279,19 @@ impl QdrantEngine {
                     r#type: qtype.into(),
                     quantile: s.get("quantile").and_then(|v| v.as_f64()).map(|v| v as f32),
                     always_ram: s.get("always_ram").and_then(|v| v.as_bool()),
+                }))
+            } else if let Some(p) = q.get("product") {
+                let compression = match p.get("compression").and_then(|v| v.as_str()) {
+                    Some(s) => parse_compression_ratio(s)?,
+                    None => {
+                        return Err(
+                            "Product quantization requires a `compression` value".to_string()
+                        )
+                    }
+                };
+                Some(Quantization::Product(ProductQuantization {
+                    compression: compression.into(),
+                    always_ram: p.get("always_ram").and_then(|v| v.as_bool()),
                 }))
             } else {
                 q.get("binary").map(|b| {
@@ -782,6 +796,23 @@ fn parse_rfc3339_timestamp(s: &str) -> Option<Timestamp> {
         seconds: dt.timestamp(),
         nanos: dt.timestamp_subsec_nanos() as i32,
     })
+}
+
+/// Map a `quantization_config.product.compression` JSON string to Qdrant's
+/// `CompressionRatio` enum. Accepts the lowercase ProtoBuf names `"x4".."x64"`
+/// (matching the config-file style); returns a clear `Err` on anything else.
+fn parse_compression_ratio(s: &str) -> Result<CompressionRatio, String> {
+    match s {
+        "x4" => Ok(CompressionRatio::X4),
+        "x8" => Ok(CompressionRatio::X8),
+        "x16" => Ok(CompressionRatio::X16),
+        "x32" => Ok(CompressionRatio::X32),
+        "x64" => Ok(CompressionRatio::X64),
+        other => Err(format!(
+            "Unsupported product quantization compression: {} (expected one of x4, x8, x16, x32, x64)",
+            other
+        )),
+    }
 }
 
 fn build_qdrant_filter(
@@ -1368,8 +1399,10 @@ fn parse_qdrant_metrics(text: &str) -> serde_json::Map<String, serde_json::Value
 
 #[cfg(test)]
 mod tests {
-    use super::{build_qdrant_filter, parse_qdrant_metrics, parse_rfc3339_timestamp};
-    use qdrant_client::qdrant::{condition::ConditionOneOf, FieldCondition};
+    use super::{
+        build_qdrant_filter, parse_compression_ratio, parse_qdrant_metrics, parse_rfc3339_timestamp,
+    };
+    use qdrant_client::qdrant::{condition::ConditionOneOf, CompressionRatio, FieldCondition};
     use serde_json::json;
 
     fn field_condition(c: &qdrant_client::qdrant::Condition) -> FieldCondition {
@@ -1377,6 +1410,28 @@ mod tests {
             ConditionOneOf::Field(fc) => fc,
             other => panic!("expected FieldCondition, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_product_compression_ratio() {
+        assert_eq!(parse_compression_ratio("x4").unwrap(), CompressionRatio::X4);
+        assert_eq!(parse_compression_ratio("x8").unwrap(), CompressionRatio::X8);
+        assert_eq!(
+            parse_compression_ratio("x16").unwrap(),
+            CompressionRatio::X16
+        );
+        assert_eq!(
+            parse_compression_ratio("x32").unwrap(),
+            CompressionRatio::X32
+        );
+        assert_eq!(
+            parse_compression_ratio("x64").unwrap(),
+            CompressionRatio::X64
+        );
+        // Unknown / wrongly-cased values must error, not silently default.
+        assert!(parse_compression_ratio("x128").is_err());
+        assert!(parse_compression_ratio("X16").is_err());
+        assert!(parse_compression_ratio("").is_err());
     }
 
     #[test]
