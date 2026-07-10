@@ -18,7 +18,7 @@
 //!
 //! Reference: <https://github.com/valkey-io/valkey-glide/issues/828>
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -46,6 +46,18 @@ pub struct ValkeyEngineConfig {
     pub batch_size: usize,
     pub parallel: usize,
     pub skip_vector_index: bool,
+    /// Schema fields declared `datetime`: their ISO-8601 payload values are
+    /// converted to epoch seconds at HSET time so the NUMERIC index/range
+    /// filters match. Populated in `configure()`. `Arc` so per-thread config
+    /// clones share one set.
+    pub datetime_fields: Arc<HashSet<String>>,
+    /// Schema fields declared `text`. Valkey Search has no TEXT field type, so
+    /// full-text is DEGRADED to a whitespace-tokenised multi-value TAG: on upload
+    /// the text is split on whitespace and stored as a `;`-joined TAG set, and a
+    /// `{"match":{"text":"word"}}` query becomes a single-token TAG match. This
+    /// supports single-term full-text matching (any doc containing the term); it
+    /// does NOT support phrase / multi-term full-text queries.
+    pub text_tag_fields: Arc<HashSet<String>>,
 }
 
 pub struct ValkeyEngine {
@@ -111,6 +123,8 @@ impl ValkeyEngine {
                 batch_size,
                 parallel,
                 skip_vector_index: engine_config.skip_vector_index,
+                datetime_fields: Arc::new(HashSet::new()),
+                text_tag_fields: Arc::new(HashSet::new()),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             commandstats_baseline: None,
@@ -131,7 +145,13 @@ impl ValkeyEngine {
             _ => String::new(),
         };
 
-        let url = format!("redis://{}{}:{}/", auth_part, host, port);
+        let url = format!(
+            "redis://{}{}:{}/{}",
+            auth_part,
+            host,
+            port,
+            valkey_url_suffix()
+        );
         let client = redis::Client::open(url.as_str()).map_err(|e| e.to_string())?;
         let conn = client.get_connection().map_err(|e| e.to_string())?;
         // Safety timeout: prevents indefinite hangs from pipeline stalls.
@@ -192,14 +212,25 @@ impl ValkeyEngine {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
                     match ft {
-                        "keyword" => {
+                        // keyword/uuid/bool are exact-match TAG fields.
+                        "keyword" | "uuid" | "bool" => {
                             cmd.arg(field_name).arg("TAG").arg("SEPARATOR").arg(";");
                         }
                         "int" | "float" => {
                             cmd.arg(field_name).arg("NUMERIC");
                         }
-                        // Valkey Search does not support TEXT or GEO field types;
-                        // skip them silently.
+                        // datetime is stored as epoch seconds (see upload) → NUMERIC.
+                        "datetime" => {
+                            cmd.arg(field_name).arg("NUMERIC");
+                        }
+                        // Valkey Search has no TEXT field type: DEGRADE full-text
+                        // to a whitespace-tokenised multi-value TAG (see
+                        // ValkeyEngineConfig::text_tag_fields). Single-term
+                        // full-text matching works; phrase queries do not.
+                        "text" => {
+                            cmd.arg(field_name).arg("TAG").arg("SEPARATOR").arg(";");
+                        }
+                        // Valkey Search does not support GEO; skip silently.
                         _ => {}
                     }
                 }
@@ -512,7 +543,13 @@ impl ValkeyEngine {
                         (None, Some(p)) => format!(":{}@", p),
                         _ => String::new(),
                     };
-                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
+                    let url = format!(
+                        "redis://{}{}:{}/{}",
+                        auth_part,
+                        host,
+                        port,
+                        valkey_url_suffix()
+                    );
                     let client = match redis::Client::open(url.as_str()) {
                         Ok(c) => c,
                         Err(_) => return,
@@ -695,7 +732,10 @@ fn upload_batch_internal(
             for (k, v) in &meta.fields {
                 match v {
                     MetadataValue::String(s) => {
-                        fields.push((k.as_bytes().to_vec(), s.as_bytes().to_vec()));
+                        fields.push((
+                            k.as_bytes().to_vec(),
+                            encode_string_field(config, k, s).into_bytes(),
+                        ));
                     }
                     MetadataValue::Labels(labels) => {
                         fields.push((k.as_bytes().to_vec(), labels.join(";").into_bytes()));
@@ -831,9 +871,11 @@ fn build_filter(
 ) -> Option<ParsedFilter> {
     match condition_type {
         "match" => {
-            // match_any (IN-list) takes precedence over exact {value}.
+            // match_any (IN-list) > exact {value} > full-text {text}.
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 Some(build_match_any_filter(field_name, any, counter))
+            } else if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+                Some(build_text_filter(field_name, text))
             } else {
                 build_exact_match_filter(field_name, criteria, counter)
             }
@@ -875,17 +917,19 @@ fn build_match_any_filter(
     any: &[serde_json::Value],
     counter: &mut usize,
 ) -> ParsedFilter {
-    let mut params = HashMap::new();
+    // All values on the match_any path are inlined (valkey supports neither
+    // $param in TAG {…} nor in NUMERIC […]); params stays empty.
+    let params = HashMap::new();
 
     if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
         let clauses: Vec<String> = any
             .iter()
             .filter_map(|v| v.as_i64())
             .map(|i| {
-                let p = format!("{}_{}", field_name, counter);
+                // Inline the literal — valkey rejects `$param` inside NUMERIC
+                // brackets (see build_range_filter).
                 *counter += 1;
-                params.insert(p.clone(), FilterParamValue::Int(i));
-                format!("@{}:[${} ${}]", field_name, p, p)
+                format!("@{}:[{} {}]", field_name, i, i)
             })
             .collect();
         return (format!("({})", clauses.join(" | ")), params);
@@ -918,31 +962,63 @@ fn build_exact_match_filter(
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
     let value = criteria.get("value")?;
-    let param_name = format!("{}_{}", field_name, counter);
+    // Bump the counter for param-name parity with sibling filters — every value
+    // here is INLINED: Valkey Search supports neither `$param` inside TAG {…} nor
+    // inside NUMERIC […] brackets, so params are never used on this path.
     *counter += 1;
+    let params = HashMap::new();
 
-    let mut params = HashMap::new();
-
-    if let Some(s) = value.as_str() {
-        // Valkey Search does not support $param references inside TAG {…}
-        // brackets, and does NOT require backslash-escaping of spaces, dots,
-        // or other special characters. Values are passed raw inside {…}.
-        Some((format!("@{}:{{{}}}", field_name, s), params))
-    } else if let Some(i) = value.as_i64() {
-        params.insert(param_name.clone(), FilterParamValue::Int(i));
-        Some((
-            format!("@{}:[${} ${}]", field_name, param_name, param_name),
-            params,
-        ))
-    } else if let Some(f) = value.as_f64() {
-        params.insert(param_name.clone(), FilterParamValue::Float(f));
-        Some((
-            format!("@{}:[${} ${}]", field_name, param_name, param_name),
-            params,
-        ))
-    } else {
-        None
+    // bool → inlined TAG match on the literal "true"/"false" token (no escaping
+    // needed). Checked before numeric arms (serde bools are neither i64/f64/str).
+    if let Some(b) = value.as_bool() {
+        let token = if b { "true" } else { "false" };
+        return Some((format!("@{}:{{{}}}", field_name, token), params));
     }
+    // keyword/uuid string → inlined, ESCAPED TAG match (must escape TAG
+    // metacharacters `| { } ( ) space \` exactly like build_match_any_filter /
+    // build_text_filter, else a value with those chars yields a malformed query
+    // or the wrong document set).
+    if let Some(s) = value.as_str() {
+        return Some((
+            format!("@{}:{{{}}}", field_name, escape_tag_value(s)),
+            params,
+        ));
+    }
+    // numeric (int/float) → inlined NUMERIC point range `[v v]` (literals, not
+    // `$param`, for the same reason as build_range_filter).
+    if let Some(lit) = number_literal(value) {
+        return Some((format!("@{}:[{} {}]", field_name, lit, lit), params));
+    }
+    None
+}
+
+/// Build a full-text filter — DEGRADED on Valkey Search (no TEXT field type) to
+/// a single-token TAG match. The `text` field is stored as a whitespace-
+/// tokenised TAG multi-value on upload (see `tokenize_text_to_tag`), so a
+/// single-term query `@field:{term}` matches any doc whose text contains that
+/// term. The term is inlined (Valkey rejects `$param` inside TAG `{…}`) and its
+/// TAG-structural characters escaped. A blank query degrades to a never-match
+/// contradiction rather than an empty clause (which would run kNN over ALL docs).
+///
+/// LIMITATION: only single-term matching is supported; a multi-word `text` query
+/// is treated as one TAG token and will generally not match (phrase / multi-term
+/// full-text is not available on Valkey Search).
+fn build_text_filter(field_name: &str, text: &str) -> ParsedFilter {
+    let params = HashMap::new();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        let never = "__text_never_match__";
+        return (
+            format!("(@{0}:{{{1}}} -@{0}:{{{1}}})", field_name, never),
+            params,
+        );
+    }
+    // Use the first whitespace token; escape TAG-structural chars.
+    let term = trimmed.split_whitespace().next().unwrap_or(trimmed);
+    (
+        format!("@{}:{{{}}}", field_name, escape_tag_value(term)),
+        params,
+    )
 }
 
 fn build_range_filter(
@@ -950,38 +1026,51 @@ fn build_range_filter(
     criteria: &serde_json::Value,
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
-    let param_prefix = format!("{}_{}", field_name, counter);
+    // Bump the counter for param-name parity with sibling filters even though the
+    // bounds are INLINED: Valkey Search does not substitute `$param` inside
+    // NUMERIC range brackets (`@f:[$p +inf]` → "Invalid number"); only literal
+    // numbers are accepted there (unlike RediSearch). Bounds are numbers /
+    // epochs from trusted dataset conditions, so inlining is safe.
     *counter += 1;
 
-    let mut params = HashMap::new();
     let mut clauses = Vec::new();
-
-    if let Some(lt) = criteria.get("lt") {
-        let pname = format!("{}_lt", param_prefix);
-        insert_number_param(&mut params, &pname, lt);
-        clauses.push(format!("@{}:[-inf (${}]", field_name, pname));
+    if let Some(v) = criteria.get("lt").and_then(number_literal) {
+        clauses.push(format!("@{}:[-inf ({}]", field_name, v));
     }
-    if let Some(gt) = criteria.get("gt") {
-        let pname = format!("{}_gt", param_prefix);
-        insert_number_param(&mut params, &pname, gt);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    if let Some(v) = criteria.get("gt").and_then(number_literal) {
+        clauses.push(format!("@{}:[({} +inf]", field_name, v));
     }
-    if let Some(lte) = criteria.get("lte") {
-        let pname = format!("{}_lte", param_prefix);
-        insert_number_param(&mut params, &pname, lte);
-        clauses.push(format!("@{}:[-inf ${}]", field_name, pname));
+    if let Some(v) = criteria.get("lte").and_then(number_literal) {
+        clauses.push(format!("@{}:[-inf {}]", field_name, v));
     }
-    if let Some(gte) = criteria.get("gte") {
-        let pname = format!("{}_gte", param_prefix);
-        insert_number_param(&mut params, &pname, gte);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    if let Some(v) = criteria.get("gte").and_then(number_literal) {
+        clauses.push(format!("@{}:[{} +inf]", field_name, v));
     }
 
     if clauses.is_empty() {
         return None;
     }
+    Some((clauses.join(" "), HashMap::new()))
+}
 
-    Some((clauses.join(" "), params))
+/// Render a JSON number / ISO-8601 datetime / numeric string as a literal NUMERIC
+/// bound (integers verbatim, ISO-8601 → epoch seconds, numeric strings as-is).
+fn number_literal(value: &serde_json::Value) -> Option<String> {
+    if let Some(i) = value.as_i64() {
+        Some(i.to_string())
+    } else if let Some(f) = value.as_f64() {
+        Some(format!("{}", f))
+    } else if let Some(s) = value.as_str() {
+        if let Some(epoch) = datetime_to_epoch_secs(s) {
+            Some((epoch as i64).to_string())
+        } else if s.parse::<f64>().is_ok() {
+            Some(s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 fn build_geo_filter(
@@ -1011,6 +1100,10 @@ fn build_geo_filter(
     ))
 }
 
+/// Insert a JSON number (or ISO-8601 datetime / numeric string) as a NUMERIC
+/// bound: integers/floats verbatim, ISO-8601 strings as epoch **seconds**, and
+/// other numeric strings parsed as f64 (so both ISO and raw-epoch datetime
+/// bounds work — upstream is ISO-only).
 fn insert_number_param(
     params: &mut HashMap<String, FilterParamValue>,
     name: &str,
@@ -1020,6 +1113,18 @@ fn insert_number_param(
         params.insert(name.to_string(), FilterParamValue::Int(i));
     } else if let Some(f) = value.as_f64() {
         params.insert(name.to_string(), FilterParamValue::Float(f));
+    } else if let Some(s) = value.as_str() {
+        if let Some(epoch) = datetime_to_epoch_secs(s) {
+            // Epoch is whole seconds — emit as an integer param. Valkey Search's
+            // NUMERIC-range param substitution rejects the float rendering
+            // ("Invalid number"), whereas integer params are accepted (as the
+            // match_any NUMERIC path already relies on).
+            params.insert(name.to_string(), FilterParamValue::Int(epoch as i64));
+        } else if let Ok(i) = s.parse::<i64>() {
+            params.insert(name.to_string(), FilterParamValue::Int(i));
+        } else if let Ok(f) = s.parse::<f64>() {
+            params.insert(name.to_string(), FilterParamValue::Float(f));
+        }
     }
 }
 
@@ -1174,28 +1279,36 @@ fn ft_search_knn(
         }
     }
 
-    let response: Vec<redis::Value> = cmd
+    // Query the raw Value (not Vec<Value>) so both a RESP2 array and a RESP3 map
+    // deserialize; parse_ft_search_response dispatches on the shape.
+    let response: redis::Value = cmd
         .query(conn)
         .map_err(|e| format!("FT.SEARCH error: {}", e))?;
 
     parse_ft_search_response(&response)
 }
 
-fn parse_ft_search_response(response: &[redis::Value]) -> Result<Vec<(i64, f64)>, String> {
-    let mut results = Vec::new();
-    if response.is_empty() {
-        return Ok(results);
+/// Parse an FT.SEARCH reply under EITHER protocol:
+/// - RESP2: a flat array `[count, id, fields, id, fields, ...]`
+/// - RESP3: a map `{ results: [ { id, extra_attributes: { vector_score, .. }, .. } ], .. }`
+///
+/// The engine connects with RESP2 by default, but a caller can negotiate RESP3
+/// (e.g. `REDIS_URI=redis://host/?protocol=resp3`), which returns a different
+/// shape. Handling both keeps recall correct regardless of protocol.
+fn parse_ft_search_response(response: &redis::Value) -> Result<Vec<(i64, f64)>, String> {
+    match response {
+        redis::Value::Array(items) => Ok(parse_ft_search_resp2(items)),
+        redis::Value::Map(pairs) => Ok(parse_ft_search_resp3(pairs)),
+        _ => Ok(Vec::new()),
     }
+}
 
+/// RESP2 flat array: `[count, id, fields, id, fields, ...]`.
+fn parse_ft_search_resp2(response: &[redis::Value]) -> Vec<(i64, f64)> {
+    let mut results = Vec::new();
     let mut i = 1;
     while i < response.len() {
-        let id = match &response[i] {
-            redis::Value::BulkString(data) => {
-                String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0)
-            }
-            redis::Value::Int(n) => *n,
-            _ => 0,
-        };
+        let id = value_as_i64(&response[i]);
         i += 1;
 
         if i < response.len() {
@@ -1207,8 +1320,81 @@ fn parse_ft_search_response(response: &[redis::Value]) -> Result<Vec<(i64, f64)>
             i += 1;
         }
     }
+    results
+}
 
-    Ok(results)
+/// RESP3 map: top-level map with a `results` array; each result is a map with an
+/// `id` and an `extra_attributes` map carrying `vector_score`.
+fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f64)> {
+    let docs = match pairs
+        .iter()
+        .find(|(k, _)| value_as_string(k).as_deref() == Some("results"))
+        .map(|(_, v)| v)
+    {
+        Some(redis::Value::Array(docs)) => docs.as_slice(),
+        _ => return Vec::new(),
+    };
+
+    let mut out = Vec::with_capacity(docs.len());
+    for doc in docs {
+        let redis::Value::Map(fields) = doc else {
+            continue;
+        };
+        let mut id = 0i64;
+        let mut score = 0.0f64;
+        for (k, v) in fields {
+            match value_as_string(k).as_deref() {
+                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()).unwrap_or(0),
+                Some("extra_attributes") => {
+                    if let redis::Value::Map(attrs) = v {
+                        for (ak, av) in attrs {
+                            if value_as_string(ak).as_deref() == Some("vector_score") {
+                                score = value_as_string(av)
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0.0);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push((id, score));
+    }
+    out
+}
+
+/// Best-effort string view of a RESP value (BulkString/SimpleString).
+fn value_as_string(v: &redis::Value) -> Option<String> {
+    match v {
+        redis::Value::BulkString(b) => Some(String::from_utf8_lossy(b).into_owned()),
+        redis::Value::SimpleString(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Parse a RESP value as an i64 doc id (bulk/simple string or integer).
+fn value_as_i64(v: &redis::Value) -> i64 {
+    match v {
+        redis::Value::BulkString(data) => String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0),
+        redis::Value::Int(n) => *n,
+        redis::Value::SimpleString(s) => s.parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Optional connection-URL suffix so Valkey can be benchmarked over RESP3
+/// (`VALKEY_PROTOCOL=resp3`). Defaults to RESP2 (empty suffix). The FT.SEARCH
+/// response parser handles both shapes, so recall is identical either way.
+fn valkey_url_suffix() -> &'static str {
+    if std::env::var("VALKEY_PROTOCOL")
+        .map(|v| v.eq_ignore_ascii_case("resp3"))
+        .unwrap_or(false)
+    {
+        "?protocol=resp3"
+    } else {
+        ""
+    }
 }
 
 fn extract_vector_score(fields: &[redis::Value]) -> f64 {
@@ -1261,7 +1447,7 @@ fn hset_single(
         for (k, v) in &meta.fields {
             match v {
                 MetadataValue::String(s) => {
-                    cmd.arg(k.as_str()).arg(s.as_str());
+                    cmd.arg(k.as_str()).arg(encode_string_field(config, k, s));
                 }
                 MetadataValue::Labels(labels) => {
                     cmd.arg(k.as_str()).arg(labels.join(";"));
@@ -1278,6 +1464,77 @@ fn hset_single(
         .map_err(|e| format!("HSET update error: {}", e))
 }
 
+/// Format a string metadata field for storage on Valkey.
+///
+/// - `datetime` fields: ISO-8601 → epoch seconds (already-numeric epochs pass
+///   through), for the NUMERIC index.
+/// - `text` fields: whitespace-tokenised into a `;`-joined TAG multi-value so a
+///   single-term full-text query can match via TAG (Valkey has no TEXT type).
+/// - everything else: verbatim.
+fn encode_string_field(config: &ValkeyEngineConfig, key: &str, value: &str) -> String {
+    if config.datetime_fields.contains(key) {
+        if let Some(epoch) = datetime_to_epoch_secs(value) {
+            return (epoch as i64).to_string();
+        }
+        return value.to_string();
+    }
+    if config.text_tag_fields.contains(key) {
+        return tokenize_text_to_tag(value);
+    }
+    value.to_string()
+}
+
+/// Split text on whitespace and re-join with `;` (the TAG separator), escaping
+/// any literal `;` inside a token, so it can be indexed as a multi-value TAG.
+fn tokenize_text_to_tag(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| w.replace(';', "\\;"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// Collect schema fields typed `datetime` and `text` (in that order).
+fn schema_transform_fields(dataset: &Dataset) -> (HashSet<String>, HashSet<String>) {
+    let mut datetime_fields = HashSet::new();
+    let mut text_fields = HashSet::new();
+    if let Some(schema) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+        for (field, ty) in schema {
+            match ty.as_str() {
+                Some("datetime") => {
+                    datetime_fields.insert(field.clone());
+                }
+                Some("text") => {
+                    text_fields.insert(field.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    (datetime_fields, text_fields)
+}
+
+/// Parse an ISO-8601 / RFC 3339 timestamp to epoch **seconds**. Returns `None`
+/// for non-datetime strings (e.g. a numeric-epoch string), letting callers fall
+/// back to numeric handling.
+fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
+    // RFC-3339 (with offset / `Z`) first.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp() as f64);
+    }
+    // Naive datetime (no offset) → interpret as UTC. Accepts both the `T` and
+    // space separators (upstream tolerates these; RFC-3339 does not).
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc().timestamp() as f64);
+        }
+    }
+    // Date only → midnight UTC.
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp() as f64);
+    }
+    None
+}
+
 // ── Engine trait implementation ──────────────────────────────────────────
 
 impl Engine for ValkeyEngine {
@@ -1291,6 +1548,12 @@ impl Engine for ValkeyEngine {
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
         let mut conn = self.get_connection()?;
+
+        // Record datetime fields (ISO → epoch seconds) and text fields (degraded
+        // to whitespace-tokenised TAG) so upload can transform their values.
+        let (dt_fields, text_fields) = schema_transform_fields(dataset);
+        self.config.datetime_fields = Arc::new(dt_fields);
+        self.config.text_tag_fields = Arc::new(text_fields);
 
         if self.config.skip_vector_index {
             println!("Skipping vector index (filter-only mode)");
@@ -1343,11 +1606,18 @@ impl Engine for ValkeyEngine {
             vectors.len() as f64 / upload_time
         );
 
+        // Include the index-build wait in total_time for cross-engine
+        // comparability (mirrors mongodb; matches v0's post_upload() timing).
         let expected = vectors.len();
+        let index_start = Instant::now();
         self.wait_for_indexing(expected)?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
-        println!("Total time: {:.3}s", total_time);
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         // Verify no HSET failures occurred during upload
         let mut conn = self.get_connection()?;
@@ -1407,18 +1677,22 @@ impl Engine for ValkeyEngine {
             queries.len()
         };
 
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
+        // contention in the timed loop (see redis.rs::search). Metrics are
+        // order-independent so results are unchanged; work counter uses Relaxed.
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let host = self.host.clone();
                 let port = self.port;
@@ -1427,15 +1701,16 @@ impl Engine for ValkeyEngine {
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+
                     let auth = std::env::var("VALKEY_AUTH").ok();
                     let user = std::env::var("VALKEY_USER").ok();
                     let auth_part = match (&user, &auth) {
@@ -1443,18 +1718,24 @@ impl Engine for ValkeyEngine {
                         (None, Some(p)) => format!(":{}@", p),
                         _ => String::new(),
                     };
-                    let url = format!("redis://{}{}:{}/", auth_part, host, port);
+                    let url = format!(
+                        "redis://{}{}:{}/{}",
+                        auth_part,
+                        host,
+                        port,
+                        valkey_url_suffix()
+                    );
                     let client = match redis::Client::open(url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
 
                     loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
@@ -1483,7 +1764,6 @@ impl Engine for ValkeyEngine {
 
                         match &results {
                             Ok(result_ids) => {
-                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = crate::metrics::compute_metrics(
@@ -1491,10 +1771,11 @@ impl Engine for ValkeyEngine {
                                     &neighbors[idx],
                                     top,
                                 );
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                t.push(query_time);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1502,18 +1783,22 @@ impl Engine for ValkeyEngine {
                         }
                         pb.inc(1);
                     }
-                });
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrr_vals.extend(mr);
+                ndcg_vals.extend(nd);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
-
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrr_vals = mrrs.lock().unwrap();
-        let ndcg_vals = ndcgs.lock().unwrap();
 
         if times.is_empty() {
             return Err("No searches completed".to_string());
@@ -1530,7 +1815,7 @@ impl Engine for ValkeyEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -1804,6 +2089,8 @@ impl Engine for ValkeyEngine {
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
+            requested_queries: num_to_run,
+            failed_queries: num_to_run.saturating_sub(times.len()),
             parallel,
             update_count,
             update_rps,
@@ -1813,6 +2100,7 @@ impl Engine for ValkeyEngine {
             update_p99_time: update_p99,
             update_latencies: Some(u_times.to_vec()),
             update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
+            ..Default::default()
         })
     }
 
@@ -1851,7 +2139,7 @@ impl Engine for ValkeyEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_conditions, FilterParamValue};
+    use super::parse_conditions;
 
     #[test]
     fn match_any_string_list_emits_inlined_tag_or() {
@@ -1864,13 +2152,11 @@ mod tests {
     #[test]
     fn match_any_int_list_emits_numeric_or() {
         let cond = serde_json::json!({"and":[{"size":{"match":{"any":[1,2]}}}]});
+        // Valkey inlines NUMERIC literals (no $param inside […] brackets).
         let (q, params) = parse_conditions(&cond).unwrap();
-        assert!(q.contains("@size:[$size_0 $size_0]"), "q={}", q);
-        assert!(q.contains("@size:[$size_1 $size_1]"), "q={}", q);
-        assert!(matches!(
-            params.get("size_0"),
-            Some(FilterParamValue::Int(1))
-        ));
+        assert!(q.contains("@size:[1 1]"), "q={}", q);
+        assert!(q.contains("@size:[2 2]"), "q={}", q);
+        assert!(!params.keys().any(|k| k.starts_with("size_")), "no params");
     }
 
     #[test]
@@ -1893,5 +2179,259 @@ mod tests {
         let cond = serde_json::json!({"and":[{"color":{"match":{"value":"red"}}}]});
         let (q, _) = parse_conditions(&cond).unwrap();
         assert!(q.contains("@color:{red}"), "q={}", q);
+    }
+
+    // ── New filter datatypes: bool / uuid / full-text / datetime ───────────
+    use super::{
+        datetime_to_epoch_secs, encode_string_field, tokenize_text_to_tag, ValkeyEngineConfig,
+    };
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn match_bool_emits_inlined_tag_token() {
+        let cond = serde_json::json!({"and":[{"flag":{"match":{"value": true}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@flag:{true}"), "q={}", q);
+        let cond = serde_json::json!({"and":[{"flag":{"match":{"value": false}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@flag:{false}"), "q={}", q);
+    }
+
+    #[test]
+    fn match_uuid_value_inlined_tag() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cond = serde_json::json!({"and":[{"uid":{"match":{"value": uuid}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains(&format!("@uid:{{{}}}", uuid)), "q={}", q);
+    }
+
+    #[test]
+    fn match_text_degrades_to_single_token_tag() {
+        // Full-text on Valkey → single-term TAG match (degraded).
+        let cond = serde_json::json!({"and":[{"body":{"match":{"text": "quick"}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@body:{quick}"), "q={}", q);
+    }
+
+    #[test]
+    fn match_text_empty_is_never_match() {
+        let cond = serde_json::json!({"and":[{"body":{"match":{"text": "  "}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("-@body:{"), "expected never-match, q={}", q);
+    }
+
+    #[test]
+    fn range_datetime_iso_bounds_inline_epoch() {
+        let cond = serde_json::json!({"and":[{"ts":{"range":{
+            "gte": "2021-01-01T00:00:00Z",
+            "lt":  "2022-01-01T00:00:00Z"
+        }}}]});
+        // 2021-01-01T00:00:00Z == 1609459200, 2022-01-01T00:00:00Z == 1640995200.
+        // Valkey doesn't substitute $param in NUMERIC brackets → bounds are
+        // inlined as integer epochs; no params emitted for the range.
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@ts:[1609459200 +inf]"), "q={}", q);
+        assert!(q.contains("@ts:[-inf (1640995200]"), "q={}", q);
+        assert!(
+            !params.keys().any(|k| k.starts_with("ts_")),
+            "no range params"
+        );
+    }
+
+    #[test]
+    fn range_datetime_numeric_epoch_bounds_inline() {
+        let cond = serde_json::json!({"and":[{"ts":{"range":{"gte": 1609459200}}}]});
+        let (q, _params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@ts:[1609459200 +inf]"), "q={}", q);
+    }
+
+    #[test]
+    fn range_gt_is_exclusive_gte_inclusive() {
+        // gt must be exclusive `[(v +inf]`; gte inclusive `[v +inf]`.
+        let gt = parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gt": 5}}}]}))
+            .unwrap()
+            .0;
+        assert!(gt.contains("@n:[(5 +inf]"), "gt not exclusive: {}", gt);
+        let gte = parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": 5}}}]}))
+            .unwrap()
+            .0;
+        assert!(
+            gte.contains("@n:[5 +inf]") && !gte.contains("(5"),
+            "gte: {}",
+            gte
+        );
+    }
+
+    #[test]
+    fn datetime_tolerates_naive_and_date_only() {
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01 00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+    }
+
+    #[test]
+    fn two_field_and_combines_both_clauses() {
+        let cond = serde_json::json!({"and":[
+            {"color":{"match":{"value":"red"}}},
+            {"size":{"range":{"gte": 10}}}
+        ]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{red}"), "q={}", q);
+        assert!(q.contains("@size:[10 +inf]"), "q={}", q);
+    }
+
+    #[test]
+    fn datetime_to_epoch_secs_parses_rfc3339_and_rejects_plain() {
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00Z").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert!(datetime_to_epoch_secs("not-a-date").is_none());
+        assert!(datetime_to_epoch_secs("1609459200").is_none());
+    }
+
+    #[test]
+    fn tokenize_text_to_tag_splits_on_whitespace() {
+        assert_eq!(tokenize_text_to_tag("the sky is blue"), "the;sky;is;blue");
+        assert_eq!(tokenize_text_to_tag("solo"), "solo");
+    }
+
+    #[test]
+    fn encode_string_field_transforms_datetime_and_text() {
+        let mut dt = HashSet::new();
+        dt.insert("ts".to_string());
+        let mut txt = HashSet::new();
+        txt.insert("body".to_string());
+        let cfg = ValkeyEngineConfig {
+            m: 16,
+            ef_construction: 128,
+            data_type: "FLOAT32".to_string(),
+            algorithm: "hnsw".to_string(),
+            batch_size: 1,
+            parallel: 1,
+            skip_vector_index: false,
+            datetime_fields: Arc::new(dt),
+            text_tag_fields: Arc::new(txt),
+        };
+        assert_eq!(
+            encode_string_field(&cfg, "ts", "2021-01-01T00:00:00Z"),
+            "1609459200"
+        );
+        assert_eq!(encode_string_field(&cfg, "ts", "1609459200"), "1609459200");
+        assert_eq!(
+            encode_string_field(&cfg, "body", "the sky is blue"),
+            "the;sky;is;blue"
+        );
+        assert_eq!(encode_string_field(&cfg, "color", "red"), "red");
+    }
+
+    // ── redis::Value response parsing ──────────────────────────────────────
+    // These guard the manual RESP-array parsing (the surface most exposed to a
+    // redis-crate upgrade / RESP2-vs-RESP3 change).
+    use super::{extract_vector_score, parse_ft_search_response, redis_value_to_json};
+    use redis::Value;
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn parse_ft_search_response_resp2_reads_id_score_pairs() {
+        // RESP2 FT.SEARCH shape: [count, id1, fields1, id2, fields2, ...]
+        let resp = Value::Array(vec![
+            Value::Int(2),
+            bulk("7"),
+            Value::Array(vec![bulk("vector_score"), bulk("0.25")]),
+            Value::Int(42), // id may also arrive as an integer
+            Value::Array(vec![bulk("vector_score"), bulk("1.5")]),
+        ]);
+        let hits = parse_ft_search_response(&resp).unwrap();
+        assert_eq!(hits, vec![(7, 0.25), (42, 1.5)]);
+    }
+
+    #[test]
+    fn parse_ft_search_response_resp3_map_reads_results() {
+        // RESP3 FT.SEARCH shape: map with a `results` array of per-doc maps.
+        let doc = |id: &str, score: &str| {
+            Value::Map(vec![
+                (bulk("id"), bulk(id)),
+                (
+                    bulk("extra_attributes"),
+                    Value::Map(vec![(bulk("vector_score"), bulk(score))]),
+                ),
+            ])
+        };
+        let resp = Value::Map(vec![
+            (
+                bulk("results"),
+                Value::Array(vec![doc("7", "0.25"), doc("42", "1.5")]),
+            ),
+            (bulk("total_results"), Value::Int(2)),
+        ]);
+        let hits = parse_ft_search_response(&resp).unwrap();
+        assert_eq!(hits, vec![(7, 0.25), (42, 1.5)]);
+    }
+
+    #[test]
+    fn parse_ft_search_response_empty_and_unknown_variants() {
+        assert_eq!(
+            parse_ft_search_response(&Value::Array(vec![])).unwrap(),
+            vec![]
+        );
+        assert_eq!(parse_ft_search_response(&Value::Nil).unwrap(), vec![]);
+        // A non-string/int id falls back to 0; a non-array field block → score 0.
+        let resp = Value::Array(vec![Value::Int(1), Value::Nil, Value::Nil]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(0, 0.0)]);
+    }
+
+    #[test]
+    fn extract_vector_score_finds_field_or_defaults_zero() {
+        let fields = vec![
+            bulk("__key"),
+            bulk("doc:1"),
+            bulk("vector_score"),
+            bulk("0.75"),
+        ];
+        assert!((extract_vector_score(&fields) - 0.75).abs() < 1e-9);
+        // Missing field → 0.0
+        assert_eq!(extract_vector_score(&[bulk("other"), bulk("x")]), 0.0);
+    }
+
+    #[test]
+    fn redis_value_to_json_covers_scalars_arrays_maps_and_fallthrough() {
+        assert_eq!(redis_value_to_json(&Value::Nil), serde_json::Value::Null);
+        assert_eq!(redis_value_to_json(&Value::Int(5)), serde_json::json!(5));
+        assert_eq!(
+            redis_value_to_json(&Value::Boolean(true)),
+            serde_json::json!(true)
+        );
+        assert_eq!(redis_value_to_json(&bulk("hi")), serde_json::json!("hi"));
+        assert_eq!(
+            redis_value_to_json(&Value::Array(vec![Value::Int(1), bulk("a")])),
+            serde_json::json!([1, "a"])
+        );
+        assert_eq!(
+            redis_value_to_json(&Value::Map(vec![(bulk("k"), Value::Int(9))])),
+            serde_json::json!({"k": 9})
+        );
+        // Non-exhaustive/other variants (e.g. Okay) must not panic and must not be
+        // silently dropped — they debug-format to a non-empty string rather than
+        // vanish. (The exact string is a redis-crate impl detail, so don't pin it.)
+        let okay = redis_value_to_json(&Value::Okay);
+        assert!(
+            okay.as_str().map(|s| !s.is_empty()).unwrap_or(false),
+            "Okay should map to a non-empty JSON string, got {:?}",
+            okay
+        );
     }
 }

@@ -1066,12 +1066,9 @@ impl Engine for MongoDBEngine {
             queries.len()
         };
 
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
+        // contention in the timed loop (see redis.rs::search). Metrics are
+        // order-independent so results are unchanged; work counter uses Relaxed.
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
@@ -1082,7 +1079,14 @@ impl Engine for MongoDBEngine {
         let collection_name = self.collection_name.clone();
         let index_name = self.index_name.clone();
 
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let uri = uri.clone();
                 let db_name = db_name.clone();
@@ -1091,25 +1095,26 @@ impl Engine for MongoDBEngine {
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+
                     let client = match Client::with_uri_str(&uri) {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
                     let coll = client
                         .database(&db_name)
                         .collection::<Document>(&collection_name);
 
                     loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
@@ -1138,7 +1143,6 @@ impl Engine for MongoDBEngine {
 
                         match results {
                             Ok(result_ids) => {
-                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = crate::metrics::compute_metrics(
@@ -1146,10 +1150,11 @@ impl Engine for MongoDBEngine {
                                     &neighbors[idx],
                                     top,
                                 );
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                t.push(query_time);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1157,22 +1162,26 @@ impl Engine for MongoDBEngine {
                         }
                         pb.inc(1);
                     }
-                });
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrr_vals.extend(mr);
+                ndcg_vals.extend(nd);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrr_vals = mrrs.lock().unwrap();
-        let ndcg_vals = ndcgs.lock().unwrap();
-
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -1436,6 +1445,8 @@ impl Engine for MongoDBEngine {
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
+            requested_queries: num_to_run,
+            failed_queries: num_to_run.saturating_sub(times.len()),
             parallel,
             update_count,
             update_rps,
@@ -1445,6 +1456,7 @@ impl Engine for MongoDBEngine {
             update_p99_time: update_p99,
             update_latencies: Some(u_times.to_vec()),
             update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
+            ..Default::default()
         })
     }
 

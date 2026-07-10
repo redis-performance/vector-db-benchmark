@@ -1707,7 +1707,9 @@ fn test_binary_redis_mixed_benchmark() {
         .query(&mut conn)
         .unwrap();
 
-    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles)
+    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles).
+    // --repetitions 1: this test asserts the exact per-run FT.SEARCH/HSET call
+    // counts, so it must measure a single pass (the default is 3 warm reps).
     let output = Command::new(&bin)
         .args([
             "--engines",
@@ -1718,6 +1720,8 @@ fn test_binary_redis_mixed_benchmark() {
             "localhost",
             "--update-search-ratio",
             "1:5",
+            "--repetitions",
+            "1",
         ])
         .env("REDIS_PORT", TEST_PORT.to_string())
         .current_dir(&project_root)
@@ -1833,4 +1837,183 @@ fn test_binary_redis_match_any() {
     let recall = common::read_recall(&proj.root, "redis-ma");
     println!("redis match_any recall={:.3}", recall);
     assert!(recall >= 0.9, "redis match_any recall {:.3} < 0.9", recall);
+}
+
+/// Same filtered (`match_any`) search as above, but forces the **RESP3** protocol
+/// via `REDIS_URI=…?protocol=resp3`. RESP3 returns FT.SEARCH results as a map
+/// (`{results:[{id, extra_attributes:{vector_score}}]}`) rather than the RESP2
+/// flat array, so this exercises the RESP3 branch of the response parser
+/// end-to-end. Recall must match the RESP2 path.
+#[test]
+fn test_binary_redis_match_any_resp3() {
+    wait_for_redis();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "redis-ma-r3", "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test-r3",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let resp3_uri = format!("redis://localhost:{}/?protocol=resp3", TEST_PORT);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "redis-ma-r3",
+            "match-any-test-r3",
+            "localhost",
+            &[("REDIS_URI", &resp3_uri)],
+        ),
+        "redis match_any (RESP3) run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "redis-ma-r3");
+    println!("redis match_any RESP3 recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "redis RESP3 match_any recall {:.3} < 0.9 — RESP3 FT.SEARCH parsing broken?",
+        recall
+    );
+}
+
+// ── New filter datatypes: bool / uuid / full-text / datetime ────────────────
+//
+// Each drives the real binary against a compound dataset whose queries carry a
+// single filter type, with ground truth brute-forced over only the matching
+// docs — a high recall proves the corresponding filter arm (TAG bool, TAG uuid,
+// TEXT full-text, NUMERIC datetime range) is applied end-to-end.
+
+/// Shared driver: build the project with `build`, run the binary, assert recall.
+fn run_filter_recall_test(
+    name: &str,
+    dataset: &str,
+    build: impl Fn(&str, &str, usize) -> common::FilterProject,
+) {
+    wait_for_redis();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": name, "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = build(dataset, &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            name,
+            dataset,
+            "localhost",
+            &[("REDIS_PORT", &TEST_PORT.to_string())],
+        ),
+        "redis {} run failed",
+        name
+    );
+
+    let recall = common::read_recall(&proj.root, name);
+    println!("redis {} recall={:.3}", name, recall);
+    assert!(recall >= 0.9, "redis {} recall {:.3} < 0.9", name, recall);
+}
+
+#[test]
+fn test_binary_redis_bool() {
+    run_filter_recall_test("redis-bool", "bool-test", common::write_bool_project);
+}
+
+#[test]
+fn test_binary_redis_uuid() {
+    run_filter_recall_test("redis-uuid", "uuid-test", common::write_uuid_project);
+}
+
+#[test]
+fn test_binary_redis_fulltext() {
+    run_filter_recall_test("redis-text", "text-test", common::write_fulltext_project);
+}
+
+#[test]
+fn test_binary_redis_datetime() {
+    run_filter_recall_test("redis-dt", "dt-test", common::write_datetime_project);
+}
+
+/// Multi-tenancy: many tenants share ONE index and every query is scoped to a
+/// single tenant via a keyword-equality filter on a `tenant` field, with ground
+/// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG
+/// filter arm — no new engine code.
+///
+/// STRONGER than the other filter recall tests: the ground truth is tenant-local,
+/// so a cross-tenant document that leaked into a result cannot count toward recall
+/// AND displaces a correct neighbour. Search is exact (ef=400 over ~16 docs/tenant)
+/// and there is one query per tenant, so a correct engine scores EXACTLY 1.0 on
+/// every query. We therefore assert (a) mean recall == 1.0 and (b) EVERY per-query
+/// recall == 1.0 — any single leaked or mis-scoped tenant fails. (The saved result
+/// JSON records per-query recalls but not the raw returned ids, so the exact
+/// per-query recall is the strongest available tenant-isolation check without
+/// changing engine result serialization.)
+#[test]
+fn test_binary_redis_tenancy() {
+    wait_for_redis();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "redis-tenancy", "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_tenant_project(
+        "tenancy-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "each tenant must have >= top docs (smallest tenant has {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "redis-tenancy",
+            "tenancy-test",
+            "localhost",
+            &[("REDIS_PORT", &TEST_PORT.to_string())],
+        ),
+        "redis tenancy run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "redis-tenancy");
+    let per_query = common::read_recalls(&proj.root, "redis-tenancy");
+    println!(
+        "redis tenancy mean recall={:.3} per-query={:?}",
+        recall, per_query
+    );
+    // Search here is exact (ef=400 over ~16 docs/tenant), so a correct engine
+    // scores 1.0. Assert EXACT per-query recall: the ground truth is tenant-local,
+    // so a single leaked cross-tenant doc displaces a correct neighbour and drops
+    // recall below 1.0 — the strongest isolation check without id-level result
+    // serialization.
+    assert!(
+        recall > 0.999,
+        "redis tenancy mean recall {:.4} != 1.0 — cross-tenant leakage or mis-scope?",
+        recall
+    );
+    for (q, r) in per_query.iter().enumerate() {
+        assert!(
+            *r > 0.999,
+            "redis tenancy query {} recall {:.4} != 1.0 — cross-tenant leakage?",
+            q,
+            r
+        );
+    }
 }

@@ -12,12 +12,13 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use qdrant_client::qdrant::quantization_config::Quantization;
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
-    BinaryQuantization, Condition, CreateCollectionBuilder, DatetimeRange, DeleteCollectionBuilder,
-    Distance, FieldType, Filter, HnswConfigDiff, MaxOptimizationThreads, NamedVectors,
-    OptimizersConfigDiff, PointStruct, PrefetchQueryBuilder, QuantizationSearchParams,
-    QuantizationType, QueryPointsBuilder, ScalarQuantization, SearchParams as QdrantSearchParams,
-    SparseVectorParamsBuilder, SparseVectorsConfigBuilder, Timestamp, Vector, VectorInput,
-    VectorParamsBuilder, VectorsConfig,
+    BinaryQuantization, CompressionRatio, Condition, CreateCollectionBuilder, DatetimeRange,
+    DeleteCollectionBuilder, Distance, FieldType, Filter, Fusion, HnswConfigDiff,
+    MaxOptimizationThreads, NamedVectors, OptimizersConfigDiff, PointStruct, PrefetchQueryBuilder,
+    ProductQuantization, QuantizationSearchParams, QuantizationType, Query, QueryPointsBuilder,
+    ScalarQuantization, SearchParams as QdrantSearchParams, SparseVectorParamsBuilder,
+    SparseVectorsConfigBuilder, Timestamp, Vector, VectorInput, VectorParamsBuilder, VectorsConfig,
+    VectorsConfigBuilder,
 };
 use qdrant_client::{Payload, Qdrant};
 
@@ -176,6 +177,9 @@ impl QdrantEngine {
     }
 
     fn create_collection(&self, dataset: &Dataset) -> Result<(), String> {
+        if dataset.is_hybrid() {
+            return self.create_hybrid_collection(dataset);
+        }
         if dataset.is_sparse() {
             return self.create_sparse_collection(dataset);
         }
@@ -224,9 +228,31 @@ impl QdrantEngine {
             create_builder = create_builder.hnsw_config(hnsw_config);
         }
 
-        // Pass through optimizers_config (e.g. the rps-tuned default_segment_number /
-        // max_segment_size / memmap_threshold) — mirrors the python engine, which
-        // forwards collection_params verbatim.
+        // Pass through optimizers_config + quantization_config (shared with the
+        // hybrid create path).
+        create_builder = self.apply_optimizers_and_quantization(create_builder)?;
+
+        self.rt
+            .block_on(self.client.create_collection(create_builder))
+            .map_err(|e| format!("Failed to create collection: {}", e))?;
+
+        // Disable optimization during indexing.
+        self.disable_indexing_optimizers();
+
+        self.create_payload_indexes(dataset);
+
+        Ok(())
+    }
+
+    /// Apply `collection_params.optimizers_config` (rps-tuned segment / memmap
+    /// knobs) and `collection_params.quantization_config` (scalar/binary) to a
+    /// `CreateCollectionBuilder`. Shared verbatim by the dense-only and hybrid
+    /// create paths so the hybrid collection honours the SAME tuning (e.g.
+    /// qdrant-hybrid.json's `memmap_threshold`).
+    fn apply_optimizers_and_quantization(
+        &self,
+        mut create_builder: CreateCollectionBuilder,
+    ) -> Result<CreateCollectionBuilder, String> {
         if let Some(opt) = self.collection_params_extra.get("optimizers_config") {
             let mut diff = OptimizersConfigDiff::default();
             if let Some(v) = opt.get("default_segment_number").and_then(|v| v.as_u64()) {
@@ -241,7 +267,6 @@ impl QdrantEngine {
             create_builder = create_builder.optimizers_config(diff);
         }
 
-        // Pass through quantization_config (sq/bq tuned setups).
         if let Some(q) = self.collection_params_extra.get("quantization_config") {
             let quantization = if let Some(s) = q.get("scalar") {
                 let qtype = match s.get("type").and_then(|v| v.as_str()) {
@@ -255,6 +280,19 @@ impl QdrantEngine {
                     quantile: s.get("quantile").and_then(|v| v.as_f64()).map(|v| v as f32),
                     always_ram: s.get("always_ram").and_then(|v| v.as_bool()),
                 }))
+            } else if let Some(p) = q.get("product") {
+                let compression = match p.get("compression").and_then(|v| v.as_str()) {
+                    Some(s) => parse_compression_ratio(s)?,
+                    None => {
+                        return Err(
+                            "Product quantization requires a `compression` value".to_string()
+                        )
+                    }
+                };
+                Some(Quantization::Product(ProductQuantization {
+                    compression: compression.into(),
+                    always_ram: p.get("always_ram").and_then(|v| v.as_bool()),
+                }))
             } else {
                 q.get("binary").map(|b| {
                     Quantization::Binary(BinaryQuantization {
@@ -267,12 +305,12 @@ impl QdrantEngine {
                 create_builder = create_builder.quantization_config(quantization);
             }
         }
+        Ok(create_builder)
+    }
 
-        self.rt
-            .block_on(self.client.create_collection(create_builder))
-            .map_err(|e| format!("Failed to create collection: {}", e))?;
-
-        // Disable optimization during indexing
+    /// Throttle optimizer threads to 0 during bulk indexing (re-enabled to auto
+    /// by `wait_collection_green`). Shared by the dense and hybrid create paths.
+    fn disable_indexing_optimizers(&self) {
         let _ = self.rt.block_on(
             self.client.update_collection(
                 qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
@@ -286,10 +324,6 @@ impl QdrantEngine {
                     }),
             ),
         );
-
-        self.create_payload_indexes(dataset);
-
-        Ok(())
     }
 
     /// Create Qdrant payload indexes for the dataset's schema fields.
@@ -332,6 +366,119 @@ impl QdrantEngine {
             .map_err(|e| format!("Failed to create sparse collection: {}", e))?;
         self.create_payload_indexes(dataset);
         Ok(())
+    }
+
+    /// Create a HYBRID collection with a named dense vector ("dense") AND a named
+    /// sparse vector ("sparse"), so searches can fuse a dense-vector prefetch and
+    /// a sparse-vector prefetch server-side (RRF). The dense vector carries the
+    /// dataset's distance metric (and HNSW config, if configured); the sparse
+    /// vector uses Qdrant's default sparse index.
+    fn create_hybrid_collection(&self, dataset: &Dataset) -> Result<(), String> {
+        let distance = dataset.distance();
+        let vector_size = dataset.vector_size();
+        let qdrant_distance = match distance.to_lowercase().as_str() {
+            "l2" | "euclidean" => Distance::Euclid,
+            "cosine" | "angular" => Distance::Cosine,
+            "dot" | "ip" => Distance::Dot,
+            other => return Err(format!("Unsupported distance metric for Qdrant: {}", other)),
+        };
+
+        // Named dense vector "dense" (per-vector HNSW config if requested).
+        let mut dense_params = VectorParamsBuilder::new(vector_size as u64, qdrant_distance);
+        if self.hnsw_m.is_some() || self.hnsw_ef_construct.is_some() {
+            let mut hnsw_config = HnswConfigDiff::default();
+            if let Some(m) = self.hnsw_m {
+                hnsw_config.m = Some(m);
+            }
+            if let Some(ef) = self.hnsw_ef_construct {
+                hnsw_config.ef_construct = Some(ef);
+            }
+            dense_params = dense_params.hnsw_config(hnsw_config);
+        }
+        let mut dense_cfg = VectorsConfigBuilder::default();
+        dense_cfg.add_named_vector_params("dense", dense_params);
+
+        // Named sparse vector "sparse" (mirrors create_sparse_collection).
+        let mut sparse_cfg = SparseVectorsConfigBuilder::default();
+        sparse_cfg.add_named_vector_params("sparse", SparseVectorParamsBuilder::default());
+
+        let mut create_builder = CreateCollectionBuilder::new(&self.collection_name)
+            .vectors_config(dense_cfg)
+            .sparse_vectors_config(sparse_cfg);
+        // Honour the SAME optimizers_config / quantization_config tuning as the
+        // dense-only path (finding: hybrid previously dropped e.g. memmap_threshold).
+        create_builder = self.apply_optimizers_and_quantization(create_builder)?;
+
+        self.rt
+            .block_on(self.client.create_collection(create_builder))
+            .map_err(|e| format!("Failed to create hybrid collection: {}", e))?;
+
+        // Throttle optimizer threads during indexing, same as the dense path.
+        self.disable_indexing_optimizers();
+
+        self.create_payload_indexes(dataset);
+        Ok(())
+    }
+
+    /// Upload points carrying BOTH named vectors ("dense" + "sparse"), batched.
+    fn upload_hybrid(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        let normalize = dataset.needs_normalization();
+        let dataset_path = dataset.get_path()?;
+        println!("Reading hybrid dataset from {}...", dataset_path.display());
+        let read_start = Instant::now();
+        let (ids, dense, sparse) = dataset.read_hybrid_data(normalize)?;
+        let read_time = read_start.elapsed().as_secs_f64();
+        println!("Read {} hybrid vectors in {:.3}s", ids.len(), read_time);
+
+        println!("Starting hybrid upload, batch size {}...", self.batch_size);
+        let upload_start = Instant::now();
+        let pb = self.create_progress_bar(ids.len());
+        for start in (0..ids.len()).step_by(self.batch_size) {
+            let end = (start + self.batch_size).min(ids.len());
+            let points: Vec<PointStruct> = (start..end)
+                .map(|i| {
+                    PointStruct::new(
+                        ids[i] as u64,
+                        NamedVectors::default()
+                            .add_vector("dense", dense[i].clone())
+                            .add_vector(
+                                "sparse",
+                                Vector::new_sparse(
+                                    sparse[i].indices.clone(),
+                                    sparse[i].values.clone(),
+                                ),
+                            ),
+                        Payload::new(),
+                    )
+                })
+                .collect();
+            self.rt
+                .block_on(
+                    self.client.upsert_points(
+                        qdrant_client::qdrant::UpsertPointsBuilder::new(
+                            &self.collection_name,
+                            points,
+                        )
+                        .wait(true),
+                    ),
+                )
+                .map_err(|e| format!("Hybrid upsert failed: {}", e))?;
+            pb.inc((end - start) as u64);
+        }
+        pb.finish_with_message("Upload complete");
+        let upload_time = upload_start.elapsed().as_secs_f64();
+        let index_start = Instant::now();
+        self.wait_collection_green()?;
+        let index_time = index_start.elapsed().as_secs_f64();
+
+        Ok(UploadStats {
+            upload_time,
+            total_time: read_time + upload_time + index_time,
+            upload_count: ids.len(),
+            parallel: 1,
+            batch_size: self.batch_size,
+            memory_usage: None,
+        })
     }
 
     /// Upload sparse vectors under the named "sparse" vector, batched.
@@ -378,11 +525,14 @@ impl QdrantEngine {
         }
         pb.finish_with_message("Upload complete");
         let upload_time = upload_start.elapsed().as_secs_f64();
+        // Include the index-build wait in total_time (see upload()).
+        let index_start = Instant::now();
         self.wait_collection_green()?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
         Ok(UploadStats {
             upload_time,
-            total_time: read_time + upload_time,
+            total_time: read_time + upload_time + index_time,
             upload_count: vectors.len(),
             parallel: 1,
             batch_size: self.batch_size,
@@ -648,6 +798,23 @@ fn parse_rfc3339_timestamp(s: &str) -> Option<Timestamp> {
     })
 }
 
+/// Map a `quantization_config.product.compression` JSON string to Qdrant's
+/// `CompressionRatio` enum. Accepts the lowercase ProtoBuf names `"x4".."x64"`
+/// (matching the config-file style); returns a clear `Err` on anything else.
+fn parse_compression_ratio(s: &str) -> Result<CompressionRatio, String> {
+    match s {
+        "x4" => Ok(CompressionRatio::X4),
+        "x8" => Ok(CompressionRatio::X8),
+        "x16" => Ok(CompressionRatio::X16),
+        "x32" => Ok(CompressionRatio::X32),
+        "x64" => Ok(CompressionRatio::X64),
+        other => Err(format!(
+            "Unsupported product quantization compression: {} (expected one of x4, x8, x16, x32, x64)",
+            other
+        )),
+    }
+}
+
 fn build_qdrant_filter(
     field_name: &str,
     condition_type: &str,
@@ -765,6 +932,9 @@ impl Engine for QdrantEngine {
     }
 
     fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        if dataset.is_hybrid() {
+            return self.upload_hybrid(dataset);
+        }
         if dataset.is_sparse() {
             return self.upload_sparse(dataset);
         }
@@ -797,10 +967,18 @@ impl Engine for QdrantEngine {
             vectors.len() as f64 / upload_time
         );
 
-        // Wait for indexing to complete
+        // Wait for indexing to complete. Include this wait in total_time for
+        // cross-engine comparability (mirrors mongodb; matches v0's post_upload()
+        // timing) — the HNSW build is the dominant part of Qdrant ingest cost.
+        let index_start = Instant::now();
         self.wait_collection_green()?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         Ok(UploadStats {
             upload_time,
@@ -870,10 +1048,20 @@ impl Engine for QdrantEngine {
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
 
-        // Dense and sparse queries are read into separate vectors; only one is
-        // populated. Filters/prefetch/quantization apply to the dense path only.
+        // Dense and sparse queries are read into separate vectors. For dense-only
+        // and sparse-only runs exactly one is populated; for HYBRID runs BOTH are
+        // populated (row-aligned) and fused server-side. Filters/prefetch/
+        // quantization apply to the dense-only path.
         let is_sparse = dataset.is_sparse();
-        let (queries, sparse_queries, neighbors, parsed_filters) = if is_sparse {
+        let is_hybrid = dataset.is_hybrid();
+        // Per-prefetch candidate depth for hybrid fusion: reuse the configured
+        // search_params.prefetch.limit if present, else a generous default (>= any
+        // sensible top-k). Larger = better fusion recall, more work.
+        let hybrid_prefetch_limit = prefetch_limit.unwrap_or(50);
+        let (queries, sparse_queries, neighbors, parsed_filters) = if is_hybrid {
+            let (dq, sq, nb) = dataset.read_hybrid_queries()?;
+            (dq, sq, nb, Vec::<Option<Filter>>::new())
+        } else if is_sparse {
             let (sq, nb) = dataset.read_sparse_queries()?;
             (Vec::<Vec<f32>>::new(), sq, nb, Vec::<Option<Filter>>::new())
         } else {
@@ -902,12 +1090,9 @@ impl Engine for QdrantEngine {
             query_count
         };
 
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
+        // contention in the timed loop (see redis.rs::search). Metrics are
+        // order-independent so results are unchanged; work counter uses Relaxed.
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
@@ -919,7 +1104,14 @@ impl Engine for QdrantEngine {
         let timeout = self.timeout;
         let collection_name = self.collection_name.clone();
 
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let grpc_url = grpc_url.clone();
                 let api_key = api_key.clone();
@@ -928,21 +1120,22 @@ impl Engine for QdrantEngine {
                 let sparse_queries = &sparse_queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+
                     let rt = match tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
                     {
                         Ok(rt) => rt,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
 
                     // Per-worker client so each thread has an independent connection.
@@ -957,12 +1150,12 @@ impl Engine for QdrantEngine {
                         Ok(c) => c,
                         Err(e) => {
                             eprintln!("Qdrant worker client build failed: {}", e);
-                            return;
+                            return (t, p, r, mr, nd);
                         }
                     };
 
                     loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
@@ -976,7 +1169,34 @@ impl Engine for QdrantEngine {
                             }
                         });
 
-                        let mut query_builder = if is_sparse {
+                        let mut query_builder = if is_hybrid {
+                            // Hybrid: two prefetches (dense NN + sparse NN) fused
+                            // server-side with reciprocal-rank fusion (RRF). Each
+                            // prefetch pulls `pf_limit` candidates from its own named
+                            // vector; RRF ranks by combined rank. Floor the depth at
+                            // `top` so the fusion pool is never smaller than the
+                            // requested result count (which would understate recall).
+                            let pf_limit = hybrid_prefetch_limit.max(top as u64);
+                            let dense_pf = PrefetchQueryBuilder::default()
+                                .using("dense")
+                                .query(Query::new_nearest(queries[idx].clone()))
+                                .limit(pf_limit)
+                                .build();
+                            let sv = &sparse_queries[idx];
+                            let sparse_pf = PrefetchQueryBuilder::default()
+                                .using("sparse")
+                                .query(VectorInput::new_sparse(
+                                    sv.indices.clone(),
+                                    sv.values.clone(),
+                                ))
+                                .limit(pf_limit)
+                                .build();
+                            QueryPointsBuilder::new(collection_name.clone())
+                                .query(Query::new_fusion(Fusion::Rrf))
+                                .prefetch(vec![dense_pf, sparse_pf])
+                                .limit(top as u64)
+                                .with_payload(false)
+                        } else if is_sparse {
                             let sv = &sparse_queries[idx];
                             QueryPointsBuilder::new(collection_name.clone())
                                 .query(VectorInput::new_sparse(
@@ -1004,7 +1224,7 @@ impl Engine for QdrantEngine {
                             qb
                         };
 
-                        if !is_sparse && prefetch_enabled {
+                        if !is_sparse && !is_hybrid && prefetch_enabled {
                             let mut pf =
                                 PrefetchQueryBuilder::default().query(queries[idx].clone());
                             if let Some(l) = prefetch_limit {
@@ -1026,7 +1246,6 @@ impl Engine for QdrantEngine {
 
                         match result {
                             Ok(response) => {
-                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> = response
                                     .result
                                     .iter()
@@ -1049,10 +1268,11 @@ impl Engine for QdrantEngine {
                                     &neighbors[idx],
                                     top,
                                 );
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                t.push(query_time);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1060,22 +1280,26 @@ impl Engine for QdrantEngine {
                         }
                         pb.inc(1);
                     }
-                });
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrr_vals.extend(mr);
+                ndcg_vals.extend(nd);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrr_vals = mrrs.lock().unwrap();
-        let ndcg_vals = ndcgs.lock().unwrap();
-
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -1175,8 +1399,10 @@ fn parse_qdrant_metrics(text: &str) -> serde_json::Map<String, serde_json::Value
 
 #[cfg(test)]
 mod tests {
-    use super::{build_qdrant_filter, parse_qdrant_metrics, parse_rfc3339_timestamp};
-    use qdrant_client::qdrant::{condition::ConditionOneOf, FieldCondition};
+    use super::{
+        build_qdrant_filter, parse_compression_ratio, parse_qdrant_metrics, parse_rfc3339_timestamp,
+    };
+    use qdrant_client::qdrant::{condition::ConditionOneOf, CompressionRatio, FieldCondition};
     use serde_json::json;
 
     fn field_condition(c: &qdrant_client::qdrant::Condition) -> FieldCondition {
@@ -1184,6 +1410,28 @@ mod tests {
             ConditionOneOf::Field(fc) => fc,
             other => panic!("expected FieldCondition, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_product_compression_ratio() {
+        assert_eq!(parse_compression_ratio("x4").unwrap(), CompressionRatio::X4);
+        assert_eq!(parse_compression_ratio("x8").unwrap(), CompressionRatio::X8);
+        assert_eq!(
+            parse_compression_ratio("x16").unwrap(),
+            CompressionRatio::X16
+        );
+        assert_eq!(
+            parse_compression_ratio("x32").unwrap(),
+            CompressionRatio::X32
+        );
+        assert_eq!(
+            parse_compression_ratio("x64").unwrap(),
+            CompressionRatio::X64
+        );
+        // Unknown / wrongly-cased values must error, not silently default.
+        assert!(parse_compression_ratio("x128").is_err());
+        assert!(parse_compression_ratio("X16").is_err());
+        assert!(parse_compression_ratio("").is_err());
     }
 
     #[test]
