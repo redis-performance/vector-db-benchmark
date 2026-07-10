@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use mongodb::bson::{doc, Document};
 use mongodb::sync::Client;
+
+mod common;
 use rand::Rng;
 
 // ---------------------------------------------------------------------------
@@ -993,4 +995,110 @@ fn test_binary_mongodb_mixed_benchmark() {
 
     drop_test_collection();
     fs::remove_dir_all(&project_root).ok();
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `$in` filter arm.
+#[test]
+fn test_binary_mongodb_match_any() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-ma", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "mongo-ma",
+            "match-any-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+        ),
+        "mongodb match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "mongo-ma");
+    println!("mongodb match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "mongodb match_any recall {:.3} < 0.9",
+        recall
+    );
+}
+
+/// End-to-end `match_any` on the INT `size` field. Proves the numeric `$in`
+/// filter matches natively-stored integers end-to-end. Ground truth is
+/// brute-forced over ONLY the docs whose `size` is in the IN-set (a strict
+/// subset), so an engine that ignores the filter — or that emits an integer
+/// `$in` against string-stored sizes (the HIGH bug) — scores low recall.
+#[test]
+fn test_binary_mongodb_match_any_int() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-ma-int", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_int_project(
+        "match-any-int-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "mongo-ma-int",
+            "match-any-int-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+        ),
+        "mongodb match_any int run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "mongo-ma-int");
+    println!("mongodb match_any INT recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "mongodb match_any int recall {:.3} < 0.9",
+        recall
+    );
 }

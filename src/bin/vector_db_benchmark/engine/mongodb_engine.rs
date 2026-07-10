@@ -3,6 +3,7 @@
 //! Uses the official `mongodb` crate with sync feature.
 //! Supports Atlas Vector Search with HNSW index via `$vectorSearch` aggregation.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -41,6 +42,12 @@ pub struct MongoDBEngine {
     uri: String,
     /// Shared MongoDB client (connection pool)
     client: Client,
+    /// Dataset schema field types (field name -> "int" | "float" | "keyword" |
+    /// "text" | "uuid" | "bool" | ...). Drives native-BSON storage of numeric
+    /// payload fields at ingest so numeric filters (exact/`$in`/range) match
+    /// (mirrors pgvector storing numerics in BIGINT/DOUBLE columns). Populated
+    /// from the dataset schema in `configure`/`upload`/`search_mixed`.
+    schema_types: HashMap<String, String>,
 }
 
 impl MongoDBEngine {
@@ -96,7 +103,26 @@ impl MongoDBEngine {
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             uri,
             client,
+            schema_types: HashMap::new(),
         })
+    }
+
+    /// Extract the field-type map from the dataset schema (`{field: "int"|...}`).
+    /// Stored so ingest can pick a native BSON type per field.
+    fn load_schema_types(&mut self, dataset: &Dataset) {
+        self.schema_types = dataset
+            .config
+            .schema
+            .as_ref()
+            .and_then(|s| s.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(field, ftype)| {
+                        ftype.as_str().map(|t| (field.clone(), t.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     }
 
     /// Filter-only search: run collection.find(filter).limit(top) with no vector search.
@@ -551,6 +577,7 @@ impl MongoDBEngine {
         let uri = self.uri.clone();
         let db_name = self.db_name.clone();
         let collection_name = self.collection_name.clone();
+        let schema_types = &self.schema_types;
 
         std::thread::scope(|s| {
             for _ in 0..self.config.parallel {
@@ -590,6 +617,7 @@ impl MongoDBEngine {
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
                             &metadata[batch_start..batch_end],
+                            schema_types,
                         ) {
                             *error.lock().unwrap() = Some(e);
                             break;
@@ -631,15 +659,58 @@ fn build_uri(host: &str, port: u16) -> String {
     }
 }
 
+/// Convert a parsed metadata value into the BSON we store for it, honoring the
+/// dataset schema field type. Numeric fields (`int`/`float`) are stored as
+/// NATIVE BSON numbers (`Int64`/`Double`) rather than strings so that numeric
+/// filters — exact match, `$in` (match_any), and range (`$gt`/`$lt`) — actually
+/// match, and range comparisons are numeric (not lexicographic). This mirrors
+/// pgvector storing numerics in BIGINT/DOUBLE columns. Everything else
+/// (keyword/text/uuid/bool) stays a `String`, exactly as before.
+///
+/// The metadata reader stringifies every JSON scalar (see
+/// `readers::metadata`), so a numeric field arrives here as `String("1")`; we
+/// parse it back to a number when the schema says the field is numeric. If the
+/// value doesn't parse (defensive), we fall back to storing the string.
+fn metadata_value_to_bson(
+    field: &str,
+    value: &vector_db_benchmark::readers::metadata::MetadataValue,
+    schema_types: &HashMap<String, String>,
+) -> mongodb::bson::Bson {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+    match value {
+        MetadataValue::String(s) => match schema_types.get(field).map(|t| t.as_str()) {
+            Some("int") => s
+                .parse::<i64>()
+                .map(mongodb::bson::Bson::Int64)
+                .unwrap_or_else(|_| mongodb::bson::Bson::String(s.clone())),
+            Some("float") => s
+                .parse::<f64>()
+                .map(mongodb::bson::Bson::Double)
+                .unwrap_or_else(|_| mongodb::bson::Bson::String(s.clone())),
+            _ => mongodb::bson::Bson::String(s.clone()),
+        },
+        MetadataValue::Labels(labels) => {
+            let arr: Vec<mongodb::bson::Bson> = labels
+                .iter()
+                .map(|l| mongodb::bson::Bson::String(l.clone()))
+                .collect();
+            mongodb::bson::Bson::Array(arr)
+        }
+        MetadataValue::Geo { lon, lat } => mongodb::bson::Bson::Document(doc! {
+            "type": "Point",
+            "coordinates": [*lon, *lat],
+        }),
+    }
+}
+
 /// Insert a batch of documents into MongoDB.
 fn insert_batch(
     coll: &mongodb::sync::Collection<Document>,
     ids: &[i64],
     vectors: &[Vec<f32>],
     metadata: &[Option<MetadataItem>],
+    schema_types: &HashMap<String, String>,
 ) -> Result<(), String> {
-    use vector_db_benchmark::readers::metadata::MetadataValue;
-
     let docs: Vec<Document> = ids
         .iter()
         .zip(vectors.iter().zip(metadata.iter()))
@@ -656,21 +727,7 @@ fn insert_batch(
 
             if let Some(meta) = meta {
                 for (k, v) in &meta.fields {
-                    let bson_val = match v {
-                        MetadataValue::String(s) => mongodb::bson::Bson::String(s.clone()),
-                        MetadataValue::Labels(labels) => {
-                            let arr: Vec<mongodb::bson::Bson> = labels
-                                .iter()
-                                .map(|l| mongodb::bson::Bson::String(l.clone()))
-                                .collect();
-                            mongodb::bson::Bson::Array(arr)
-                        }
-                        MetadataValue::Geo { lon, lat } => mongodb::bson::Bson::Document(doc! {
-                            "type": "Point",
-                            "coordinates": [*lon, *lat],
-                        }),
-                    };
-                    doc.insert(k.clone(), bson_val);
+                    doc.insert(k.clone(), metadata_value_to_bson(k, v, schema_types));
                 }
             }
 
@@ -691,9 +748,8 @@ fn update_one_doc(
     id: i64,
     vector: &[f32],
     metadata: Option<&MetadataItem>,
+    schema_types: &HashMap<String, String>,
 ) -> Result<(), String> {
-    use vector_db_benchmark::readers::metadata::MetadataValue;
-
     let bson_vec: Vec<mongodb::bson::Bson> = vector
         .iter()
         .map(|&f| mongodb::bson::Bson::Double(f as f64))
@@ -703,21 +759,7 @@ fn update_one_doc(
 
     if let Some(meta) = metadata {
         for (k, v) in &meta.fields {
-            let bson_val = match v {
-                MetadataValue::String(s) => mongodb::bson::Bson::String(s.clone()),
-                MetadataValue::Labels(labels) => {
-                    let arr: Vec<mongodb::bson::Bson> = labels
-                        .iter()
-                        .map(|l| mongodb::bson::Bson::String(l.clone()))
-                        .collect();
-                    mongodb::bson::Bson::Array(arr)
-                }
-                MetadataValue::Geo { lon, lat } => mongodb::bson::Bson::Document(doc! {
-                    "type": "Point",
-                    "coordinates": [*lon, *lat],
-                }),
-            };
-            set_doc.insert(k.clone(), bson_val);
+            set_doc.insert(k.clone(), metadata_value_to_bson(k, v, schema_types));
         }
     }
 
@@ -853,7 +895,16 @@ fn build_mongo_filter_entry(entry: &serde_json::Value) -> Option<Document> {
         for (condition_type, criteria) in filter_obj {
             match condition_type.as_str() {
                 "match" => {
-                    if let Some(value) = criteria.get("value") {
+                    // match_any: field value in a list -> Mongo `$in`, the
+                    // OR-of-values semantics that mirror qdrant's
+                    // Condition::matches(field, Vec). An empty IN-set matches
+                    // NOTHING: `{$in: []}` is a valid never-match, so we never
+                    // drop the clause (which, as the sole condition, would leave
+                    // no filter and return every doc — the inverse of intent).
+                    if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                        let arr: Vec<mongodb::bson::Bson> = any.iter().map(json_to_bson).collect();
+                        clauses.insert(field_name.clone(), doc! { "$in": arr });
+                    } else if let Some(value) = criteria.get("value") {
                         clauses.insert(field_name.clone(), json_to_bson(value));
                     }
                 }
@@ -935,6 +986,9 @@ impl Engine for MongoDBEngine {
     }
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
+        // Cache the schema field types so ingest can store numeric payload
+        // fields as native BSON numbers (see `metadata_value_to_bson`).
+        self.load_schema_types(dataset);
         println!("Dropping existing collection...");
         let _ = self.drop_collection();
 
@@ -975,6 +1029,8 @@ impl Engine for MongoDBEngine {
     }
 
     fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        // Ensure schema types are loaded even if upload runs without configure.
+        self.load_schema_types(dataset);
         let normalize = dataset.needs_normalization();
         let dataset_path = dataset.get_path()?;
         println!("Reading dataset from {}...", dataset_path.display());
@@ -1192,6 +1248,8 @@ impl Engine for MongoDBEngine {
         num_queries: i64,
         ratio: &UpdateSearchRatio,
     ) -> Result<SearchResults, String> {
+        // Ensure numeric payloads written during updates use native BSON types.
+        self.load_schema_types(dataset);
         let parallel = params.parallel.unwrap_or(1) as usize;
         let num_candidates_factor = params
             .num_candidates
@@ -1245,6 +1303,7 @@ impl Engine for MongoDBEngine {
         let db_name = self.db_name.clone();
         let collection_name = self.collection_name.clone();
         let index_name = self.index_name.clone();
+        let schema_types = &self.schema_types;
 
         std::thread::scope(|s| {
             for _ in 0..parallel {
@@ -1341,6 +1400,7 @@ impl Engine for MongoDBEngine {
                                 upd_ids[data_idx],
                                 &upd_vectors[data_idx],
                                 upd_metadata[data_idx].as_ref(),
+                                schema_types,
                             );
                             let update_time = update_start.elapsed().as_secs_f64();
                             update_times.lock().unwrap().push(update_time);
@@ -1462,5 +1522,86 @@ impl Engine for MongoDBEngine {
 
     fn delete(&mut self) -> Result<(), String> {
         self.drop_collection()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // A single AND clause is returned unwrapped: {"color": {"$in": [...]}}.
+    #[test]
+    fn match_any_string_list_emits_in() {
+        let e = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        let vals = doc.get_document("color").unwrap().get_array("$in").unwrap();
+        assert_eq!(vals.len(), 2);
+        assert_eq!(vals[0].as_str(), Some("red"));
+        assert_eq!(vals[1].as_str(), Some("blue"));
+    }
+
+    #[test]
+    fn match_any_int_list_emits_in() {
+        let e = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        let vals = doc.get_document("size").unwrap().get_array("$in").unwrap();
+        assert_eq!(vals.len(), 3);
+        // The $in elements must be NATIVE BSON integers (Int64), not strings —
+        // MongoDB does no string<->number coercion, so a string "1" would never
+        // match a document whose `size` is stored as native Int64(1).
+        assert_eq!(vals[0].as_i64(), Some(1));
+        assert_eq!(vals[1].as_i64(), Some(2));
+        assert_eq!(vals[2].as_i64(), Some(3));
+    }
+
+    // Numeric `int` payload fields are stored as native BSON Int64 (mirroring
+    // pgvector's BIGINT). The metadata reader stringifies JSON numbers, so we
+    // parse them back per the schema type at ingest.
+    #[test]
+    fn int_schema_field_stored_as_native_i64() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let mut schema = HashMap::new();
+        schema.insert("size".to_string(), "int".to_string());
+        schema.insert("color".to_string(), "keyword".to_string());
+
+        let size = metadata_value_to_bson("size", &MetadataValue::String("2".to_string()), &schema);
+        assert_eq!(size.as_i64(), Some(2), "int field must store as Int64");
+
+        // Keyword fields must stay strings (must NOT be coerced to a number).
+        let color =
+            metadata_value_to_bson("color", &MetadataValue::String("red".to_string()), &schema);
+        assert_eq!(color.as_str(), Some("red"));
+    }
+
+    // A `float` schema field is stored as a native BSON Double.
+    #[test]
+    fn float_schema_field_stored_as_native_f64() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let mut schema = HashMap::new();
+        schema.insert("price".to_string(), "float".to_string());
+        let price =
+            metadata_value_to_bson("price", &MetadataValue::String("3.5".to_string()), &schema);
+        assert_eq!(price.as_f64(), Some(3.5));
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set -> {$in: []} (matches nothing), clause not dropped.
+        let e = json!({"and": [{"color": {"match": {"any": []}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        assert!(doc
+            .get_document("color")
+            .unwrap()
+            .get_array("$in")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn match_exact_value_still_works() {
+        let e = json!({"and": [{"color": {"match": {"value": "red"}}}]});
+        let doc = parse_mongo_conditions(&e).unwrap();
+        assert_eq!(doc.get_str("color").unwrap(), "red");
     }
 }

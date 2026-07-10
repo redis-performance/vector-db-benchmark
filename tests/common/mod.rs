@@ -151,6 +151,122 @@ pub fn write_match_any_project(
     }
 }
 
+/// Distinct `int` `size` values assigned round-robin to documents by `id % 5`
+/// (values 1..=5). The `match_any` int filter selects a STRICT SUBSET of these
+/// (see `MATCH_ANY_SIZES`), so an engine that ignores the filter — or that
+/// compares the int filter against string-typed storage (the HIGH bug this
+/// test guards) — returns whole-corpus nearest neighbours and scores low recall.
+fn size_for(id: usize) -> i64 {
+    (id % 5) as i64 + 1
+}
+
+/// The int `match_any` set every query filters on: `size IN {1, 2}` — a strict
+/// subset of the 5 possible sizes (~40% of docs match).
+pub const MATCH_ANY_SIZES: [i64; 2] = [1, 2];
+
+fn matches_int_filter(id: usize) -> bool {
+    MATCH_ANY_SIZES.contains(&size_for(id))
+}
+
+/// Like `write_match_any_project`, but attaches the `match_any` filter to the
+/// INT `size` field (`{size: {match: {any: [1, 2]}}}` → Mongo `{size:{$in:[…]}}`).
+/// Ground truth is brute-forced over ONLY documents whose `size` is in the
+/// IN-set, so high recall proves the engine applied a NUMERIC `$in` that matched
+/// natively-stored integers. A filter-ignoring engine — or one that emits an
+/// integer `$in` against string-stored sizes — scores low recall.
+pub fn write_match_any_int_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> MatchAnyProject {
+    // Deterministic data/queries so ground truth is reproducible across engines.
+    let mut rng = StdRng::seed_from_u64(0x5133_u64);
+    let gen_vec =
+        |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
+    let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+
+    let l2 = |a: &[f32], b: &[f32]| -> f64 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+            .sum()
+    };
+    // Nearest neighbours computed over the size-FILTERED corpus only.
+    let filtered_gt = |q: &[f32]| -> Vec<i64> {
+        let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
+            .filter(|id| matches_int_filter(*id))
+            .map(|id| (id as i64, l2(q, &vectors[id])))
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        scored.iter().take(TOP).map(|(id, _)| *id).collect()
+    };
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp); // keep the dir alive for the subprocess
+
+    let ds_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&ds_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    write_npy_vectors(ds_dir.join("vectors.npy").to_str().unwrap(), &vectors).unwrap();
+
+    // Per-document metadata: keyword `color` + int `size`.
+    let payloads: String = (0..N_DOCS)
+        .map(|id| serde_json::json!({ "color": color_for(id), "size": size_for(id) }).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("payloads.jsonl"), payloads).unwrap();
+
+    // Queries + int match_any condition + filtered ground truth -> tests.jsonl.
+    let any_vals: Vec<serde_json::Value> = MATCH_ANY_SIZES
+        .iter()
+        .map(|s| serde_json::json!(s))
+        .collect();
+    let tests: String = queries
+        .iter()
+        .map(|q| {
+            serde_json::json!({
+                "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+                "conditions": { "and": [ { "size": { "match": { "any": any_vals } } } ] },
+                "closest_ids": filtered_gt(q),
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("tests.jsonl"), tests).unwrap();
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name,
+        "type": "tar",
+        "path": format!("{}/", dataset_name),
+        "distance": "l2",
+        "vector_size": dim,
+        "vector_count": N_DOCS,
+        "schema": { "color": "keyword", "size": "int" },
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    MatchAnyProject {
+        root,
+        dataset_name: dataset_name.to_string(),
+        top: TOP,
+        matching_docs: (0..N_DOCS).filter(|id| matches_int_filter(*id)).count(),
+    }
+}
+
 // ── Generic filter-datatype fixtures (bool / uuid / full-text / datetime) ──
 //
 // Mirrors `write_match_any_project` but is parameterised by the filter under
