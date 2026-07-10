@@ -1259,3 +1259,70 @@ fn test_binary_valkey_fulltext() {
 fn test_binary_valkey_datetime() {
     run_filter_recall_test("valkey-dt", "dt-test", common::write_datetime_project);
 }
+
+/// Multi-tenancy: many tenants share ONE index and every query is scoped to a
+/// single tenant via a keyword-equality filter on a `tenant` field, with ground
+/// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG
+/// filter arm — no new engine code.
+///
+/// STRONGER than the other filter recall tests: the ground truth is tenant-local,
+/// so a cross-tenant document that leaked into a result cannot count toward recall
+/// AND displaces a correct neighbour. We therefore assert (a) mean recall >= 0.9
+/// and (b) EVERY per-query recall >= 0.9 — i.e. no single tenant leaked or was
+/// mis-scoped. (The saved result JSON records per-query recalls but not the raw
+/// returned ids, so the per-query recall floor is the strongest available
+/// tenant-isolation check without changing engine result serialization.)
+#[test]
+fn test_binary_valkey_tenancy() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-tenancy", "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_tenant_project(
+        "tenancy-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "each tenant must have >= top docs (smallest tenant has {})",
+        proj.matching_docs
+    );
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "valkey-tenancy",
+            "tenancy-test",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+        ),
+        "valkey tenancy run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "valkey-tenancy");
+    let per_query = common::read_recalls(&proj.root, "valkey-tenancy");
+    println!(
+        "valkey tenancy mean recall={:.3} per-query={:?}",
+        recall, per_query
+    );
+    assert!(
+        recall >= 0.9,
+        "valkey tenancy mean recall {:.3} < 0.9",
+        recall
+    );
+    // Tenant isolation: no single tenant may leak / be mis-scoped.
+    for (q, r) in per_query.iter().enumerate() {
+        assert!(
+            *r >= 0.9,
+            "valkey tenancy query {} recall {:.3} < 0.9 — cross-tenant leakage?",
+            q,
+            r
+        );
+    }
+}

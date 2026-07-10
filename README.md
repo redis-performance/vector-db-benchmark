@@ -180,6 +180,10 @@ Results JSON includes separate metrics for both operation types:
 
 Omitting the flag preserves the standard search-only benchmark behavior.
 
+## Multi-tenancy
+
+Multi-tenancy benchmarks model many tenants sharing **one** index: every search is scoped to a single tenant via an exact keyword-equality filter on a `tenant` field (`schema: { "tenant": "keyword" }`), and recall is measured against the nearest neighbours **within that tenant only**. This reuses the standard keyword-TAG filter path (no engine-specific code) and mirrors upstream qdrant/vector-db-benchmark's `random-768-*-tenants` scenario (registered here as `random-768-25-tenants`). The per-query filter looks like `{"and":[{"tenant":{"match":{"value":"tenant_7"}}}]}`. Because ground truth is tenant-local, recall doubles as a tenant-isolation check — a cross-tenant document that leaked into a result cannot count toward recall. Redis and Valkey are covered end-to-end (over both RESP2 and RESP3) by the `test_binary_{redis,valkey}_tenancy` integration tests.
+
 ## Datasets
 
 All datasets are automatically downloaded on first use. The image includes `random-100` (228KB) for quick smoke tests.
