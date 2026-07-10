@@ -1945,3 +1945,75 @@ fn test_binary_redis_fulltext() {
 fn test_binary_redis_datetime() {
     run_filter_recall_test("redis-dt", "dt-test", common::write_datetime_project);
 }
+
+/// Multi-tenancy: many tenants share ONE index and every query is scoped to a
+/// single tenant via a keyword-equality filter on a `tenant` field, with ground
+/// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG
+/// filter arm — no new engine code.
+///
+/// STRONGER than the other filter recall tests: the ground truth is tenant-local,
+/// so a cross-tenant document that leaked into a result cannot count toward recall
+/// AND displaces a correct neighbour. Search is exact (ef=400 over ~16 docs/tenant)
+/// and there is one query per tenant, so a correct engine scores EXACTLY 1.0 on
+/// every query. We therefore assert (a) mean recall == 1.0 and (b) EVERY per-query
+/// recall == 1.0 — any single leaked or mis-scoped tenant fails. (The saved result
+/// JSON records per-query recalls but not the raw returned ids, so the exact
+/// per-query recall is the strongest available tenant-isolation check without
+/// changing engine result serialization.)
+#[test]
+fn test_binary_redis_tenancy() {
+    wait_for_redis();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "redis-tenancy", "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_tenant_project(
+        "tenancy-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "each tenant must have >= top docs (smallest tenant has {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "redis-tenancy",
+            "tenancy-test",
+            "localhost",
+            &[("REDIS_PORT", &TEST_PORT.to_string())],
+        ),
+        "redis tenancy run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "redis-tenancy");
+    let per_query = common::read_recalls(&proj.root, "redis-tenancy");
+    println!(
+        "redis tenancy mean recall={:.3} per-query={:?}",
+        recall, per_query
+    );
+    // Search here is exact (ef=400 over ~16 docs/tenant), so a correct engine
+    // scores 1.0. Assert EXACT per-query recall: the ground truth is tenant-local,
+    // so a single leaked cross-tenant doc displaces a correct neighbour and drops
+    // recall below 1.0 — the strongest isolation check without id-level result
+    // serialization.
+    assert!(
+        recall > 0.999,
+        "redis tenancy mean recall {:.4} != 1.0 — cross-tenant leakage or mis-scope?",
+        recall
+    );
+    for (q, r) in per_query.iter().enumerate() {
+        assert!(
+            *r > 0.999,
+            "redis tenancy query {} recall {:.4} != 1.0 — cross-tenant leakage?",
+            q,
+            r
+        );
+    }
+}

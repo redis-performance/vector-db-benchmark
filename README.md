@@ -180,9 +180,13 @@ Results JSON includes separate metrics for both operation types:
 
 Omitting the flag preserves the standard search-only benchmark behavior.
 
+## Multi-tenancy
+
+Multi-tenancy benchmarks model many tenants sharing **one** index: every search is scoped to a single tenant via an exact keyword-equality filter on a `tenant` field (`schema: { "tenant": "keyword" }`), and recall is measured against the nearest neighbours **within that tenant only**. This reuses the standard keyword-TAG filter path (no engine-specific code) and mirrors upstream qdrant/vector-db-benchmark's `random-768-*-tenants` scenario (registered here as `random-768-25-tenants`). The per-query filter looks like `{"and":[{"tenant":{"match":{"value":"tenant_7"}}}]}`. Because ground truth is tenant-local, recall is a strong isolation signal — a leaked cross-tenant document displaces a correct neighbour and lowers recall — and the tests assert **exact** per-query recall (`== 1.0` against an exact search, one query per tenant), so any single cross-tenant leak fails the check. Redis and Valkey are covered end-to-end (over both RESP2 and RESP3) by the `test_binary_{redis,valkey}_tenancy` integration tests. (Recall is necessary but not by itself sufficient to *prove* zero leakage; strict per-id membership checking is a possible future hardening.)
+
 ## Datasets
 
-All datasets are automatically downloaded on first use. The image includes `random-100` (228KB) for quick smoke tests.
+Most datasets are automatically downloaded on first use. The image includes `random-100` (228KB) for quick smoke tests. (Exception: `random-768-25-tenants` is a locally-generated placeholder with no public download link yet — see the Multi-tenancy section.)
 
 | Dataset                                                                                                     | Dimensions |  Train size | Test size | Neighbors | Distance  |
 | ----------------------------------------------------------------------------------------------------------- | ---------: |  ---------: | --------: | --------: | --------- |

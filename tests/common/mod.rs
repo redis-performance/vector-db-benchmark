@@ -182,11 +182,43 @@ fn write_filter_project(
     condition: serde_json::Value,
     matches: impl Fn(usize) -> bool,
 ) -> FilterProject {
+    // Single shared filter → every query gets the same condition/predicate.
+    write_filter_project_multi(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        N_QUERIES,
+        schema,
+        payload_for,
+        move |_q| condition.clone(),
+        move |_q, id| matches(id),
+    )
+}
+
+/// Generalised core builder that allows EACH query to carry its own `condition`
+/// and its own `matches` predicate (used for multi-tenancy, where every query
+/// is scoped to a different tenant). `condition_for(q)` is the filter JSON for
+/// query `q`; `matches_for(q, id)` decides whether document `id` satisfies query
+/// `q`'s filter (used to brute-force that query's tenant-local ground truth).
+///
+/// `matching_docs` is reported as the MINIMUM per-query match count, so the
+/// caller's `matching_docs >= top` sanity check bounds the smallest tenant.
+#[allow(clippy::too_many_arguments)]
+fn write_filter_project_multi(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    n_queries: usize,
+    schema: serde_json::Value,
+    payload_for: impl Fn(usize) -> serde_json::Value,
+    condition_for: impl Fn(usize) -> serde_json::Value,
+    matches_for: impl Fn(usize, usize) -> bool,
+) -> FilterProject {
     let mut rng = StdRng::seed_from_u64(0xF117E);
     let gen_vec =
         |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
     let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
-    let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..n_queries).map(|_| gen_vec(&mut rng)).collect();
 
     let l2 = |a: &[f32], b: &[f32]| -> f64 {
         a.iter()
@@ -194,9 +226,11 @@ fn write_filter_project(
             .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
             .sum()
     };
-    let filtered_gt = |q: &[f32]| -> Vec<i64> {
+    // Nearest neighbours for query `q`, computed over ONLY the docs that satisfy
+    // query `q`'s filter (its tenant/subset).
+    let filtered_gt = |q_idx: usize, q: &[f32]| -> Vec<i64> {
         let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
-            .filter(|id| matches(*id))
+            .filter(|id| matches_for(q_idx, *id))
             .map(|id| (id as i64, l2(q, &vectors[id])))
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -222,11 +256,12 @@ fn write_filter_project(
 
     let tests: String = queries
         .iter()
-        .map(|q| {
+        .enumerate()
+        .map(|(q_idx, q)| {
             serde_json::json!({
                 "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
-                "conditions": condition,
-                "closest_ids": filtered_gt(q),
+                "conditions": condition_for(q_idx),
+                "closest_ids": filtered_gt(q_idx, q),
             })
             .to_string()
         })
@@ -254,11 +289,17 @@ fn write_filter_project(
     )
     .unwrap();
 
+    // Smallest per-query match count (bounds the smallest tenant).
+    let matching_docs = (0..n_queries)
+        .map(|q_idx| (0..N_DOCS).filter(|id| matches_for(q_idx, *id)).count())
+        .min()
+        .unwrap_or(0);
+
     FilterProject {
         root,
         dataset_name: dataset_name.to_string(),
         top: TOP,
-        matching_docs: (0..N_DOCS).filter(|id| matches(*id)).count(),
+        matching_docs,
     }
 }
 
@@ -356,6 +397,55 @@ pub fn write_datetime_project(
     )
 }
 
+// ── Multi-tenancy fixture ───────────────────────────────────────────────────
+//
+// Mirrors upstream qdrant/vector-db-benchmark's `random-768-*-tenants` scenario:
+// MANY tenants share ONE index; every search is scoped to a single tenant via a
+// keyword-equality filter on a `tenant` field, and recall is measured against
+// the nearest neighbours WITHIN that tenant only. It reuses the existing
+// keyword-TAG filter path (no new engine code) — the ONLY difference from the
+// other filter fixtures is that each query targets a DIFFERENT tenant.
+//
+// Because the ground truth is tenant-local, recall is also a leakage detector:
+// any cross-tenant document an engine wrongly returns is absent from that
+// query's ground truth, so it cannot count toward recall AND it displaces a
+// correct tenant-local neighbour — a leaking engine therefore scores low recall.
+
+/// Number of tenants sharing the single index. With `N_DOCS` docs assigned
+/// round-robin, each tenant owns `N_DOCS / N_TENANTS` docs (400 / 25 = 16 > TOP).
+pub const N_TENANTS: usize = 25;
+
+/// Tenant label for document / query index `k` (round-robin by `k % N_TENANTS`).
+pub fn tenant_for(k: usize) -> String {
+    format!("tenant_{}", k % N_TENANTS)
+}
+
+/// multi-tenancy filter: field `tenant` (schema type `keyword`), one tenant per
+/// doc round-robin. Query `q` is scoped to tenant `q % N_TENANTS` via an exact
+/// keyword match, with ground truth brute-forced over ONLY that tenant's docs.
+pub fn write_tenant_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    // One query per tenant (N_TENANTS queries) so EVERY tenant label — including
+    // the two-digit ones — is exercised as a query scope, not just as documents.
+    write_filter_project_multi(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        N_TENANTS,
+        serde_json::json!({ "tenant": "keyword" }),
+        |id| serde_json::json!({ "tenant": tenant_for(id) }),
+        |q| {
+            serde_json::json!({
+                "and": [ { "tenant": { "match": { "value": tenant_for(q) } } } ]
+            })
+        },
+        |q, id| id % N_TENANTS == q % N_TENANTS,
+    )
+}
+
 /// Path to the compiled binary under test. Cargo exports
 /// `CARGO_BIN_EXE_vector-db-benchmark` to integration tests automatically.
 pub fn binary_path() -> PathBuf {
@@ -417,4 +507,30 @@ pub fn read_recall(root: &Path, engine: &str) -> f64 {
         .unwrap_or_else(|| panic!("no search result for {}", engine));
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     v["results"]["mean_recall"].as_f64().unwrap()
+}
+
+/// Read the per-query `results.recalls` array from the engine's search result
+/// JSON. Each entry is one query's recall vs its (tenant-local) ground truth, so
+/// asserting a floor on EVERY entry catches a single tenant that leaked or was
+/// mis-scoped — stronger than only checking the mean.
+pub fn read_recalls(root: &Path, engine: &str) -> Vec<f64> {
+    let pattern = format!("{}-*-search-*.json", engine);
+    let dir = root.join("results");
+    let path = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            glob::Pattern::new(&pattern)
+                .unwrap()
+                .matches(&p.file_name().unwrap().to_string_lossy())
+        })
+        .unwrap_or_else(|| panic!("no search result for {}", engine));
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    v["results"]["recalls"]
+        .as_array()
+        .expect("recalls array")
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
 }
