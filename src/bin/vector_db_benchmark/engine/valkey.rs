@@ -153,12 +153,36 @@ impl ValkeyEngine {
             valkey_url_suffix()
         );
         let client = redis::Client::open(url.as_str()).map_err(|e| e.to_string())?;
-        let conn = client.get_connection().map_err(|e| e.to_string())?;
-        // Safety timeout: prevents indefinite hangs from pipeline stalls.
-        let timeout = std::time::Duration::from_secs(300);
-        conn.set_read_timeout(Some(timeout)).ok();
-        conn.set_write_timeout(Some(timeout)).ok();
-        Ok(conn)
+        // Bound the TCP-connect + RESP handshake. `set_read_timeout` below only
+        // applies AFTER get_connection() returns, so a plain get_connection() that
+        // stalls during connect/handshake blocks forever and hangs the whole
+        // thread::scope (observed on Memorystore-for-Valkey over PSC when a burst of
+        // ~100 parallel workers connect at once). get_connection_with_timeout caps
+        // that; jittered-backoff retry de-synchronizes the herd so it succeeds on a
+        // later attempt instead of failing together. On a healthy endpoint attempt 0
+        // succeeds instantly => identical behaviour for every other engine/deploy.
+        let connect_timeout = std::time::Duration::from_secs(15);
+        let io_timeout = std::time::Duration::from_secs(300);
+        let mut last_err = String::new();
+        for attempt in 0..6u32 {
+            match client.get_connection_with_timeout(connect_timeout) {
+                Ok(conn) => {
+                    conn.set_read_timeout(Some(io_timeout)).ok();
+                    conn.set_write_timeout(Some(io_timeout)).ok();
+                    return Ok(conn);
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    let base = 100u64 * (1u64 << attempt.min(4)); // 100..1600ms
+                    let jitter = rand::random::<u64>() % 250;
+                    std::thread::sleep(std::time::Duration::from_millis(base + jitter));
+                }
+            }
+        }
+        Err(format!(
+            "connect to {}:{} failed after 6 attempts: {}",
+            host, port, last_err
+        ))
     }
 
     fn create_index(&self, conn: &mut Connection, dataset: &Dataset) -> Result<(), String> {
@@ -536,27 +560,9 @@ impl ValkeyEngine {
                 let pb = &pb;
 
                 s.spawn(move || {
-                    let auth = std::env::var("VALKEY_AUTH").ok();
-                    let user = std::env::var("VALKEY_USER").ok();
-                    let auth_part = match (&user, &auth) {
-                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                        (None, Some(p)) => format!(":{}@", p),
-                        _ => String::new(),
-                    };
-                    let url = format!(
-                        "redis://{}{}:{}/{}",
-                        auth_part,
-                        host,
-                        port,
-                        valkey_url_suffix()
-                    );
-                    let client = match redis::Client::open(url.as_str()) {
+                    let mut conn = match ValkeyEngine::connect(&host, port) {
                         Ok(c) => c,
-                        Err(_) => return,
-                    };
-                    let mut conn = match client.get_connection() {
-                        Ok(c) => c,
-                        Err(_) => return,
+                        Err(e) => { eprintln!("[valkey] parallel worker connect failed: {e}"); return; }
                     };
 
                     loop {
@@ -1711,27 +1717,9 @@ impl Engine for ValkeyEngine {
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
 
-                    let auth = std::env::var("VALKEY_AUTH").ok();
-                    let user = std::env::var("VALKEY_USER").ok();
-                    let auth_part = match (&user, &auth) {
-                        (Some(u), Some(p)) => format!("{}:{}@", u, p),
-                        (None, Some(p)) => format!(":{}@", p),
-                        _ => String::new(),
-                    };
-                    let url = format!(
-                        "redis://{}{}:{}/{}",
-                        auth_part,
-                        host,
-                        port,
-                        valkey_url_suffix()
-                    );
-                    let client = match redis::Client::open(url.as_str()) {
+                    let mut conn = match ValkeyEngine::connect(&host, port) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
-                    };
-                    let mut conn = match client.get_connection() {
-                        Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(e) => { eprintln!("[valkey] parallel worker connect failed: {e}"); return (t, p, r, mr, nd); }
                     };
 
                     loop {
