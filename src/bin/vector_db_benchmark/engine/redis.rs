@@ -980,25 +980,25 @@ fn build_range_filter(
     let mut params = HashMap::new();
     let mut clauses = Vec::new();
 
-    if let Some(lt) = criteria.get("lt") {
-        let pname = format!("{}_lt", param_prefix);
-        insert_number_param(&mut params, &pname, lt);
-        clauses.push(format!("@{}:[-inf (${}]", field_name, pname));
-    }
-    if let Some(gt) = criteria.get("gt") {
-        let pname = format!("{}_gt", param_prefix);
-        insert_number_param(&mut params, &pname, gt);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
-    }
-    if let Some(lte) = criteria.get("lte") {
-        let pname = format!("{}_lte", param_prefix);
-        insert_number_param(&mut params, &pname, lte);
-        clauses.push(format!("@{}:[-inf ${}]", field_name, pname));
-    }
-    if let Some(gte) = criteria.get("gte") {
-        let pname = format!("{}_gte", param_prefix);
-        insert_number_param(&mut params, &pname, gte);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    // (suffix, condition key, clause template). `gt` is EXCLUSIVE (`[($p +inf]`),
+    // `gte` inclusive; `lt` exclusive, `lte` inclusive.
+    let bounds = [
+        ("lt", "lt", "@{f}:[-inf (${p}]"),
+        ("gt", "gt", "@{f}:[(${p} +inf]"),
+        ("lte", "lte", "@{f}:[-inf ${p}]"),
+        ("gte", "gte", "@{f}:[${p} +inf]"),
+    ];
+    for (key, suffix, tmpl) in bounds {
+        if let Some(v) = criteria.get(key) {
+            let pname = format!("{}_{}", param_prefix, suffix);
+            insert_number_param(&mut params, &pname, v);
+            // Only emit the clause when the bound actually parsed into a param —
+            // otherwise a `$param` with no PARAMS entry makes FT.SEARCH
+            // hard-error ("Parameter not found").
+            if params.contains_key(&pname) {
+                clauses.push(tmpl.replace("{f}", field_name).replace("{p}", &pname));
+            }
+        }
     }
 
     if clauses.is_empty() {
@@ -1445,9 +1445,22 @@ fn datetime_fields_from_schema(dataset: &Dataset) -> HashSet<String> {
 /// for non-datetime strings (e.g. a plain numeric-epoch string), letting callers
 /// fall back to numeric handling.
 fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.timestamp() as f64)
+    // RFC-3339 (with offset / `Z`) first.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp() as f64);
+    }
+    // Naive datetime (no offset) → interpret as UTC. Accepts both the `T` and
+    // space separators (upstream tolerates these; RFC-3339 does not).
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc().timestamp() as f64);
+        }
+    }
+    // Date only → midnight UTC.
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp() as f64);
+    }
+    None
 }
 
 // ── Engine trait implementation ──────────────────────────────────────────
@@ -2198,6 +2211,42 @@ mod tests {
         );
         assert!(datetime_to_epoch_secs("not-a-date").is_none());
         assert!(datetime_to_epoch_secs("1609459200").is_none());
+    }
+
+    #[test]
+    fn datetime_tolerates_naive_and_date_only() {
+        // Better than upstream (RFC-3339 only): accept naive + date-only bounds.
+        assert_eq!(datetime_to_epoch_secs("2021-01-01").map(|f| f as i64), Some(1609459200));
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01 00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+    }
+
+    #[test]
+    fn range_gt_is_exclusive_gte_inclusive() {
+        // gt must be exclusive `[($p +inf]`; gte inclusive `[$p +inf]`.
+        let (gt, _) =
+            super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gt": 5}}}]}))
+                .unwrap();
+        assert!(gt.contains("@n:[($n_0_gt +inf]"), "gt not exclusive: {}", gt);
+        let (gte, _) =
+            super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": 5}}}]}))
+                .unwrap();
+        assert!(gte.contains("@n:[$n_0_gte +inf]") && !gte.contains("[("), "gte: {}", gte);
+    }
+
+    #[test]
+    fn range_unparseable_bound_emits_no_dangling_param() {
+        // A bound that can't parse must NOT leave a `$param` with no PARAMS entry.
+        let (q, params) =
+            super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": "nope"}}}]}))
+                .unwrap_or_default();
+        assert!(!q.contains("$n_0_gte") || params.contains_key("n_0_gte"), "dangling: {}", q);
     }
 
     #[test]

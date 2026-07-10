@@ -917,17 +917,19 @@ fn build_match_any_filter(
     any: &[serde_json::Value],
     counter: &mut usize,
 ) -> ParsedFilter {
-    let mut params = HashMap::new();
+    // All values on the match_any path are inlined (valkey supports neither
+    // $param in TAG {…} nor in NUMERIC […]); params stays empty.
+    let params = HashMap::new();
 
     if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
         let clauses: Vec<String> = any
             .iter()
             .filter_map(|v| v.as_i64())
             .map(|i| {
-                let p = format!("{}_{}", field_name, counter);
+                // Inline the literal — valkey rejects `$param` inside NUMERIC
+                // brackets (see build_range_filter).
                 *counter += 1;
-                params.insert(p.clone(), FilterParamValue::Int(i));
-                format!("@{}:[${} ${}]", field_name, p, p)
+                format!("@{}:[{} {}]", field_name, i, i)
             })
             .collect();
         return (format!("({})", clauses.join(" | ")), params);
@@ -960,39 +962,34 @@ fn build_exact_match_filter(
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
     let value = criteria.get("value")?;
-    let param_name = format!("{}_{}", field_name, counter);
+    // Bump the counter for param-name parity with sibling filters — every value
+    // here is INLINED: Valkey Search supports neither `$param` inside TAG {…} nor
+    // inside NUMERIC […] brackets, so params are never used on this path.
     *counter += 1;
+    let params = HashMap::new();
 
-    let mut params = HashMap::new();
-
-    // bool → inlined TAG match on the literal "true"/"false" token. Checked
-    // before numeric arms (serde bools are neither i64 nor f64 nor str).
+    // bool → inlined TAG match on the literal "true"/"false" token (no escaping
+    // needed). Checked before numeric arms (serde bools are neither i64/f64/str).
     if let Some(b) = value.as_bool() {
         let token = if b { "true" } else { "false" };
         return Some((format!("@{}:{{{}}}", field_name, token), params));
     }
-
+    // keyword/uuid string → inlined, ESCAPED TAG match (must escape TAG
+    // metacharacters `| { } ( ) space \` exactly like build_match_any_filter /
+    // build_text_filter, else a value with those chars yields a malformed query
+    // or the wrong document set).
     if let Some(s) = value.as_str() {
-        // Valkey Search does not support $param references inside TAG {…}
-        // brackets, and does NOT require backslash-escaping of spaces, dots,
-        // or other special characters. Values are passed raw inside {…}.
-        // (uuid strings are handled here too — a uuid is just a keyword.)
-        Some((format!("@{}:{{{}}}", field_name, s), params))
-    } else if let Some(i) = value.as_i64() {
-        params.insert(param_name.clone(), FilterParamValue::Int(i));
-        Some((
-            format!("@{}:[${} ${}]", field_name, param_name, param_name),
+        return Some((
+            format!("@{}:{{{}}}", field_name, escape_tag_value(s)),
             params,
-        ))
-    } else if let Some(f) = value.as_f64() {
-        params.insert(param_name.clone(), FilterParamValue::Float(f));
-        Some((
-            format!("@{}:[${} ${}]", field_name, param_name, param_name),
-            params,
-        ))
-    } else {
-        None
+        ));
     }
+    // numeric (int/float) → inlined NUMERIC point range `[v v]` (literals, not
+    // `$param`, for the same reason as build_range_filter).
+    if let Some(lit) = number_literal(value) {
+        return Some((format!("@{}:[{} {}]", field_name, lit, lit), params));
+    }
+    None
 }
 
 /// Build a full-text filter — DEGRADED on Valkey Search (no TEXT field type) to
@@ -1520,9 +1517,22 @@ fn schema_transform_fields(dataset: &Dataset) -> (HashSet<String>, HashSet<Strin
 /// for non-datetime strings (e.g. a numeric-epoch string), letting callers fall
 /// back to numeric handling.
 fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.timestamp() as f64)
+    // RFC-3339 (with offset / `Z`) first.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp() as f64);
+    }
+    // Naive datetime (no offset) → interpret as UTC. Accepts both the `T` and
+    // space separators (upstream tolerates these; RFC-3339 does not).
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc().timestamp() as f64);
+        }
+    }
+    // Date only → midnight UTC.
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp() as f64);
+    }
+    None
 }
 
 // ── Engine trait implementation ──────────────────────────────────────────
@@ -2129,7 +2139,7 @@ impl Engine for ValkeyEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_conditions, FilterParamValue};
+    use super::parse_conditions;
 
     #[test]
     fn match_any_string_list_emits_inlined_tag_or() {
@@ -2142,13 +2152,11 @@ mod tests {
     #[test]
     fn match_any_int_list_emits_numeric_or() {
         let cond = serde_json::json!({"and":[{"size":{"match":{"any":[1,2]}}}]});
+        // Valkey inlines NUMERIC literals (no $param inside […] brackets).
         let (q, params) = parse_conditions(&cond).unwrap();
-        assert!(q.contains("@size:[$size_0 $size_0]"), "q={}", q);
-        assert!(q.contains("@size:[$size_1 $size_1]"), "q={}", q);
-        assert!(matches!(
-            params.get("size_0"),
-            Some(FilterParamValue::Int(1))
-        ));
+        assert!(q.contains("@size:[1 1]"), "q={}", q);
+        assert!(q.contains("@size:[2 2]"), "q={}", q);
+        assert!(!params.keys().any(|k| k.starts_with("size_")), "no params");
     }
 
     #[test]
@@ -2233,6 +2241,43 @@ mod tests {
         let cond = serde_json::json!({"and":[{"ts":{"range":{"gte": 1609459200}}}]});
         let (q, _params) = parse_conditions(&cond).unwrap();
         assert!(q.contains("@ts:[1609459200 +inf]"), "q={}", q);
+    }
+
+    #[test]
+    fn range_gt_is_exclusive_gte_inclusive() {
+        // gt must be exclusive `[(v +inf]`; gte inclusive `[v +inf]`.
+        let gt = parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gt": 5}}}]}))
+            .unwrap()
+            .0;
+        assert!(gt.contains("@n:[(5 +inf]"), "gt not exclusive: {}", gt);
+        let gte = parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": 5}}}]}))
+            .unwrap()
+            .0;
+        assert!(gte.contains("@n:[5 +inf]") && !gte.contains("(5"), "gte: {}", gte);
+    }
+
+    #[test]
+    fn datetime_tolerates_naive_and_date_only() {
+        assert_eq!(datetime_to_epoch_secs("2021-01-01").map(|f| f as i64), Some(1609459200));
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01 00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+    }
+
+    #[test]
+    fn two_field_and_combines_both_clauses() {
+        let cond = serde_json::json!({"and":[
+            {"color":{"match":{"value":"red"}}},
+            {"size":{"range":{"gte": 10}}}
+        ]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{red}"), "q={}", q);
+        assert!(q.contains("@size:[10 +inf]"), "q={}", q);
     }
 
     #[test]
