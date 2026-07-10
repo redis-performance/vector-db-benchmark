@@ -82,6 +82,28 @@ jobs:
       if: always()
       run: docker compose -f tests/docker-compose.test.yml down
 
+  integration-vectorsets:
+    name: Integration tests (VectorSets)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    # VectorSets (VADD/VSIM) ship in the same redis:8.8.0 image the Redis job uses.
+    - name: Start Redis (Vector Sets)
+      run: docker compose -f tests/docker-compose.test.yml up -d redis --wait
+
+    - name: Run VectorSets integration tests
+      run: VECTORSETS_PORT=6399 cargo test --test integration_vectorsets --release -- --test-threads=1
+
+    - name: Stop Redis
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down
+
   integration-pgvector:
     name: Integration tests (PgVector)
     runs-on: ubuntu-latest
