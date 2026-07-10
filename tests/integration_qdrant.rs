@@ -4,7 +4,8 @@
 //! Start with: docker compose -f tests/docker-compose.test.yml up -d qdrant
 //! Run with:   QDRANT_GRPC_PORT=6335 cargo test --test integration_qdrant -- --test-threads=1
 
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -693,18 +694,31 @@ fn test_binary_qdrant_match_any() {
 
 // ---------------------------------------------------------------------------
 // Quantization coverage: SCALAR (int8), BINARY, and PRODUCT quantization all
-// run end-to-end through the real CLI against live qdrant on the SAME dataset.
+// run end-to-end through the real CLI against live qdrant on the SAME
+// FIXED-SEED dataset.
 //
 // Quantization is LOSSY, so we use a realistic dimensionality (dim=64) and
 // enable `rescore:true` + generous `oversampling` in search_params: the
 // quantized index picks an oversampled candidate set, then qdrant re-ranks it
 // against the FULL-PRECISION vectors. With rescore on, recall recovers to a
-// high floor — a broken quantization arm (bad enum, wrong config) would make
-// create_collection error out (run fails) or collapse recall well below it.
+// high floor.
+//
+// Because rescore re-ranks against full-precision vectors, a high rescored
+// recall alone does NOT prove quantization was applied — qdrant silently
+// ignores unused quantization search params, so a run whose quantization_config
+// was dropped would still score ~1.0. The teeth therefore come from a
+// NO-RESCORE negative control (`test_binary_qdrant_quantization_is_applied`):
+// binary search WITHOUT rescore reads the 1-bit-quantized vectors directly and
+// must be MATERIALLY LOSSIER than the full-precision baseline — which can only
+// happen if the quantization_config was genuinely applied to the collection.
+// (Read-back of the collection config is impossible: the CLI drops the
+// collection at the end of every run, see experiment.rs `engine.delete()`.)
 // ---------------------------------------------------------------------------
 
-/// The one shared dataset (data vectors + queries + brute-force ground truth)
-/// that every quantization mode is run against.
+/// The one shared, DETERMINISTIC dataset (data vectors + queries + brute-force
+/// ground truth) that every quantization mode is run against. Built with a
+/// fixed-seed `StdRng` so the corpus, queries and recall are identical every
+/// run (matching the tests/common fixtures' seeding convention).
 struct QuantDataset {
     vectors: Vec<Vec<f32>>,
     queries: Vec<Vec<f32>>,
@@ -712,26 +726,59 @@ struct QuantDataset {
     dim: usize,
 }
 
-/// Run one quantization config end-to-end and return the reported recall.
-/// `quantization_config` is the `collection_params` quantization object;
-/// `oversampling` tunes the rescore candidate depth for that mode.
+/// Fixed-seed UNIFORM vectors in [-1, 1] (NOT gaussian). Deterministic so the
+/// dataset — and therefore the recall floors — are reproducible across runs.
+fn seeded_vectors(seed: u64, count: usize, dim: usize) -> Vec<Vec<f32>> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    (0..count)
+        .map(|_| (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect())
+        .collect()
+}
+
+/// Build the shared quantization dataset: 1000 docs + 20 DISTINCT queries (NOT
+/// copies of stored points, so quantization loss actually matters), dim=64.
+fn build_quant_dataset() -> QuantDataset {
+    let dim = 64;
+    let top = 10;
+    // Two different seeds → queries are distinct from the corpus.
+    let vectors = seeded_vectors(0x0DE1, 1000, dim);
+    let queries = seeded_vectors(0x0DE2, 20, dim);
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors_l2(q, &vectors, top))
+        .collect();
+    QuantDataset {
+        vectors,
+        queries,
+        neighbors,
+        dim,
+    }
+}
+
+/// Run one config end-to-end and return the reported RECALL (`mean_recall`).
+/// `quantization_config` is the `collection_params` quantization object (None =
+/// full-precision baseline); `search_quant` is the `search_params.quantization`
+/// object (None = plain search, no rescore/oversampling).
 fn run_quantization_mode(
     engine_name: &str,
     dataset: &str,
-    quantization_config: serde_json::Value,
-    oversampling: f64,
+    quantization_config: Option<serde_json::Value>,
+    search_quant: Option<serde_json::Value>,
     data: &QuantDataset,
 ) -> f64 {
+    let mut collection_params = serde_json::json!({ "timeout": 120 });
+    if let Some(qc) = quantization_config {
+        collection_params["quantization_config"] = qc;
+    }
+    let mut search_params = serde_json::json!({ "hnsw_ef": 256 });
+    if let Some(sq) = search_quant {
+        search_params["quantization"] = sq;
+    }
     let configs = serde_json::json!([{
         "name": engine_name, "engine": "qdrant",
-        "connection_params": {"timeout": 120}, "collection_params": {
-            "timeout": 120,
-            "quantization_config": quantization_config,
-        },
-        "search_params": [{"parallel": 1, "search_params": {
-            "hnsw_ef": 256,
-            "quantization": {"rescore": true, "oversampling": oversampling}
-        }}],
+        "connection_params": {"timeout": 120},
+        "collection_params": collection_params,
+        "search_params": [{"parallel": 1, "search_params": search_params}],
         "upload_params": {"parallel": 1, "batch_size": 256}
     }]);
     let root = write_dense_project(
@@ -744,45 +791,27 @@ fn run_quantization_mode(
     );
     assert!(
         run_qdrant_binary(&root, engine_name, dataset),
-        "{engine_name} run failed (quantized collection did not build/search)"
+        "{engine_name} run failed (collection did not build/search)"
     );
-    read_precision(&root, engine_name)
+    // `mean_recall` (recall@K = hits/K), matching the "recall" label used below.
+    common::read_recall(&root, engine_name)
 }
 
 /// End-to-end SCALAR / BINARY / PRODUCT quantization coverage on one shared
-/// dataset. Each mode must build its quantized collection, search with rescore,
-/// and clear a recall floor tuned against live qdrant.
+/// fixed-seed dataset. Each mode must build its quantized collection, search
+/// with rescore, and clear a recall floor tuned against live qdrant.
 #[test]
 fn test_binary_qdrant_quantization_modes() {
     wait_for_qdrant();
 
-    // Lossy quantization needs real dimensionality to behave (dim=8 is
-    // meaningless). 64-d gaussian data + a 1000-doc corpus is enough that the
-    // quantized index has non-trivial work, while rescore recovers recall.
-    let dim = 64;
-    let (_ids, vectors) = generate_test_vectors(1000, dim);
-    // DISTINCT query vectors (NOT copies of stored points) so quantization loss
-    // actually matters: an exact-copy query is trivially recoverable even by a
-    // broken index, which would make the recall floor meaningless.
-    let (_qids, queries) = generate_test_vectors(20, dim);
-    let top = 10;
-    let neighbors: Vec<Vec<i64>> = queries
-        .iter()
-        .map(|q| brute_force_neighbors_l2(q, &vectors, top))
-        .collect();
-    let data = QuantDataset {
-        vectors,
-        queries,
-        neighbors,
-        dim,
-    };
+    let data = build_quant_dataset();
 
     // SCALAR int8: rescore recovers near-exact recall with modest oversampling.
     let sq = run_quantization_mode(
         "qdrant-quant-sq",
         "quant-sq",
-        serde_json::json!({"scalar": {"type": "int8", "always_ram": true}}),
-        4.0,
+        Some(serde_json::json!({"scalar": {"type": "int8", "always_ram": true}})),
+        Some(serde_json::json!({"rescore": true, "oversampling": 4.0})),
         &data,
     );
     println!("qdrant scalar(int8) quantization recall={sq:.3}");
@@ -791,31 +820,79 @@ fn test_binary_qdrant_quantization_modes() {
     let pq = run_quantization_mode(
         "qdrant-quant-pq",
         "quant-pq",
-        serde_json::json!({"product": {"compression": "x16", "always_ram": true}}),
-        4.0,
+        Some(serde_json::json!({"product": {"compression": "x16", "always_ram": true}})),
+        Some(serde_json::json!({"rescore": true, "oversampling": 4.0})),
         &data,
     );
     println!("qdrant product(x16) quantization recall={pq:.3}");
 
-    // BINARY: 1-bit-per-dim is the lossiest mode, so on undifferentiated
-    // gaussian data the binary index needs the highest oversampling to surface
-    // the true neighbours into the rescore candidate set. With oversampling=8
-    // it still recovers ~0.99 recall against live qdrant.
+    // BINARY: 1-bit-per-dim is the lossiest mode, so on undifferentiated uniform
+    // data the binary index needs the highest oversampling to surface the true
+    // neighbours into the rescore candidate set. With oversampling=8 it still
+    // recovers high recall against live qdrant.
     let bq = run_quantization_mode(
         "qdrant-quant-bq",
         "quant-bq",
-        serde_json::json!({"binary": {"always_ram": true}}),
-        8.0,
+        Some(serde_json::json!({"binary": {"always_ram": true}})),
+        Some(serde_json::json!({"rescore": true, "oversampling": 8.0})),
         &data,
     );
     println!("qdrant binary quantization recall={bq:.3}");
 
-    // Floors tuned against live qdrant. Observed recall (20 distinct queries,
-    // dim=64, 1000 docs, rescore on): scalar=1.000, product=1.000,
-    // binary=0.990-0.995 across repeated runs. All floors set to 0.9 — a
-    // meaningful bar (a broken quantization arm fails create_collection or
-    // collapses recall) with a comfortable margin on the noisiest (binary) mode.
+    // Floors tuned against the FIXED-SEED dataset (fully reproducible).
+    // Observed: scalar=1.000, product=1.000, binary=1.000. All floors set to
+    // 0.9 — a meaningful bar with margin. (This test proves the quantized
+    // collections BUILD and SEARCH; that quantization is actually APPLIED to
+    // the read path is proven by the no-rescore control below.)
     assert!(sq >= 0.9, "scalar(int8) quantization recall {sq:.3} < 0.9");
     assert!(pq >= 0.9, "product(x16) quantization recall {pq:.3} < 0.9");
     assert!(bq >= 0.9, "binary quantization recall {bq:.3} < 0.9");
+}
+
+/// PROOF-OF-APPLICATION (teeth): prove quantization is genuinely on the read
+/// path, not silently dropped. Binary quantization searched WITHOUT rescore
+/// reads the 1-bit-quantized vectors directly, so on dim-64 data it must be
+/// MATERIALLY LOSSIER than the full-precision baseline. If the
+/// quantization_config were ignored/dropped, the "binary" collection would be
+/// plain full precision and this gap would vanish — so the gap assertion fails
+/// closed. (Mirrors the negative-control pattern of `test_binary_qdrant_hybrid`.)
+#[test]
+fn test_binary_qdrant_quantization_is_applied() {
+    wait_for_qdrant();
+
+    let data = build_quant_dataset();
+
+    // Full-precision baseline: NO quantization at all → upper-bound recall.
+    let baseline =
+        run_quantization_mode("qdrant-quant-baseline", "quant-baseline", None, None, &data);
+    println!("qdrant full-precision baseline recall={baseline:.3}");
+
+    // BINARY, NO rescore (oversampling 1.0): searches purely on the 1-bit
+    // quantized vectors. Only reaches this (much lower) recall if quantization
+    // was actually applied to the collection.
+    let bq_no_rescore = run_quantization_mode(
+        "qdrant-quant-bq-norescore",
+        "quant-bq-norescore",
+        Some(serde_json::json!({"binary": {"always_ram": true}})),
+        Some(serde_json::json!({"rescore": false, "oversampling": 1.0})),
+        &data,
+    );
+    println!("qdrant binary NO-rescore recall={bq_no_rescore:.3}");
+
+    // The baseline must itself be high (sanity: the harness works).
+    assert!(
+        baseline >= 0.9,
+        "full-precision baseline recall {baseline:.3} < 0.9 (harness broken?)"
+    );
+    // TEETH: quantization must materially degrade recall when rescore is off.
+    // A dropped/ignored quantization_config would leave binary == full precision
+    // and this margin would collapse to ~0.
+    let margin = baseline - bq_no_rescore;
+    println!("qdrant quantization-applied margin (baseline - binary_no_rescore) = {margin:.3}");
+    assert!(
+        margin > 0.1,
+        "binary NO-rescore recall {bq_no_rescore:.3} is not materially below \
+         baseline {baseline:.3} (margin {margin:.3} <= 0.1) — quantization does \
+         not appear to be applied to the read path"
+    );
 }
