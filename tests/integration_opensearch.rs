@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -73,7 +75,7 @@ fn get_index_doc_count() -> usize {
     let client = os_client();
     // Refresh first to make sure all docs are searchable
     let _ = client
-        .post(&format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
         .send();
     let url = format!("{}/{}/_count", os_base_url(), OS_INDEX);
     let resp = client.get(&url).send().expect("Failed to get doc count");
@@ -131,7 +133,7 @@ fn test_opensearch_create_knn_index() {
 
     // Verify the index exists
     let resp = client
-        .get(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .get(format!("{}/{}", os_base_url(), OS_INDEX))
         .send()
         .expect("Failed to get index");
     assert!(resp.status().is_success());
@@ -163,7 +165,7 @@ fn test_opensearch_bulk_upload() {
         }
     });
     let resp = client
-        .put(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .put(format!("{}/{}", os_base_url(), OS_INDEX))
         .json(&body)
         .send()
         .expect("Failed to create index");
@@ -181,7 +183,7 @@ fn test_opensearch_bulk_upload() {
     }
 
     let resp = client
-        .post(&format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(ndjson)
         .send()
@@ -220,7 +222,7 @@ fn test_opensearch_knn_search() {
         }
     });
     let resp = client
-        .put(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .put(format!("{}/{}", os_base_url(), OS_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -245,7 +247,7 @@ fn test_opensearch_knn_search() {
     }
 
     let resp = client
-        .post(&format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(ndjson)
         .send()
@@ -254,7 +256,7 @@ fn test_opensearch_knn_search() {
 
     // Refresh
     let _ = client
-        .post(&format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
         .send();
 
     // Search for vector closest to [1, 0, 0, 0]
@@ -271,7 +273,7 @@ fn test_opensearch_knn_search() {
     });
 
     let resp = client
-        .post(&format!("{}/{}/_search", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_search", os_base_url(), OS_INDEX))
         .json(&search_body)
         .send()
         .unwrap();
@@ -321,7 +323,7 @@ fn test_opensearch_precision_l2() {
         }
     });
     let resp = client
-        .put(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .put(format!("{}/{}", os_base_url(), OS_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -338,7 +340,7 @@ fn test_opensearch_precision_l2() {
         ndjson.push('\n');
     }
     let resp = client
-        .post(&format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(ndjson)
         .send()
@@ -347,7 +349,7 @@ fn test_opensearch_precision_l2() {
 
     // Refresh
     let _ = client
-        .post(&format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
         .send();
 
     // Compute ground truth: brute-force L2 distances for query = vectors[0]
@@ -381,7 +383,7 @@ fn test_opensearch_precision_l2() {
         "size": k,
     });
     let resp = client
-        .post(&format!("{}/{}/_search", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_search", os_base_url(), OS_INDEX))
         .json(&search_body)
         .send()
         .unwrap();
@@ -455,7 +457,7 @@ fn test_opensearch_filtered_precision() {
         }
     });
     let resp = client
-        .put(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .put(format!("{}/{}", os_base_url(), OS_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -473,14 +475,14 @@ fn test_opensearch_filtered_precision() {
         ndjson.push('\n');
     }
     let resp = client
-        .post(&format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(ndjson)
         .send()
         .unwrap();
     assert!(resp.status().is_success());
     let _ = client
-        .post(&format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
         .send();
 
     // Ground truth: k nearest by L2 *among docs in the target category*.
@@ -513,7 +515,7 @@ fn test_opensearch_filtered_precision() {
     // Helper: run a search body and return the set of returned ids.
     let run = |search_body: &serde_json::Value| -> Vec<(i64, i64)> {
         let resp = client
-            .post(&format!("{}/{}/_search", os_base_url(), OS_INDEX))
+            .post(format!("{}/{}/_search", os_base_url(), OS_INDEX))
             .json(search_body)
             .send()
             .unwrap();
@@ -621,7 +623,7 @@ fn test_opensearch_full_cycle() {
         }
     });
     let resp = client
-        .put(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .put(format!("{}/{}", os_base_url(), OS_INDEX))
         .json(&body)
         .send()
         .unwrap();
@@ -638,7 +640,7 @@ fn test_opensearch_full_cycle() {
         ndjson.push('\n');
     }
     let resp = client
-        .post(&format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_bulk", os_base_url(), OS_INDEX))
         .header("Content-Type", "application/x-ndjson")
         .body(ndjson)
         .send()
@@ -648,7 +650,7 @@ fn test_opensearch_full_cycle() {
 
     // Search
     let _ = client
-        .post(&format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_refresh", os_base_url(), OS_INDEX))
         .send();
     let search_body = serde_json::json!({
         "query": {
@@ -662,7 +664,7 @@ fn test_opensearch_full_cycle() {
         "size": 5,
     });
     let resp = client
-        .post(&format!("{}/{}/_search", os_base_url(), OS_INDEX))
+        .post(format!("{}/{}/_search", os_base_url(), OS_INDEX))
         .json(&search_body)
         .send()
         .unwrap();
@@ -674,8 +676,58 @@ fn test_opensearch_full_cycle() {
     // Delete
     delete_test_index();
     let resp = client
-        .get(&format!("{}/{}", os_base_url(), OS_INDEX))
+        .get(format!("{}/{}", os_base_url(), OS_INDEX))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `terms` filter arm.
+#[test]
+fn test_binary_opensearch_match_any() {
+    wait_for_opensearch();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-ma", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-ma",
+            "match-any-test",
+            // Explicit http:// scheme: the OpenSearch engine defaults to https
+            // for a bare host, but the CI container runs plaintext http (security
+            // plugin disabled).
+            "http://127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_matchany"),
+            ],
+        ),
+        "opensearch match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "os-ma");
+    println!("opensearch match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "opensearch match_any recall {:.3} < 0.9",
+        recall
+    );
 }

@@ -785,11 +785,90 @@ fn build_filter(
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
     match condition_type {
-        "match" => build_exact_match_filter(field_name, criteria, counter),
+        "match" => {
+            // match_any (IN-list) takes precedence over exact {value}.
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                Some(build_match_any_filter(field_name, any, counter))
+            } else {
+                build_exact_match_filter(field_name, criteria, counter)
+            }
+        }
         "range" => build_range_filter(field_name, criteria, counter),
         "geo" => build_geo_filter(field_name, criteria, counter),
         _ => None,
     }
+}
+
+/// Build a `match_any` (IN-list) filter, the OR-of-values semantics that mirror
+/// qdrant's `Condition::matches(field, Vec)`.
+///
+/// - All-integer list -> NUMERIC OR of single-value ranges
+///   `(@f:[$a $a] | @f:[$b $b])` (field indexed NUMERIC).
+/// - Otherwise -> TAG OR `@f:{$a | $b}` over the (non-empty) string values
+///   (field indexed TAG). Empty-string tokens are dropped (they are invalid
+///   TAG syntax and can never match an exact keyword).
+/// - Empty / no representable values -> a never-match `(@f:{$s} -@f:{$s})`
+///   (a tag AND not-that-tag contradiction) so an empty IN-set matches NOTHING
+///   rather than being dropped — dropping the sole clause would leave no
+///   prefilter and run kNN over ALL docs (the inverse of the filter). This
+///   assumes a TAG field, the realistic case for a keyword IN-list.
+///
+/// NOTE: RediSearch TAG matching is case-INSENSITIVE, whereas qdrant keyword
+/// match is case-sensitive; for mixed-case data the two engines can select
+/// different documents. All shipped keyword datasets use consistent casing.
+fn build_match_any_filter(
+    field_name: &str,
+    any: &[serde_json::Value],
+    counter: &mut usize,
+) -> ParsedFilter {
+    let mut params = HashMap::new();
+
+    // All-integer list -> NUMERIC OR.
+    if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
+        let clauses: Vec<String> = any
+            .iter()
+            .filter_map(|v| v.as_i64())
+            .map(|i| {
+                let p = format!("{}_{}", field_name, counter);
+                *counter += 1;
+                params.insert(p.clone(), FilterParamValue::Int(i));
+                format!("@{}:[${} ${}]", field_name, p, p)
+            })
+            .collect();
+        return (format!("({})", clauses.join(" | ")), params);
+    }
+
+    // Otherwise TAG OR over the non-empty string values.
+    let tokens: Vec<String> = any
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let p = format!("{}_{}", field_name, counter);
+            *counter += 1;
+            params.insert(p.clone(), FilterParamValue::Str(s.to_string()));
+            format!("${}", p)
+        })
+        .collect();
+
+    if tokens.is_empty() {
+        // Never-match: `@f:{$s} -@f:{$s}` is an unsatisfiable contradiction.
+        let p = format!("{}_{}", field_name, counter);
+        *counter += 1;
+        params.insert(
+            p.clone(),
+            FilterParamValue::Str("__match_any_never_match__".to_string()),
+        );
+        return (
+            format!("(@{0}:{{${1}}} -@{0}:{{${1}}})", field_name, p),
+            params,
+        );
+    }
+
+    (
+        format!("@{}:{{{}}}", field_name, tokens.join(" | ")),
+        params,
+    )
 }
 
 /// Build exact match filter: string → @field:{$param}, numeric → @field:[$param $param]
@@ -1251,12 +1330,21 @@ impl Engine for RedisEngine {
             vectors.len() as f64 / upload_time
         );
 
-        // Wait for RediSearch indexing to complete
+        // Wait for RediSearch indexing to complete. The index-build wait is part
+        // of the ingest cost and must be included in total_time for cross-engine
+        // comparability (mirrors mongodb; matches v0 which times through
+        // post_upload()). Excluding it made every engine but mongodb look
+        // artificially fast to index.
         let expected = vectors.len();
+        let index_start = Instant::now();
         self.wait_for_indexing(expected)?;
+        let index_time = index_start.elapsed().as_secs_f64();
 
-        let total_time = read_time + upload_time;
-        println!("Total time: {:.3}s", total_time);
+        let total_time = read_time + upload_time + index_time;
+        println!(
+            "Index time: {:.3}s, Total time (read+upload+index): {:.3}s",
+            index_time, total_time
+        );
 
         // Verify no HSET failures occurred during upload
         let mut conn = self.get_connection()?;
@@ -1320,19 +1408,26 @@ impl Engine for RedisEngine {
             queries.len()
         };
 
-        // Search execution
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Search execution. Each worker accumulates samples into thread-local
+        // buffers and returns them on join; the main thread concatenates. This
+        // keeps the timed hot loop free of the per-query cross-thread Mutex<Vec>
+        // pushes (5 locks/query) that serialized workers at high parallelism.
+        // Metrics are order-independent (percentiles sort), so results are
+        // unchanged. The work counter stays a single atomic but uses Relaxed
+        // (only its own monotonicity matters, not ordering against other memory).
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut nds: Vec<f64> = Vec::with_capacity(num_to_run);
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
                 let algorithm = self.config.algorithm.clone();
@@ -1341,26 +1436,29 @@ impl Engine for RedisEngine {
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    // Thread-local sample buffers — no cross-thread synchronization
+                    // in the timed loop.
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
 
                     loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
@@ -1396,14 +1494,14 @@ impl Engine for RedisEngine {
                         // a 0-recall / fast-latency sample.
                         match results {
                             Ok(result_ids) => {
-                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                t.push(query_time);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1411,19 +1509,22 @@ impl Engine for RedisEngine {
                         }
                         pb.inc(1);
                     }
-                });
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrs.extend(mr);
+                nds.extend(nd);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
-
-        // Calculate statistics
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrs = mrrs.lock().unwrap();
-        let nds = ndcgs.lock().unwrap();
 
         if times.is_empty() {
             return Err("No searches completed".to_string());
@@ -1440,7 +1541,7 @@ impl Engine for RedisEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrs, &nds, total_time, top, parallel,
+            &times, &precs, &recs, &mrs, &nds, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -1717,6 +1818,8 @@ impl Engine for RedisEngine {
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
+            requested_queries: num_to_run,
+            failed_queries: num_to_run.saturating_sub(times.len()),
             parallel,
             update_count,
             update_rps,
@@ -1726,6 +1829,7 @@ impl Engine for RedisEngine {
             update_p99_time: update_p99,
             update_latencies: Some(u_times.to_vec()),
             update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
+            ..Default::default()
         })
     }
 
@@ -1766,7 +1870,59 @@ impl Engine for RedisEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_vector;
+    use super::{encode_vector, parse_conditions, FilterParamValue};
+
+    #[test]
+    fn match_any_string_list_emits_tag_or() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":["red","blue"]}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{$color_0 | $color_1}"), "q={}", q);
+        assert!(matches!(params.get("color_0"), Some(FilterParamValue::Str(s)) if s == "red"));
+        assert!(matches!(params.get("color_1"), Some(FilterParamValue::Str(s)) if s == "blue"));
+    }
+
+    #[test]
+    fn match_any_int_list_emits_numeric_or() {
+        let cond = serde_json::json!({"and":[{"size":{"match":{"any":[1,2]}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@size:[$size_0 $size_0]"), "q={}", q);
+        assert!(q.contains("@size:[$size_1 $size_1]"), "q={}", q);
+        assert!(q.contains(" | "), "q={}", q);
+        assert!(matches!(
+            params.get("size_0"),
+            Some(FilterParamValue::Int(1))
+        ));
+        assert!(matches!(
+            params.get("size_1"),
+            Some(FilterParamValue::Int(2))
+        ));
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set -> never-match contradiction, not a dropped clause.
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":[]}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("-@color:{"), "expected never-match, q={}", q);
+    }
+
+    #[test]
+    fn match_any_drops_empty_string_tokens() {
+        // Empty-string tokens are invalid TAG syntax; with only such tokens the
+        // clause degrades to the never-match rather than emitting `@f:{}`.
+        let cond = serde_json::json!({"and":[{"color":{"match":{"any":[""]}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(!q.contains("{$color_0 }") && !q.contains("{}"), "q={}", q);
+        assert!(q.contains("-@color:{"), "q={}", q);
+    }
+
+    #[test]
+    fn match_exact_value_still_emits_tag() {
+        let cond = serde_json::json!({"and":[{"color":{"match":{"value":"red"}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@color:{$color_0}"), "q={}", q);
+        assert!(matches!(params.get("color_0"), Some(FilterParamValue::Str(s)) if s == "red"));
+    }
 
     #[test]
     fn encodes_float32_by_default() {
