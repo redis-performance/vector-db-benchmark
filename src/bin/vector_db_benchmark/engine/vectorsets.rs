@@ -356,53 +356,6 @@ fn parse_vsim_response(response: &[redis::Value]) -> Vec<(i64, f64)> {
     results
 }
 
-#[cfg(test)]
-mod vsim_parse_tests {
-    use super::parse_vsim_response;
-    use redis::Value;
-
-    #[test]
-    fn parses_resp2_bulk_id_and_score_as_distance() {
-        // RESP2: id + score both bulk strings; score 0.9 similarity → 0.1 distance.
-        let resp = vec![
-            Value::BulkString(b"7".to_vec()),
-            Value::BulkString(b"0.9".to_vec()),
-        ];
-        let hits = parse_vsim_response(&resp);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].0, 7);
-        assert!((hits[0].1 - 0.1).abs() < 1e-9, "distance={}", hits[0].1);
-    }
-
-    #[test]
-    fn parses_resp3_int_id_and_double_score() {
-        // RESP3: id as Int, score as Double similarity 1.0 → distance 0.0.
-        let resp = vec![Value::Int(42), Value::Double(1.0)];
-        let hits = parse_vsim_response(&resp);
-        assert_eq!(hits, vec![(42, 0.0)]);
-    }
-
-    #[test]
-    fn multiple_pairs_and_trailing_odd_element_ignored() {
-        let resp = vec![
-            Value::Int(1),
-            Value::Double(0.5),
-            Value::Int(2),
-            Value::Double(0.25),
-            Value::Int(3), // dangling id with no score → dropped
-        ];
-        let hits = parse_vsim_response(&resp);
-        assert_eq!(hits, vec![(1, 0.5), (2, 0.75)]);
-    }
-
-    #[test]
-    fn unknown_variants_fall_back_without_panicking() {
-        let resp = vec![Value::Nil, Value::Nil];
-        assert_eq!(parse_vsim_response(&resp), vec![(0, 0.0)]);
-        assert_eq!(parse_vsim_response(&[]), vec![]);
-    }
-}
-
 /// Single-record VADD update (for mixed benchmark).
 fn vadd_single(
     conn: &mut Connection,
@@ -1124,5 +1077,52 @@ fn format_number(value: &serde_json::Value) -> String {
         f.to_string()
     } else {
         "0".to_string()
+    }
+}
+
+#[cfg(test)]
+mod vsim_parse_tests {
+    use super::parse_vsim_response;
+    use redis::Value;
+
+    #[test]
+    fn parses_resp2_bulk_id_and_score_as_distance() {
+        // RESP2: id + score both bulk strings; score 0.9 similarity → 0.1 distance.
+        let resp = vec![
+            Value::BulkString(b"7".to_vec()),
+            Value::BulkString(b"0.9".to_vec()),
+        ];
+        let hits = parse_vsim_response(&resp);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, 7);
+        assert!((hits[0].1 - 0.1).abs() < 1e-9, "distance={}", hits[0].1);
+    }
+
+    #[test]
+    fn parses_resp3_int_id_and_double_score() {
+        // RESP3: id as Int, score as Double similarity 1.0 → distance 0.0.
+        let resp = vec![Value::Int(42), Value::Double(1.0)];
+        let hits = parse_vsim_response(&resp);
+        assert_eq!(hits, vec![(42, 0.0)]);
+    }
+
+    #[test]
+    fn multiple_pairs_and_trailing_odd_element_ignored() {
+        let resp = vec![
+            Value::Int(1),
+            Value::Double(0.5),
+            Value::Int(2),
+            Value::Double(0.25),
+            Value::Int(3), // dangling id with no score → dropped
+        ];
+        let hits = parse_vsim_response(&resp);
+        assert_eq!(hits, vec![(1, 0.5), (2, 0.75)]);
+    }
+
+    #[test]
+    fn unknown_variants_fall_back_without_panicking() {
+        let resp = vec![Value::Nil, Value::Nil];
+        assert_eq!(parse_vsim_response(&resp), vec![(0, 0.0)]);
+        assert_eq!(parse_vsim_response(&[]), vec![]);
     }
 }
