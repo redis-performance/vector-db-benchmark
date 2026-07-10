@@ -1151,3 +1151,45 @@ fn test_binary_valkey_match_any() {
     println!("valkey match_any recall={:.3}", recall);
     assert!(recall >= 0.9, "valkey match_any recall {:.3} < 0.9", recall);
 }
+
+/// Same filtered (`match_any`) search as above, but over the **RESP3** protocol
+/// (`VALKEY_PROTOCOL=resp3`). Valkey Search returns FT.SEARCH results as a RESP3
+/// map rather than the RESP2 array, so this exercises the RESP3 branch of the
+/// response parser end-to-end. Recall must match the RESP2 path.
+#[test]
+fn test_binary_valkey_match_any_resp3() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-ma-r3", "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test-r3",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "valkey-ma-r3",
+            "match-any-test-r3",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str()), ("VALKEY_PROTOCOL", "resp3")],
+        ),
+        "valkey match_any (RESP3) run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "valkey-ma-r3");
+    println!("valkey match_any RESP3 recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "valkey RESP3 match_any recall {:.3} < 0.9 — RESP3 FT.SEARCH parsing broken?",
+        recall
+    );
+}
