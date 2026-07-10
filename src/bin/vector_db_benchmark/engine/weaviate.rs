@@ -7,6 +7,7 @@
 //! is set. (GraphQL with a stringified query vector is markedly slower and caps
 //! throughput, which is why gRPC is the default for the benchmark.)
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -187,19 +188,9 @@ impl WeaviateEngine {
             if let Some(schema_obj) = schema.as_object() {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
-                    let wv_type = match ft {
-                        "int" => "int",
-                        "keyword" => "string",
-                        "text" => "string",
-                        "float" => "number",
-                        "geo" => "geoCoordinates",
-                        _ => continue,
-                    };
-                    properties.push(serde_json::json!({
-                        "name": field_name,
-                        "dataType": [wv_type],
-                        "indexInverted": true,
-                    }));
+                    if let Some(prop) = weaviate_property(field_name, ft) {
+                        properties.push(prop);
+                    }
                 }
             }
         }
@@ -249,6 +240,7 @@ impl WeaviateEngine {
         ids: &[i64],
         vectors: &[Vec<f32>],
         metadata: &[Option<MetadataItem>],
+        schema_types: &HashMap<String, String>,
     ) -> Result<(), String> {
         let pb = self.create_progress_bar(ids.len());
         let batches: Vec<(usize, usize)> = (0..ids.len())
@@ -269,6 +261,7 @@ impl WeaviateEngine {
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
+                let schema_types = schema_types.clone();
                 let pb = &pb;
 
                 s.spawn(move || {
@@ -301,6 +294,7 @@ impl WeaviateEngine {
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
                             &metadata[batch_start..batch_end],
+                            &schema_types,
                         ) {
                             *error.lock().unwrap() = Some(e);
                             break;
@@ -403,6 +397,79 @@ impl WeaviateEngine {
     }
 }
 
+/// Build a Weaviate schema property from a dataset schema `field_type`.
+///
+/// Returns `None` for unsupported field types (skipped). Filtering requires an
+/// inverted index: modern Weaviate (>= 1.19, incl. 1.38) replaced the
+/// deprecated `indexInverted` flag with `indexFilterable` (roaring-bitmap
+/// filter index) and `indexSearchable` (BM25). `Equal` filters read the
+/// FILTERABLE index, so it must be enabled explicitly. `indexSearchable` is
+/// only valid on text-backed properties, so it is set only for those.
+fn weaviate_property(field_name: &str, field_type: &str) -> Option<serde_json::Value> {
+    let wv_type = match field_type {
+        "int" => "int",
+        "keyword" | "text" => "text",
+        "float" => "number",
+        "geo" => "geoCoordinates",
+        _ => return None,
+    };
+    let mut prop = serde_json::json!({
+        "name": field_name,
+        "dataType": [wv_type],
+        "indexFilterable": true,
+    });
+    let obj = prop.as_object_mut().unwrap();
+    // Keyword fields must match on the WHOLE value (exact keyword equality,
+    // like qdrant). Weaviate's default `word` tokenization turns `Equal` into
+    // token-containment, so `Equal "Blue"` would also match "Dark Blue". Force
+    // `field` tokenization for keyword; keep `word` for full-text. Tokenization
+    // and `indexSearchable` apply only to text-backed properties.
+    if let Some(tok) = match field_type {
+        "keyword" => Some("field"),
+        "text" => Some("word"),
+        _ => None,
+    } {
+        obj.insert("tokenization".to_string(), serde_json::json!(tok));
+        obj.insert("indexSearchable".to_string(), serde_json::json!(true));
+    }
+    Some(prop)
+}
+
+/// Convert a dataset metadata value into a JSON value typed for Weaviate's
+/// strict schema. Numbers arrive from the reader as strings (see
+/// `parse_metadata_from_json`); Weaviate rejects a whole object if e.g. an
+/// `int` property receives a string, so numeric fields must be coerced back to
+/// JSON numbers using the dataset `schema_type`. Non-numeric fields pass
+/// through unchanged.
+fn coerce_metadata_value(
+    schema_type: Option<&str>,
+    value: &vector_db_benchmark::readers::metadata::MetadataValue,
+) -> serde_json::Value {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+    match value {
+        MetadataValue::String(s) => match schema_type {
+            Some("int") => s
+                .parse::<i64>()
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+            Some("float") => s
+                .parse::<f64>()
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+            _ => serde_json::Value::String(s.clone()),
+        },
+        MetadataValue::Labels(labels) => serde_json::Value::Array(
+            labels
+                .iter()
+                .map(|l| serde_json::Value::String(l.clone()))
+                .collect(),
+        ),
+        MetadataValue::Geo { lon, lat } => {
+            serde_json::json!({"latitude": lat, "longitude": lon})
+        }
+    }
+}
+
 /// Convert integer ID to UUID (matches Python uuid.UUID(int=id))
 fn id_to_uuid(id: i64) -> String {
     Uuid::from_u128(id as u128).to_string()
@@ -416,6 +483,7 @@ fn uuid_to_int(uuid_str: &str) -> Result<i64, String> {
 }
 
 /// Upload a batch of objects via Weaviate's batch API.
+#[allow(clippy::too_many_arguments)]
 fn upload_batch_objects(
     client: &reqwest::blocking::Client,
     base_url: &str,
@@ -424,9 +492,8 @@ fn upload_batch_objects(
     ids: &[i64],
     vectors: &[Vec<f32>],
     metadata: &[Option<MetadataItem>],
+    schema_types: &HashMap<String, String>,
 ) -> Result<(), String> {
-    use vector_db_benchmark::readers::metadata::MetadataValue;
-
     let mut objects = Vec::with_capacity(ids.len());
     for i in 0..ids.len() {
         let uuid = id_to_uuid(ids[i]);
@@ -434,18 +501,7 @@ fn upload_batch_objects(
         let mut properties = serde_json::Map::new();
         if let Some(meta) = &metadata[i] {
             for (k, v) in &meta.fields {
-                let val = match v {
-                    MetadataValue::String(s) => serde_json::Value::String(s.clone()),
-                    MetadataValue::Labels(labels) => serde_json::Value::Array(
-                        labels
-                            .iter()
-                            .map(|l| serde_json::Value::String(l.clone()))
-                            .collect(),
-                    ),
-                    MetadataValue::Geo { lon, lat } => {
-                        serde_json::json!({"latitude": lat, "longitude": lon})
-                    }
-                };
+                let val = coerce_metadata_value(schema_types.get(k).map(|s| s.as_str()), v);
                 properties.insert(k.clone(), val);
             }
         }
@@ -476,12 +532,38 @@ fn upload_batch_objects(
         .send()
         .map_err(|e| format!("Batch upload failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Batch upload error: {} {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Batch upload error: {} {}", status, text));
+    }
+
+    // The batch API returns HTTP 200 even when individual objects fail schema
+    // validation (e.g. a value whose type does not match the property). Those
+    // objects are silently NOT stored, which would leave the collection empty
+    // and make every filtered search return zero hits. Inspect each object's
+    // per-item `result.status` and surface the first failure.
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(arr) = parsed.as_array() {
+            for obj in arr {
+                let status = obj
+                    .get("result")
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_str());
+                if let Some(st) = status {
+                    if st != "SUCCESS" {
+                        let msg = obj
+                            .pointer("/result/errors/error/0/message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown error");
+                        return Err(format!(
+                            "Batch object import failed (status {}): {}",
+                            st, msg
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -505,7 +587,7 @@ fn near_vector_search(
         .join(", ");
 
     let where_clause = if let Some(f) = filter {
-        format!(", where: {}", serde_json::to_string(f).unwrap_or_default())
+        format!(", where: {}", json_to_graphql_literal(f))
     } else {
         String::new()
     };
@@ -596,6 +678,11 @@ fn near_vector_search(
 /// This is the high-throughput query path; the class-level `ef` set via the REST
 /// schema update still governs recall. Returns (int-id, distance) pairs, mapping
 /// the object UUID back through `uuid_to_int` (inverse of the upload id_to_uuid).
+///
+/// `NearVector::vector_bytes` is marked deprecated in the newer weaviate protos
+/// (superseded by a multi-vector `vectors` field) but remains the accepted
+/// packed-vector input on the 1.29–1.38 servers this targets, so we allow it.
+#[allow(deprecated)]
 async fn near_vector_search_grpc(
     client: &mut WeaviateClient<tonic::transport::Channel>,
     class_name: &str,
@@ -726,6 +813,43 @@ fn build_weaviate_entry_filter(entry: &serde_json::Value) -> Option<serde_json::
     }
 }
 
+/// Serialize a where-filter `Value` as a **GraphQL object literal** (not JSON).
+///
+/// Weaviate's GraphQL `where` argument requires object keys as bare names and
+/// the `operator` value as an unquoted enum (`operator: Equal`), whereas
+/// `serde_json::to_string` emits quoted keys/values (`"operator":"Equal"`),
+/// which the GraphQL parser rejects with a syntax error. Object keys are
+/// emitted unquoted, the `operator` field's value is emitted as an unquoted
+/// enum, and every other scalar keeps normal JSON quoting/formatting.
+fn json_to_graphql_literal(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Object(map) => {
+            let fields: Vec<String> = map
+                .iter()
+                .map(|(k, val)| {
+                    if k == "operator" {
+                        // GraphQL enum value: unquoted.
+                        format!("{}: {}", k, val.as_str().unwrap_or_default())
+                    } else {
+                        format!("{}: {}", k, json_to_graphql_literal(val))
+                    }
+                })
+                .collect();
+            format!("{{{}}}", fields.join(", "))
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_graphql_literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::String(s) => {
+            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+    }
+}
+
 fn build_weaviate_filter(
     field_name: &str,
     condition_type: &str,
@@ -733,24 +857,61 @@ fn build_weaviate_filter(
 ) -> Option<serde_json::Value> {
     match condition_type {
         "match" => {
-            let value = criteria.get("value")?;
-            let value_key = if value.is_string() {
-                "valueString"
-            } else if value.is_number() {
-                if value.is_i64() {
+            // Value typing shared by exact match and match_any.
+            let value_key = |v: &serde_json::Value| -> &'static str {
+                if v.is_string() {
+                    "valueText"
+                } else if v.is_i64() {
                     "valueInt"
-                } else {
+                } else if v.is_number() {
                     "valueNumber"
+                } else if v.is_boolean() {
+                    "valueBoolean"
+                } else {
+                    "valueText"
                 }
-            } else if value.is_boolean() {
-                "valueBoolean"
-            } else {
-                "valueString"
             };
+
+            // match_any: field value in a list -> OR of `Equal` conditions,
+            // reusing the engine's proven exact-match path (same OR-of-values
+            // semantics as qdrant's Condition::matches(field, Vec)). An empty
+            // IN-set matches NOTHING: emit an unsatisfiable `Equal(x) AND
+            // NotEqual(x)` rather than dropping the clause, since dropping the
+            // sole clause would return every object (the inverse of the filter).
+            if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                let operands: Vec<serde_json::Value> = any
+                    .iter()
+                    .map(|v| {
+                        let vk = value_key(v);
+                        serde_json::json!({
+                            "path": [field_name],
+                            "operator": "Equal",
+                            vk: v,
+                        })
+                    })
+                    .collect();
+                return Some(match operands.len() {
+                    0 => {
+                        const NEVER: &str = "__match_any_never_match__";
+                        serde_json::json!({
+                            "operator": "And",
+                            "operands": [
+                                {"path": [field_name], "operator": "Equal", "valueText": NEVER},
+                                {"path": [field_name], "operator": "NotEqual", "valueText": NEVER},
+                            ]
+                        })
+                    }
+                    1 => operands.into_iter().next().unwrap(),
+                    _ => serde_json::json!({"operator": "Or", "operands": operands}),
+                });
+            }
+
+            let value = criteria.get("value")?;
+            let vk = value_key(value);
             Some(serde_json::json!({
                 "path": [field_name],
                 "operator": "Equal",
-                value_key: value,
+                vk: value,
             }))
         }
         "range" => {
@@ -879,8 +1040,22 @@ impl Engine for WeaviateEngine {
             "Starting upload with {} threads, batch size {}...",
             self.parallel, self.batch_size
         );
+        // Map field name -> dataset schema type so uploads can coerce values
+        // to the types Weaviate's strict schema expects (e.g. int, not string).
+        let schema_types: HashMap<String, String> = dataset
+            .config
+            .schema
+            .as_ref()
+            .and_then(|s| s.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let upload_start = Instant::now();
-        self.upload_parallel(&ids, &vectors, &metadata)?;
+        self.upload_parallel(&ids, &vectors, &metadata, &schema_types)?;
         let upload_time = upload_start.elapsed().as_secs_f64();
 
         println!(
@@ -929,12 +1104,9 @@ impl Engine for WeaviateEngine {
             queries.len()
         };
 
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
+        // contention in the timed loop (see redis.rs::search). Metrics are
+        // order-independent so results are unchanged; work counter uses Relaxed.
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
@@ -944,25 +1116,24 @@ impl Engine for WeaviateEngine {
         // (gRPC filter translation not implemented) or when WEAVIATE_USE_GRAPHQL
         // is set. gRPC concurrency is async tasks on a shared runtime (one
         // connection per task, HTTP/2); GraphQL concurrency is blocking OS threads.
-        let grpc_ep: Option<tonic::transport::Endpoint> = if std::env::var("WEAVIATE_USE_GRAPHQL")
-            .is_ok()
-        {
-            None
-        } else {
-            match tonic::transport::Endpoint::from_shared(self.grpc_endpoint.clone()) {
-                Ok(ep) => Some(
-                    ep.timeout(std::time::Duration::from_secs(self.timeout))
-                        .connect_timeout(std::time::Duration::from_secs(30)),
-                ),
-                Err(e) => {
-                    eprintln!(
-                        "Warning: invalid gRPC endpoint {} ({}); falling back to GraphQL",
-                        self.grpc_endpoint, e
-                    );
-                    None
+        let grpc_ep: Option<tonic::transport::Endpoint> =
+            if std::env::var("WEAVIATE_USE_GRAPHQL").is_ok() {
+                None
+            } else {
+                match tonic::transport::Endpoint::from_shared(self.grpc_endpoint.clone()) {
+                    Ok(ep) => Some(
+                        ep.timeout(std::time::Duration::from_secs(self.timeout))
+                            .connect_timeout(std::time::Duration::from_secs(30)),
+                    ),
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: invalid gRPC endpoint {} ({}); falling back to GraphQL",
+                            self.grpc_endpoint, e
+                        );
+                        None
+                    }
                 }
-            }
-        };
+            };
         let use_grpc = grpc_ep.is_some() && parsed_filters.iter().all(|f| f.is_none());
 
         let queries = Arc::new(queries);
@@ -970,6 +1141,18 @@ impl Engine for WeaviateEngine {
         let parsed_filters = Arc::new(parsed_filters);
 
         let start_time = Instant::now();
+
+        // Per-thread sample buffers merged after the workers finish — no per-query
+        // Mutex<Vec> contention in the timed loop (see redis.rs::search). Both the
+        // gRPC async tasks and the GraphQL OS threads accumulate locally and return
+        // their buffers; metrics are order-independent so results are unchanged.
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+
+        type SampleBuffers = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
         if use_grpc {
             // ── gRPC: async task fan-out. `parallel` tasks, each its own
@@ -980,7 +1163,7 @@ impl Engine for WeaviateEngine {
                 .enable_all()
                 .build()
                 .map_err(|e| format!("failed to build tokio runtime: {}", e))?;
-            rt.block_on(async {
+            let collected: Vec<SampleBuffers> = rt.block_on(async {
                 let mut tasks = Vec::with_capacity(parallel);
                 for _ in 0..parallel {
                     let endpoint = endpoint.clone();
@@ -989,23 +1172,24 @@ impl Engine for WeaviateEngine {
                     let queries = Arc::clone(&queries);
                     let neighbors = Arc::clone(&neighbors);
                     let query_idx = Arc::clone(&query_idx);
-                    let search_times = Arc::clone(&search_times);
-                    let precisions = Arc::clone(&precisions);
-                    let recalls = Arc::clone(&recalls);
-                    let mrrs = Arc::clone(&mrrs);
-                    let ndcgs = Arc::clone(&ndcgs);
                     let pb = pb.clone();
                     tasks.push(tokio::spawn(async move {
+                        let mut t = Vec::new();
+                        let mut p = Vec::new();
+                        let mut r = Vec::new();
+                        let mut mr = Vec::new();
+                        let mut nd = Vec::new();
+
                         let channel = match endpoint.connect().await {
                             Ok(c) => c,
                             Err(e) => {
                                 eprintln!("gRPC connect failed: {}", e);
-                                return;
+                                return (t, p, r, mr, nd);
                             }
                         };
                         let mut client = WeaviateClient::new(channel);
                         loop {
-                            let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                            let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                             if idx >= num_to_run {
                                 break;
                             }
@@ -1029,7 +1213,6 @@ impl Engine for WeaviateEngine {
                             let query_time = query_start.elapsed().as_secs_f64();
                             match results {
                                 Ok(result_ids) => {
-                                    search_times.lock().unwrap().push(query_time);
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
                                     let m = crate::metrics::compute_metrics(
@@ -1037,24 +1220,39 @@ impl Engine for WeaviateEngine {
                                         &neighbors[idx],
                                         top,
                                     );
-                                    precisions.lock().unwrap().push(m.precision);
-                                    recalls.lock().unwrap().push(m.recall);
-                                    mrrs.lock().unwrap().push(m.mrr);
-                                    ndcgs.lock().unwrap().push(m.ndcg);
+                                    t.push(query_time);
+                                    p.push(m.precision);
+                                    r.push(m.recall);
+                                    mr.push(m.mrr);
+                                    nd.push(m.ndcg);
                                 }
                                 Err(e) => eprintln!("Search query {} failed: {}", idx, e),
                             }
                             pb.inc(1);
                         }
+                        (t, p, r, mr, nd)
                     }));
                 }
-                for t in tasks {
-                    let _ = t.await;
+                let mut out = Vec::with_capacity(tasks.len());
+                for task in tasks {
+                    match task.await {
+                        Ok(buf) => out.push(buf),
+                        Err(e) => eprintln!("gRPC search task failed: {}", e),
+                    }
                 }
+                out
             });
+            for (t, p, r, mr, nd) in collected {
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrr_vals.extend(mr);
+                ndcg_vals.extend(nd);
+            }
         } else {
             // ── GraphQL: blocking OS-thread fan-out (each thread its own client). ──
             std::thread::scope(|s| {
+                let mut handles = Vec::with_capacity(parallel);
                 for _ in 0..parallel {
                     let base_url = self.base_url.clone();
                     let class_name = self.class_name.clone();
@@ -1063,24 +1261,25 @@ impl Engine for WeaviateEngine {
                     let queries = Arc::clone(&queries);
                     let neighbors = Arc::clone(&neighbors);
                     let parsed_filters = Arc::clone(&parsed_filters);
-                    let search_times = Arc::clone(&search_times);
-                    let precisions = Arc::clone(&precisions);
-                    let recalls = Arc::clone(&recalls);
-                    let mrrs = Arc::clone(&mrrs);
-                    let ndcgs = Arc::clone(&ndcgs);
                     let query_idx = Arc::clone(&query_idx);
                     let pb = &pb;
 
-                    s.spawn(move || {
+                    handles.push(s.spawn(move || {
+                        let mut t = Vec::new();
+                        let mut p = Vec::new();
+                        let mut r = Vec::new();
+                        let mut mr = Vec::new();
+                        let mut nd = Vec::new();
+
                         let client = match reqwest::blocking::Client::builder()
                             .timeout(std::time::Duration::from_secs(timeout))
                             .build()
                         {
                             Ok(c) => c,
-                            Err(_) => return,
+                            Err(_) => return (t, p, r, mr, nd),
                         };
                         loop {
-                            let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                            let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                             if idx >= num_to_run {
                                 break;
                             }
@@ -1105,7 +1304,6 @@ impl Engine for WeaviateEngine {
                             let query_time = query_start.elapsed().as_secs_f64();
                             match results {
                                 Ok(result_ids) => {
-                                    search_times.lock().unwrap().push(query_time);
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
                                     let m = crate::metrics::compute_metrics(
@@ -1113,16 +1311,26 @@ impl Engine for WeaviateEngine {
                                         &neighbors[idx],
                                         top,
                                     );
-                                    precisions.lock().unwrap().push(m.precision);
-                                    recalls.lock().unwrap().push(m.recall);
-                                    mrrs.lock().unwrap().push(m.mrr);
-                                    ndcgs.lock().unwrap().push(m.ndcg);
+                                    t.push(query_time);
+                                    p.push(m.precision);
+                                    r.push(m.recall);
+                                    mr.push(m.mrr);
+                                    nd.push(m.ndcg);
                                 }
                                 Err(e) => eprintln!("Search query {} failed: {}", idx, e),
                             }
                             pb.inc(1);
                         }
-                    });
+                        (t, p, r, mr, nd)
+                    }));
+                }
+                for h in handles {
+                    let (t, p, r, mr, nd) = h.join().unwrap();
+                    times.extend(t);
+                    precs.extend(p);
+                    recs.extend(r);
+                    mrr_vals.extend(mr);
+                    ndcg_vals.extend(nd);
                 }
             });
         }
@@ -1130,20 +1338,137 @@ impl Engine for WeaviateEngine {
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrr_vals = mrrs.lock().unwrap();
-        let ndcg_vals = ndcgs.lock().unwrap();
-
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
     fn delete(&mut self) -> Result<(), String> {
         let client = self.create_client()?;
         self.delete_class(&client)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn graphql_literal_uses_bare_keys_and_enum_operator() {
+        let f = build_weaviate_filter("color", "match", &json!({"any": ["red", "blue"]})).unwrap();
+        let g = json_to_graphql_literal(&f);
+        assert!(g.contains("operator: Or"), "g={}", g);
+        assert!(g.contains("operator: Equal"), "g={}", g);
+        assert!(g.contains("path: [\"color\"]"), "g={}", g);
+        assert!(g.contains("valueText: \"red\""), "g={}", g);
+        assert!(!g.contains("\"operator\""), "g={}", g);
+        assert!(!g.contains("\"path\""), "g={}", g);
+    }
+
+    #[test]
+    fn graphql_literal_numbers_unquoted() {
+        let f = json!({"path": ["size"], "operator": "Equal", "valueInt": 3});
+        let g = json_to_graphql_literal(&f);
+        assert!(g.contains("valueInt: 3"), "g={}", g);
+        assert!(!g.contains("\"valueInt\""), "g={}", g);
+    }
+
+    #[test]
+    fn match_any_string_list_emits_or_of_equal() {
+        let c = build_weaviate_filter("color", "match", &json!({"any": ["red", "blue"]})).unwrap();
+        assert_eq!(c["operator"], "Or");
+        let ops = c["operands"].as_array().unwrap();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0]["operator"], "Equal");
+        assert_eq!(ops[0]["path"], json!(["color"]));
+        assert_eq!(ops[0]["valueText"], "red");
+        assert_eq!(ops[1]["valueText"], "blue");
+    }
+
+    #[test]
+    fn match_any_int_list_emits_or_of_equal() {
+        let c = build_weaviate_filter("size", "match", &json!({"any": [1, 2, 3]})).unwrap();
+        assert_eq!(c["operator"], "Or");
+        let ops = c["operands"].as_array().unwrap();
+        assert_eq!(ops.len(), 3);
+        assert_eq!(ops[0]["operator"], "Equal");
+        assert_eq!(ops[0]["valueInt"], 1);
+    }
+
+    #[test]
+    fn match_any_single_element_is_bare_equal() {
+        let c = build_weaviate_filter("color", "match", &json!({"any": ["red"]})).unwrap();
+        assert_eq!(c["operator"], "Equal");
+        assert_eq!(c["valueText"], "red");
+    }
+
+    #[test]
+    fn match_any_empty_list_matches_nothing() {
+        // Empty IN-set -> unsatisfiable And(Equal(x), NotEqual(x)): matches
+        // nothing (clause not dropped, never inverted to match-all).
+        let c = build_weaviate_filter("color", "match", &json!({"any": []})).unwrap();
+        assert_eq!(c["operator"], "And");
+        let ops = c["operands"].as_array().unwrap();
+        assert_eq!(ops[0]["operator"], "Equal");
+        assert_eq!(ops[1]["operator"], "NotEqual");
+        assert_eq!(ops[0]["valueText"], ops[1]["valueText"]);
+    }
+
+    #[test]
+    fn match_exact_value_still_works() {
+        let c = build_weaviate_filter("color", "match", &json!({"value": "red"})).unwrap();
+        assert_eq!(c["operator"], "Equal");
+        assert_eq!(c["valueText"], "red");
+    }
+
+    #[test]
+    fn keyword_property_is_filterable_with_field_tokenization() {
+        // Modern Weaviate needs `indexFilterable` (not the deprecated
+        // `indexInverted`) for `Equal` filters to match; keyword uses `field`
+        // tokenization so `Equal "red"` matches the whole value exactly.
+        let p = weaviate_property("color", "keyword").unwrap();
+        assert_eq!(p["dataType"], json!(["text"]));
+        assert_eq!(p["indexFilterable"], true);
+        assert_eq!(p["tokenization"], "field");
+        assert_eq!(p["indexSearchable"], true);
+        assert!(p.get("indexInverted").is_none(), "p={}", p);
+    }
+
+    #[test]
+    fn int_property_is_filterable_without_searchable() {
+        // `indexSearchable` is invalid on non-text properties and would make
+        // Weaviate reject the whole schema; it must be omitted for int.
+        let p = weaviate_property("size", "int").unwrap();
+        assert_eq!(p["dataType"], json!(["int"]));
+        assert_eq!(p["indexFilterable"], true);
+        assert!(p.get("indexSearchable").is_none(), "p={}", p);
+        assert!(p.get("tokenization").is_none(), "p={}", p);
+    }
+
+    #[test]
+    fn unsupported_property_type_is_skipped() {
+        assert!(weaviate_property("x", "bogus").is_none());
+    }
+
+    #[test]
+    fn coerce_int_string_to_json_number() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        // The reader hands numbers over as strings; an `int` schema field must
+        // become a JSON number or Weaviate rejects the whole object.
+        let v = MetadataValue::String("1".to_string());
+        assert_eq!(coerce_metadata_value(Some("int"), &v), json!(1));
+        let f = MetadataValue::String("1.5".to_string());
+        assert_eq!(coerce_metadata_value(Some("float"), &f), json!(1.5));
+    }
+
+    #[test]
+    fn coerce_keyword_stays_string() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let v = MetadataValue::String("red".to_string());
+        assert_eq!(coerce_metadata_value(Some("keyword"), &v), json!("red"));
+        // Unknown/unmapped fields pass through unchanged.
+        assert_eq!(coerce_metadata_value(None, &v), json!("red"));
     }
 }

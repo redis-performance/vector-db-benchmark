@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -95,7 +97,7 @@ fn test_weaviate_class_management() {
     });
 
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .expect("Failed to create class");
@@ -107,7 +109,7 @@ fn test_weaviate_class_management() {
 
     // Verify class exists
     let resp = client
-        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .get(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
@@ -116,14 +118,14 @@ fn test_weaviate_class_management() {
 
     // Delete class
     let resp = client
-        .delete(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .delete(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
 
     // Verify deleted
     let resp = client
-        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .get(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
@@ -145,7 +147,7 @@ fn test_weaviate_batch_upload() {
         "vectorIndexConfig": {"distance": "l2-squared"},
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -167,7 +169,7 @@ fn test_weaviate_batch_upload() {
 
     let batch_body = serde_json::json!({"objects": objects});
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&batch_body)
         .send()
         .expect("Failed batch upload");
@@ -182,7 +184,7 @@ fn test_weaviate_batch_upload() {
         "query": format!("{{ Aggregate {{ {} {{ meta {{ count }} }} }} }}", TEST_CLASS),
     });
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&gql_body)
         .send()
         .unwrap();
@@ -202,7 +204,7 @@ fn test_weaviate_near_vector_search() {
     delete_test_class();
 
     let client = http_client();
-    let dim = 4;
+    let _dim = 4;
 
     // Create class with cosine distance
     let class_body = serde_json::json!({
@@ -212,7 +214,7 @@ fn test_weaviate_near_vector_search() {
         "vectorIndexConfig": {"distance": "cosine"},
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -240,7 +242,7 @@ fn test_weaviate_near_vector_search() {
 
     let batch_body = serde_json::json!({"objects": objects});
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&batch_body)
         .send()
         .unwrap();
@@ -252,7 +254,7 @@ fn test_weaviate_near_vector_search() {
         class = TEST_CLASS
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -293,7 +295,7 @@ fn test_weaviate_precision() {
         },
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -315,7 +317,7 @@ fn test_weaviate_precision() {
 
     let batch_body = serde_json::json!({"objects": objects});
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&batch_body)
         .send()
         .unwrap();
@@ -348,7 +350,7 @@ fn test_weaviate_precision() {
         k = k
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -397,7 +399,7 @@ fn test_weaviate_full_cycle() {
         "vectorIndexConfig": {"distance": "l2-squared"},
     });
     let resp = client
-        .post(&format!("{}/v1/schema", weaviate_base_url()))
+        .post(format!("{}/v1/schema", weaviate_base_url()))
         .json(&class_body)
         .send()
         .unwrap();
@@ -417,7 +419,7 @@ fn test_weaviate_full_cycle() {
         })
         .collect();
     let resp = client
-        .post(&format!("{}/v1/batch/objects", weaviate_base_url()))
+        .post(format!("{}/v1/batch/objects", weaviate_base_url()))
         .json(&serde_json::json!({"objects": objects}))
         .send()
         .unwrap();
@@ -429,7 +431,7 @@ fn test_weaviate_full_cycle() {
         TEST_CLASS
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -445,7 +447,7 @@ fn test_weaviate_full_cycle() {
         TEST_CLASS, vectors[0]
     );
     let resp = client
-        .post(&format!("{}/v1/graphql", weaviate_base_url()))
+        .post(format!("{}/v1/graphql", weaviate_base_url()))
         .json(&serde_json::json!({"query": gql}))
         .send()
         .unwrap();
@@ -457,8 +459,69 @@ fn test_weaviate_full_cycle() {
     // Delete
     delete_test_class();
     let resp = client
-        .get(&format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
+        .get(format!("{}/v1/schema/{}", weaviate_base_url(), TEST_CLASS))
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `ContainsAny` arm.
+#[test]
+fn test_binary_weaviate_match_any() {
+    wait_for_weaviate();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "weaviate-ma", "engine": "weaviate",
+        "connection_params": {},
+        "search_params": [{"parallel": 1, "vectorIndexConfig": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = std::env::var("WEAVIATE_HTTP_PORT").unwrap_or_else(|_| WEAVIATE_PORT.to_string());
+    // Run directly (not common::run_binary) so we always surface the engine's
+    // stdout/stderr — the filtered search's per-query errors print to stderr and
+    // would otherwise be hidden on a zero-exit run that produced no results.
+    let out = std::process::Command::new(common::binary_path())
+        .args([
+            "--engines",
+            "weaviate-ma",
+            "--datasets",
+            "match-any-test",
+            "--host",
+            WEAVIATE_HOST,
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("WEAVIATE_HTTP_PORT", &port)
+        .env("WEAVIATE_CLASS_NAME", "BenchMatchany")
+        .current_dir(&proj.root)
+        .output()
+        .expect("run vector-db-benchmark");
+    println!(
+        "weaviate stdout:\n{}\nweaviate stderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "weaviate match_any run failed");
+
+    let recall = common::read_recall(&proj.root, "weaviate-ma");
+    println!("weaviate match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate match_any recall {:.3} < 0.9",
+        recall
+    );
 }

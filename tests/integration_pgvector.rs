@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -174,7 +176,7 @@ fn test_pgvector_copy_upload() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -210,7 +212,7 @@ fn test_pgvector_knn_l2_search() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -265,7 +267,7 @@ fn test_pgvector_knn_cosine_search() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -317,7 +319,7 @@ fn test_pgvector_precision_l2() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -383,7 +385,7 @@ fn test_pgvector_precision_cosine() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -449,7 +451,7 @@ fn test_pgvector_full_cycle() {
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            write!(writer, "{}\t[{}]\n", ids[i], vec_str).unwrap();
+            writeln!(writer, "{}\t[{}]", ids[i], vec_str).unwrap();
         }
         writer.finish().unwrap();
     }
@@ -492,4 +494,114 @@ fn test_pgvector_full_cycle() {
         .unwrap();
     let count: i64 = row.get(0);
     assert_eq!(count, 0, "items table should be deleted");
+}
+
+/// End-to-end `match_any`: filter a single-valued keyword field to an OR-set and
+/// assert the engine returns the filtered nearest neighbours (recall vs ground
+/// truth brute-forced over only the matching docs). Covers the keyword
+/// contains-any arm on scalar data.
+#[test]
+fn test_binary_pgvector_match_any() {
+    wait_for_postgres();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-ma", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")],
+        ),
+        "pgvector match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "pg-ma");
+    println!("pgvector match_any recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector match_any recall {:.3} < 0.9",
+        recall
+    );
+}
+
+/// Direct-SQL correctness for the keyword contains-any clause the `match_any`
+/// filter builder emits. Multi-valued keyword payloads are stored as a
+/// ';'-joined TEXT scalar, so the array-overlap must match a row that contains
+/// ANY listed value — precisely the case a plain scalar `IN` (the pre-fix
+/// behaviour) would silently drop. This runs the exact clause shape asserted by
+/// the `match_any_string_list_emits_array_overlap` unit test against Postgres,
+/// so together they cover the fix end-to-end without HNSW-recall flakiness.
+#[test]
+fn test_pgvector_match_any_overlap_matches_multivalue() {
+    wait_for_postgres();
+    let mut conn = connect();
+    conn.execute("DROP TABLE IF EXISTS ma_overlap_test", &[])
+        .unwrap();
+    conn.execute(
+        "CREATE TABLE ma_overlap_test (id INT PRIMARY KEY, color TEXT)",
+        &[],
+    )
+    .unwrap();
+    // id 1: multi-valued 'red;green' (matches {red,yellow} via 'red');
+    // id 2: 'yellow' (matches); id 3: 'blue' (no); id 4: 'green' (no).
+    conn.execute(
+        "INSERT INTO ma_overlap_test VALUES (1,'red;green'),(2,'yellow'),(3,'blue'),(4,'green')",
+        &[],
+    )
+    .unwrap();
+
+    // Exactly the clause build_pg_clause emits for match_any ["red","yellow"].
+    let overlap: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_overlap_test \
+             WHERE string_to_array(\"color\", ';') && ARRAY['red', 'yellow']::text[] \
+             ORDER BY id",
+            &[],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        overlap,
+        vec![1, 2],
+        "array-overlap must match the multi-valued 'red;green' (via red) and 'yellow'"
+    );
+
+    // Sanity: the pre-fix scalar `IN` misses the multi-valued row, so this data
+    // genuinely distinguishes the correct implementation from a regression.
+    let scalar_in: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_overlap_test WHERE \"color\" IN ('red','yellow') ORDER BY id",
+            &[],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        scalar_in,
+        vec![2],
+        "scalar IN drops the multi-valued row (confirms the test discriminates)"
+    );
+
+    conn.execute("DROP TABLE IF EXISTS ma_overlap_test", &[])
+        .unwrap();
 }

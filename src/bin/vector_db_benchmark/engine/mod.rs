@@ -76,8 +76,24 @@ pub struct SearchResults {
     pub precisions: Vec<f64>,
     pub latencies: Vec<f64>,
     pub top: usize,
+    /// Number of *successful* queries folded into the latency/quality stats.
     pub num_queries: usize,
+    /// Number of queries requested for this run (num_to_run).
+    pub requested_queries: usize,
+    /// requested_queries - num_queries: queries that errored/timed out and were
+    /// excluded from the latency percentiles. Nonzero means the reported numbers
+    /// are over a partial set (e.g. a saturated client shedding timeouts).
+    pub failed_queries: usize,
     pub parallel: usize,
+    // Client CPU / concurrency-saturation coverage (filled by the runner after
+    // the timed window; see proc_cpu). When client_saturated is true the latency
+    // and QPS above reflect a client-bound run, not clean server-side numbers.
+    pub available_cores: usize,
+    pub oversubscribed: bool,
+    pub client_cpu_cores_used: Option<f64>,
+    pub system_cpu_pct: Option<f64>,
+    pub client_saturated: bool,
+    pub saturation_reason: String,
     // Mixed benchmark update metrics (None when search-only)
     pub update_count: Option<usize>,
     pub update_rps: Option<f64>,
@@ -89,13 +105,41 @@ pub struct SearchResults {
     pub update_search_ratio: Option<String>,
 }
 
+/// `numpy.percentile` with linear interpolation — the method v0 uses
+/// (`np.percentile(..., 50/95/99)` defaults to linear). `sorted` must be
+/// ascending and `q` a fraction in `[0, 1]`. The percentile position is
+/// `q * (N - 1)`, interpolating between the two neighbouring samples.
+///
+/// This replaces nearest-rank indexing (`sorted[floor(N*q)]`), which biased
+/// every percentile upward and made `p99 == max` for any `N <= 100` (e.g. with
+/// N=100, `floor(0.99*100)=99` always selected the single largest sample).
+pub fn percentile_linear(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let rank = q * (sorted.len() - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        return sorted[lo];
+    }
+    let frac = rank - lo as f64;
+    sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+}
+
 /// Build `SearchResults` for a search-only run from the per-query samples
 /// collected by an engine's parallel harness. Centralizes rps/means/std/
 /// percentile computation so every engine reports metrics identically.
 ///
 /// `times`/`precisions`/`recalls`/`mrrs`/`ndcgs` are the per-successful-query
 /// samples (see the engines' search loops), `total_time` the wall clock,
-/// `top` the k used, and `parallel` the client concurrency.
+/// `top` the k used, `parallel` the client concurrency, and `requested_queries`
+/// the number of queries dispatched (num_to_run) so failures can be counted as
+/// `requested_queries - times.len()`. RPS stays successes/wall-clock; a nonzero
+/// `failed_queries` flags that the stats cover only the successful subset.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_search_stats(
     times: &[f64],
@@ -106,6 +150,7 @@ pub fn compute_search_stats(
     total_time: f64,
     top: usize,
     parallel: usize,
+    requested_queries: usize,
 ) -> Result<SearchResults, String> {
     if times.is_empty() {
         return Err("No searches completed".to_string());
@@ -127,8 +172,7 @@ pub fn compute_search_stats(
 
     let mut sorted = times.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    // Nearest-rank percentile, clamped to a valid index.
-    let pct = |q: f64| sorted[((sorted.len() as f64 * q) as usize).min(sorted.len() - 1)];
+    let pct = |q: f64| percentile_linear(&sorted, q);
 
     Ok(SearchResults {
         total_time,
@@ -151,42 +195,11 @@ pub fn compute_search_stats(
         latencies: times.to_vec(),
         top,
         num_queries: times.len(),
+        requested_queries,
+        failed_queries: requested_queries.saturating_sub(times.len()),
         parallel,
         ..Default::default()
     })
-}
-
-#[cfg(test)]
-mod stats_tests {
-    use super::compute_search_stats;
-
-    #[test]
-    fn empty_times_errors() {
-        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1).is_err());
-    }
-
-    #[test]
-    fn computes_means_rps_and_clamped_percentiles() {
-        let times = vec![0.1, 0.2, 0.3, 0.4];
-        let ones = vec![1.0, 1.0, 1.0, 1.0];
-        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4).unwrap();
-        assert_eq!(r.num_queries, 4);
-        assert!((r.rps - 2.0).abs() < 1e-9); // 4 / 2.0s
-        assert!((r.mean_recall - 1.0).abs() < 1e-9);
-        assert!((r.mean_time - 0.25).abs() < 1e-9);
-        assert!((r.min_time - 0.1).abs() < 1e-9 && (r.max_time - 0.4).abs() < 1e-9);
-        // percentile indices stay in-bounds (no panic, no 0.0 fallback)
-        assert!(r.p50_time > 0.0 && r.p95_time > 0.0 && r.p99_time > 0.0);
-        assert_eq!(r.parallel, 4);
-        assert_eq!(r.top, 10);
-        assert!(r.update_count.is_none());
-    }
-
-    #[test]
-    fn single_query_percentiles_dont_panic() {
-        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1).unwrap();
-        assert!((r.p99_time - 0.5).abs() < 1e-9);
-    }
 }
 
 /// Engine trait - equivalent to Python BaseClient
@@ -286,5 +299,67 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
             "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer'.",
             other
         )),
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::compute_search_stats;
+
+    #[test]
+    fn empty_times_errors() {
+        assert!(compute_search_stats(&[], &[], &[], &[], &[], 1.0, 10, 1, 0).is_err());
+    }
+
+    #[test]
+    fn computes_means_rps_and_clamped_percentiles() {
+        let times = vec![0.1, 0.2, 0.3, 0.4];
+        let ones = vec![1.0, 1.0, 1.0, 1.0];
+        let r = compute_search_stats(&times, &ones, &ones, &ones, &ones, 2.0, 10, 4, 5).unwrap();
+        assert_eq!(r.num_queries, 4);
+        assert_eq!(r.requested_queries, 5);
+        assert_eq!(r.failed_queries, 1); // 5 requested, 4 succeeded
+        assert!((r.rps - 2.0).abs() < 1e-9); // 4 / 2.0s
+        assert!((r.mean_recall - 1.0).abs() < 1e-9);
+        assert!((r.mean_time - 0.25).abs() < 1e-9);
+        assert!((r.min_time - 0.1).abs() < 1e-9 && (r.max_time - 0.4).abs() < 1e-9);
+        // percentile indices stay in-bounds (no panic, no 0.0 fallback)
+        assert!(r.p50_time > 0.0 && r.p95_time > 0.0 && r.p99_time > 0.0);
+        assert_eq!(r.parallel, 4);
+        assert_eq!(r.top, 10);
+        assert!(r.update_count.is_none());
+    }
+
+    #[test]
+    fn single_query_percentiles_dont_panic() {
+        let r = compute_search_stats(&[0.5], &[1.0], &[1.0], &[1.0], &[1.0], 1.0, 5, 1, 1).unwrap();
+        assert!((r.p99_time - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percentile_linear_matches_numpy() {
+        use super::percentile_linear;
+        // np.percentile([1..=4], [50,95,99]) with linear interpolation:
+        // position = q*(N-1) = q*3.
+        let v = [1.0, 2.0, 3.0, 4.0];
+        assert!((percentile_linear(&v, 0.50) - 2.5).abs() < 1e-9); // 1.5 -> 2.5
+        assert!((percentile_linear(&v, 0.95) - 3.85).abs() < 1e-9); // 2.85 -> 3.85
+        assert!((percentile_linear(&v, 0.99) - 3.97).abs() < 1e-9); // 2.97 -> 3.97
+                                                                    // Degenerate cases.
+        assert_eq!(percentile_linear(&[], 0.5), 0.0);
+        assert_eq!(percentile_linear(&[7.0], 0.99), 7.0);
+    }
+
+    #[test]
+    fn p99_is_not_max_for_n100() {
+        use super::percentile_linear;
+        // The nearest-rank pathology: with N=100, floor(0.99*100)=99 always
+        // returned the single max. Linear gives position 0.99*99=98.01, i.e.
+        // just above sorted[98], strictly below the max at sorted[99].
+        let sorted: Vec<f64> = (1..=100).map(|i| i as f64).collect();
+        let p99 = percentile_linear(&sorted, 0.99);
+        assert!(p99 < 100.0, "p99={} should be below max", p99);
+        assert!(p99 > 99.0, "p99={} should be above sorted[98]", p99);
+        assert!((p99 - 99.01).abs() < 1e-9, "p99={}", p99);
     }
 }

@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 use rand::Rng;
 use redis::Connection;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -386,8 +388,8 @@ fn test_valkey_upload_and_retrieve() {
     }
 
     // Verify vectors stored
-    for i in 0..ids.len() {
-        let key = ids[i].to_string();
+    for id in &ids {
+        let key = id.to_string();
         let exists: bool = redis::cmd("EXISTS").arg(&key).query(&mut conn).unwrap();
         assert!(exists, "Key {} should exist", key);
     }
@@ -1107,4 +1109,45 @@ fn test_valkey_sub_batched_pipeline_upload_high_dim() {
         .arg("idx")
         .query(&mut conn)
         .unwrap();
+}
+
+/// End-to-end `match_any`: filter a keyword (TAG) field to an OR-set and assert
+/// the engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the inlined TAG-OR arm.
+#[test]
+fn test_binary_valkey_match_any() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-ma", "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "valkey-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+        ),
+        "valkey match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "valkey-ma");
+    println!("valkey match_any recall={:.3}", recall);
+    assert!(recall >= 0.9, "valkey match_any recall {:.3} < 0.9", recall);
 }

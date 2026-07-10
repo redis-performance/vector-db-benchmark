@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 use rand::Rng;
 use redis::Connection;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -233,8 +235,8 @@ fn test_redis_upload_and_retrieve() {
     }
 
     // Verify vectors stored
-    for i in 0..ids.len() {
-        let key = ids[i].to_string();
+    for id in &ids {
+        let key = id.to_string();
         let exists: bool = redis::cmd("EXISTS").arg(&key).query(&mut conn).unwrap();
         assert!(exists, "Key {} should exist", key);
     }
@@ -870,7 +872,7 @@ fn test_redis_parallel_upload_search() {
         .expect("FT.CREATE failed");
 
     // Parallel upload across 4 threads
-    let chunk_size = (count + num_threads - 1) / num_threads;
+    let chunk_size = count.div_ceil(num_threads);
     thread::scope(|s| {
         for chunk_idx in 0..num_threads {
             let start = chunk_idx * chunk_size;
@@ -917,6 +919,7 @@ fn test_redis_parallel_upload_search() {
     // Store results indexed by query number so precision check uses the right entry.
     let num_queries = 20;
     let query_idx = Arc::new(AtomicUsize::new(0));
+    #[allow(clippy::type_complexity)]
     let results: Arc<Mutex<Vec<(usize, Vec<i64>)>>> = Arc::new(Mutex::new(Vec::new()));
 
     thread::scope(|s| {
@@ -1704,7 +1707,9 @@ fn test_binary_redis_mixed_benchmark() {
         .query(&mut conn)
         .unwrap();
 
-    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles)
+    // Run with --update-search-ratio 1:5 (10 queries → 2 update cycles).
+    // --repetitions 1: this test asserts the exact per-run FT.SEARCH/HSET call
+    // counts, so it must measure a single pass (the default is 3 warm reps).
     let output = Command::new(&bin)
         .args([
             "--engines",
@@ -1715,6 +1720,8 @@ fn test_binary_redis_mixed_benchmark() {
             "localhost",
             "--update-search-ratio",
             "1:5",
+            "--repetitions",
+            "1",
         ])
         .env("REDIS_PORT", TEST_PORT.to_string())
         .current_dir(&project_root)
@@ -1790,4 +1797,44 @@ fn test_binary_redis_mixed_benchmark() {
     );
 
     fs::remove_dir_all(&project_root).ok();
+}
+
+/// End-to-end `match_any`: filter a keyword (TAG) field to an OR-set and assert
+/// the engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the TAG-OR filter arm.
+#[test]
+fn test_binary_redis_match_any() {
+    wait_for_redis();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "redis-ma", "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "redis-ma",
+            "match-any-test",
+            "localhost",
+            &[("REDIS_PORT", &TEST_PORT.to_string())],
+        ),
+        "redis match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "redis-ma");
+    println!("redis match_any recall={:.3}", recall);
+    assert!(recall >= 0.9, "redis match_any recall {:.3} < 0.9", recall);
 }
