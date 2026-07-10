@@ -617,6 +617,18 @@ fn build_milvus_entry_filter(entry: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Quote a string value for a Milvus filter expression.
+///
+/// Milvus expressions use double-quoted string literals. Backslashes and
+/// double-quotes inside the value must be escaped (backslash first, so we don't
+/// double-escape the backslashes we just introduced), otherwise a value such as
+/// `15"laptop` would terminate the literal early and produce a malformed /
+/// injectable expression that errors the whole search. Returns the value WITH
+/// its surrounding double-quotes so callers can inline it directly.
+fn quote_milvus_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn build_milvus_filter(
     field_name: &str,
     condition_type: &str,
@@ -634,14 +646,26 @@ fn build_milvus_filter(
             // dropping the sole clause would leave no filter and silently
             // return every row (the inverse of the filter).
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+                // NOTE: match_any here supports SINGLE-VALUED keyword fields only.
+                // Milvus stores a multi-valued keyword field (MetadataValue::Labels,
+                // only for a field literally named `labels`) as a single
+                // comma-joined VarChar (see insert_batch: `labels.join(",")`), so
+                // `field in ["red","blue"]` tests whole-string set membership and
+                // cannot match a doc stored as `"red,green"`. True contains-any
+                // semantics (as pgvector's array-overlap / mongodb's array $in) would
+                // require changing storage to ARRAY(VarChar) + array_contains_any,
+                // which is out of scope here (no dataset to test against) and tracked
+                // as a follow-up. Strings are quoted/escaped, numbers inlined;
+                // bool/null/nested items are skipped so an invalid expression is
+                // never produced. An empty (or all-skipped) IN-set matches NOTHING:
+                // we still emit `field in []` (a valid match-nothing expression)
+                // rather than dropping the clause, since dropping the sole clause
+                // would leave no filter and silently return every row.
                 let items: Vec<String> = any
                     .iter()
                     .filter_map(|v| {
                         if let Some(s) = v.as_str() {
-                            Some(format!(
-                                "\"{}\"",
-                                s.replace('\\', "\\\\").replace('"', "\\\"")
-                            ))
+                            Some(quote_milvus_string(s))
                         } else if v.is_number() {
                             Some(v.to_string())
                         } else {
@@ -652,8 +676,8 @@ fn build_milvus_filter(
                 return Some(format!("{} in [{}]", field_name, items.join(", ")));
             }
             let value = criteria.get("value")?;
-            if value.is_string() {
-                Some(format!("{} == \"{}\"", field_name, value.as_str().unwrap()))
+            if let Some(s) = value.as_str() {
+                Some(format!("{} == {}", field_name, quote_milvus_string(s)))
             } else {
                 Some(format!("{} == {}", field_name, value))
             }
@@ -984,5 +1008,25 @@ mod tests {
             build_milvus_filter("color", "match", &json!({"value": "red"})).unwrap(),
             r#"color == "red""#
         );
+    }
+
+    #[test]
+    fn match_exact_value_escapes_quotes_and_backslashes() {
+        // Exact-value string branch must escape through the shared helper:
+        // backslash first (so introduced backslashes aren't doubled), then quote.
+        assert_eq!(
+            build_milvus_filter("color", "match", &json!({"value": r#"a"b\c"#})).unwrap(),
+            r#"color == "a\"b\\c""#
+        );
+    }
+
+    #[test]
+    fn match_any_escapes_quotes_and_backslashes() {
+        // A keyword value containing BOTH a double-quote and a backslash must be
+        // escaped identically to the exact-value branch (shared helper). Input
+        // `a"b\c` -> literal `"a\"b\\c"`.
+        let e = json!({"and": [{"color": {"match": {"any": [r#"a"b\c"#]}}}]});
+        let expr = parse_milvus_conditions(&e).unwrap();
+        assert_eq!(expr, r#"(color in ["a\"b\\c"])"#, "expr={}", expr);
     }
 }
