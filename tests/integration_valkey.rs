@@ -1193,3 +1193,69 @@ fn test_binary_valkey_match_any_resp3() {
         recall
     );
 }
+
+// ── New filter datatypes: bool / uuid / full-text / datetime ────────────────
+//
+// Each drives the real binary against a compound dataset whose queries carry a
+// single filter type, with ground truth brute-forced over only the matching
+// docs. Valkey has no TEXT field type, so the full-text case exercises the
+// DEGRADED path (text tokenised to a multi-value TAG on upload + single-term TAG
+// match); single-term recall must still clear the bar.
+
+/// Shared driver: build the project with `build`, run the binary, assert recall.
+fn run_filter_recall_test(
+    name: &str,
+    dataset: &str,
+    build: impl Fn(&str, &str, usize) -> common::FilterProject,
+) {
+    wait_for_valkey();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": name, "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = build(dataset, &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            name,
+            dataset,
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+        ),
+        "valkey {} run failed",
+        name
+    );
+
+    let recall = common::read_recall(&proj.root, name);
+    println!("valkey {} recall={:.3}", name, recall);
+    assert!(recall >= 0.9, "valkey {} recall {:.3} < 0.9", name, recall);
+}
+
+#[test]
+fn test_binary_valkey_bool() {
+    run_filter_recall_test("valkey-bool", "bool-test", common::write_bool_project);
+}
+
+#[test]
+fn test_binary_valkey_uuid() {
+    run_filter_recall_test("valkey-uuid", "uuid-test", common::write_uuid_project);
+}
+
+#[test]
+fn test_binary_valkey_fulltext() {
+    run_filter_recall_test("valkey-text", "text-test", common::write_fulltext_project);
+}
+
+#[test]
+fn test_binary_valkey_datetime() {
+    run_filter_recall_test("valkey-dt", "dt-test", common::write_datetime_project);
+}

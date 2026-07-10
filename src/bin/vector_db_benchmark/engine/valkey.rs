@@ -18,7 +18,7 @@
 //!
 //! Reference: <https://github.com/valkey-io/valkey-glide/issues/828>
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -46,6 +46,18 @@ pub struct ValkeyEngineConfig {
     pub batch_size: usize,
     pub parallel: usize,
     pub skip_vector_index: bool,
+    /// Schema fields declared `datetime`: their ISO-8601 payload values are
+    /// converted to epoch seconds at HSET time so the NUMERIC index/range
+    /// filters match. Populated in `configure()`. `Arc` so per-thread config
+    /// clones share one set.
+    pub datetime_fields: Arc<HashSet<String>>,
+    /// Schema fields declared `text`. Valkey Search has no TEXT field type, so
+    /// full-text is DEGRADED to a whitespace-tokenised multi-value TAG: on upload
+    /// the text is split on whitespace and stored as a `;`-joined TAG set, and a
+    /// `{"match":{"text":"word"}}` query becomes a single-token TAG match. This
+    /// supports single-term full-text matching (any doc containing the term); it
+    /// does NOT support phrase / multi-term full-text queries.
+    pub text_tag_fields: Arc<HashSet<String>>,
 }
 
 pub struct ValkeyEngine {
@@ -111,6 +123,8 @@ impl ValkeyEngine {
                 batch_size,
                 parallel,
                 skip_vector_index: engine_config.skip_vector_index,
+                datetime_fields: Arc::new(HashSet::new()),
+                text_tag_fields: Arc::new(HashSet::new()),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             commandstats_baseline: None,
@@ -198,14 +212,25 @@ impl ValkeyEngine {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
                     match ft {
-                        "keyword" => {
+                        // keyword/uuid/bool are exact-match TAG fields.
+                        "keyword" | "uuid" | "bool" => {
                             cmd.arg(field_name).arg("TAG").arg("SEPARATOR").arg(";");
                         }
                         "int" | "float" => {
                             cmd.arg(field_name).arg("NUMERIC");
                         }
-                        // Valkey Search does not support TEXT or GEO field types;
-                        // skip them silently.
+                        // datetime is stored as epoch seconds (see upload) → NUMERIC.
+                        "datetime" => {
+                            cmd.arg(field_name).arg("NUMERIC");
+                        }
+                        // Valkey Search has no TEXT field type: DEGRADE full-text
+                        // to a whitespace-tokenised multi-value TAG (see
+                        // ValkeyEngineConfig::text_tag_fields). Single-term
+                        // full-text matching works; phrase queries do not.
+                        "text" => {
+                            cmd.arg(field_name).arg("TAG").arg("SEPARATOR").arg(";");
+                        }
+                        // Valkey Search does not support GEO; skip silently.
                         _ => {}
                     }
                 }
@@ -707,7 +732,10 @@ fn upload_batch_internal(
             for (k, v) in &meta.fields {
                 match v {
                     MetadataValue::String(s) => {
-                        fields.push((k.as_bytes().to_vec(), s.as_bytes().to_vec()));
+                        fields.push((
+                            k.as_bytes().to_vec(),
+                            encode_string_field(config, k, s).into_bytes(),
+                        ));
                     }
                     MetadataValue::Labels(labels) => {
                         fields.push((k.as_bytes().to_vec(), labels.join(";").into_bytes()));
@@ -843,9 +871,11 @@ fn build_filter(
 ) -> Option<ParsedFilter> {
     match condition_type {
         "match" => {
-            // match_any (IN-list) takes precedence over exact {value}.
+            // match_any (IN-list) > exact {value} > full-text {text}.
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 Some(build_match_any_filter(field_name, any, counter))
+            } else if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+                Some(build_text_filter(field_name, text))
             } else {
                 build_exact_match_filter(field_name, criteria, counter)
             }
@@ -935,10 +965,18 @@ fn build_exact_match_filter(
 
     let mut params = HashMap::new();
 
+    // bool → inlined TAG match on the literal "true"/"false" token. Checked
+    // before numeric arms (serde bools are neither i64 nor f64 nor str).
+    if let Some(b) = value.as_bool() {
+        let token = if b { "true" } else { "false" };
+        return Some((format!("@{}:{{{}}}", field_name, token), params));
+    }
+
     if let Some(s) = value.as_str() {
         // Valkey Search does not support $param references inside TAG {…}
         // brackets, and does NOT require backslash-escaping of spaces, dots,
         // or other special characters. Values are passed raw inside {…}.
+        // (uuid strings are handled here too — a uuid is just a keyword.)
         Some((format!("@{}:{{{}}}", field_name, s), params))
     } else if let Some(i) = value.as_i64() {
         params.insert(param_name.clone(), FilterParamValue::Int(i));
@@ -955,6 +993,35 @@ fn build_exact_match_filter(
     } else {
         None
     }
+}
+
+/// Build a full-text filter — DEGRADED on Valkey Search (no TEXT field type) to
+/// a single-token TAG match. The `text` field is stored as a whitespace-
+/// tokenised TAG multi-value on upload (see `tokenize_text_to_tag`), so a
+/// single-term query `@field:{term}` matches any doc whose text contains that
+/// term. The term is inlined (Valkey rejects `$param` inside TAG `{…}`) and its
+/// TAG-structural characters escaped. A blank query degrades to a never-match
+/// contradiction rather than an empty clause (which would run kNN over ALL docs).
+///
+/// LIMITATION: only single-term matching is supported; a multi-word `text` query
+/// is treated as one TAG token and will generally not match (phrase / multi-term
+/// full-text is not available on Valkey Search).
+fn build_text_filter(field_name: &str, text: &str) -> ParsedFilter {
+    let params = HashMap::new();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        let never = "__text_never_match__";
+        return (
+            format!("(@{0}:{{{1}}} -@{0}:{{{1}}})", field_name, never),
+            params,
+        );
+    }
+    // Use the first whitespace token; escape TAG-structural chars.
+    let term = trimmed.split_whitespace().next().unwrap_or(trimmed);
+    (
+        format!("@{}:{{{}}}", field_name, escape_tag_value(term)),
+        params,
+    )
 }
 
 fn build_range_filter(
@@ -1023,6 +1090,10 @@ fn build_geo_filter(
     ))
 }
 
+/// Insert a JSON number (or ISO-8601 datetime / numeric string) as a NUMERIC
+/// bound: integers/floats verbatim, ISO-8601 strings as epoch **seconds**, and
+/// other numeric strings parsed as f64 (so both ISO and raw-epoch datetime
+/// bounds work — upstream is ISO-only).
 fn insert_number_param(
     params: &mut HashMap<String, FilterParamValue>,
     name: &str,
@@ -1032,6 +1103,12 @@ fn insert_number_param(
         params.insert(name.to_string(), FilterParamValue::Int(i));
     } else if let Some(f) = value.as_f64() {
         params.insert(name.to_string(), FilterParamValue::Float(f));
+    } else if let Some(s) = value.as_str() {
+        if let Some(epoch) = datetime_to_epoch_secs(s) {
+            params.insert(name.to_string(), FilterParamValue::Float(epoch));
+        } else if let Ok(f) = s.parse::<f64>() {
+            params.insert(name.to_string(), FilterParamValue::Float(f));
+        }
     }
 }
 
@@ -1354,7 +1431,7 @@ fn hset_single(
         for (k, v) in &meta.fields {
             match v {
                 MetadataValue::String(s) => {
-                    cmd.arg(k.as_str()).arg(s.as_str());
+                    cmd.arg(k.as_str()).arg(encode_string_field(config, k, s));
                 }
                 MetadataValue::Labels(labels) => {
                     cmd.arg(k.as_str()).arg(labels.join(";"));
@@ -1371,6 +1448,64 @@ fn hset_single(
         .map_err(|e| format!("HSET update error: {}", e))
 }
 
+/// Format a string metadata field for storage on Valkey.
+///
+/// - `datetime` fields: ISO-8601 → epoch seconds (already-numeric epochs pass
+///   through), for the NUMERIC index.
+/// - `text` fields: whitespace-tokenised into a `;`-joined TAG multi-value so a
+///   single-term full-text query can match via TAG (Valkey has no TEXT type).
+/// - everything else: verbatim.
+fn encode_string_field(config: &ValkeyEngineConfig, key: &str, value: &str) -> String {
+    if config.datetime_fields.contains(key) {
+        if let Some(epoch) = datetime_to_epoch_secs(value) {
+            return (epoch as i64).to_string();
+        }
+        return value.to_string();
+    }
+    if config.text_tag_fields.contains(key) {
+        return tokenize_text_to_tag(value);
+    }
+    value.to_string()
+}
+
+/// Split text on whitespace and re-join with `;` (the TAG separator), escaping
+/// any literal `;` inside a token, so it can be indexed as a multi-value TAG.
+fn tokenize_text_to_tag(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| w.replace(';', "\\;"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// Collect schema fields typed `datetime` and `text` (in that order).
+fn schema_transform_fields(dataset: &Dataset) -> (HashSet<String>, HashSet<String>) {
+    let mut datetime_fields = HashSet::new();
+    let mut text_fields = HashSet::new();
+    if let Some(schema) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+        for (field, ty) in schema {
+            match ty.as_str() {
+                Some("datetime") => {
+                    datetime_fields.insert(field.clone());
+                }
+                Some("text") => {
+                    text_fields.insert(field.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    (datetime_fields, text_fields)
+}
+
+/// Parse an ISO-8601 / RFC 3339 timestamp to epoch **seconds**. Returns `None`
+/// for non-datetime strings (e.g. a numeric-epoch string), letting callers fall
+/// back to numeric handling.
+fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp() as f64)
+}
+
 // ── Engine trait implementation ──────────────────────────────────────────
 
 impl Engine for ValkeyEngine {
@@ -1384,6 +1519,12 @@ impl Engine for ValkeyEngine {
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
         let mut conn = self.get_connection()?;
+
+        // Record datetime fields (ISO → epoch seconds) and text fields (degraded
+        // to whitespace-tokenised TAG) so upload can transform their values.
+        let (dt_fields, text_fields) = schema_transform_fields(dataset);
+        self.config.datetime_fields = Arc::new(dt_fields);
+        self.config.text_tag_fields = Arc::new(text_fields);
 
         if self.config.skip_vector_index {
             println!("Skipping vector index (filter-only mode)");
@@ -2011,6 +2152,118 @@ mod tests {
         let cond = serde_json::json!({"and":[{"color":{"match":{"value":"red"}}}]});
         let (q, _) = parse_conditions(&cond).unwrap();
         assert!(q.contains("@color:{red}"), "q={}", q);
+    }
+
+    // ── New filter datatypes: bool / uuid / full-text / datetime ───────────
+    use super::{
+        datetime_to_epoch_secs, encode_string_field, tokenize_text_to_tag, ValkeyEngineConfig,
+    };
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn match_bool_emits_inlined_tag_token() {
+        let cond = serde_json::json!({"and":[{"flag":{"match":{"value": true}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@flag:{true}"), "q={}", q);
+        let cond = serde_json::json!({"and":[{"flag":{"match":{"value": false}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@flag:{false}"), "q={}", q);
+    }
+
+    #[test]
+    fn match_uuid_value_inlined_tag() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cond = serde_json::json!({"and":[{"uid":{"match":{"value": uuid}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains(&format!("@uid:{{{}}}", uuid)), "q={}", q);
+    }
+
+    #[test]
+    fn match_text_degrades_to_single_token_tag() {
+        // Full-text on Valkey → single-term TAG match (degraded).
+        let cond = serde_json::json!({"and":[{"body":{"match":{"text": "quick"}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@body:{quick}"), "q={}", q);
+    }
+
+    #[test]
+    fn match_text_empty_is_never_match() {
+        let cond = serde_json::json!({"and":[{"body":{"match":{"text": "  "}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("-@body:{"), "expected never-match, q={}", q);
+    }
+
+    #[test]
+    fn range_datetime_iso_bounds_parse_to_epoch() {
+        let cond = serde_json::json!({"and":[{"ts":{"range":{
+            "gte": "2021-01-01T00:00:00Z",
+            "lt":  "2022-01-01T00:00:00Z"
+        }}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@ts:[$ts_0_gte +inf]"), "q={}", q);
+        assert!(q.contains("@ts:[-inf ($ts_0_lt]"), "q={}", q);
+        assert!(
+            matches!(params.get("ts_0_gte"), Some(FilterParamValue::Float(f)) if (*f - 1609459200.0).abs() < 1.0)
+        );
+        assert!(
+            matches!(params.get("ts_0_lt"), Some(FilterParamValue::Float(f)) if (*f - 1640995200.0).abs() < 1.0)
+        );
+    }
+
+    #[test]
+    fn range_datetime_numeric_epoch_bounds_still_work() {
+        let cond = serde_json::json!({"and":[{"ts":{"range":{"gte": 1609459200}}}]});
+        let (_q, params) = parse_conditions(&cond).unwrap();
+        assert!(matches!(
+            params.get("ts_0_gte"),
+            Some(FilterParamValue::Int(1609459200))
+        ));
+    }
+
+    #[test]
+    fn datetime_to_epoch_secs_parses_rfc3339_and_rejects_plain() {
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00Z").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert!(datetime_to_epoch_secs("not-a-date").is_none());
+        assert!(datetime_to_epoch_secs("1609459200").is_none());
+    }
+
+    #[test]
+    fn tokenize_text_to_tag_splits_on_whitespace() {
+        assert_eq!(tokenize_text_to_tag("the sky is blue"), "the;sky;is;blue");
+        assert_eq!(tokenize_text_to_tag("solo"), "solo");
+    }
+
+    #[test]
+    fn encode_string_field_transforms_datetime_and_text() {
+        let mut dt = HashSet::new();
+        dt.insert("ts".to_string());
+        let mut txt = HashSet::new();
+        txt.insert("body".to_string());
+        let cfg = ValkeyEngineConfig {
+            m: 16,
+            ef_construction: 128,
+            data_type: "FLOAT32".to_string(),
+            algorithm: "hnsw".to_string(),
+            batch_size: 1,
+            parallel: 1,
+            skip_vector_index: false,
+            datetime_fields: Arc::new(dt),
+            text_tag_fields: Arc::new(txt),
+        };
+        assert_eq!(
+            encode_string_field(&cfg, "ts", "2021-01-01T00:00:00Z"),
+            "1609459200"
+        );
+        assert_eq!(encode_string_field(&cfg, "ts", "1609459200"), "1609459200");
+        assert_eq!(
+            encode_string_field(&cfg, "body", "the sky is blue"),
+            "the;sky;is;blue"
+        );
+        assert_eq!(encode_string_field(&cfg, "color", "red"), "red");
     }
 
     // ── redis::Value response parsing ──────────────────────────────────────
