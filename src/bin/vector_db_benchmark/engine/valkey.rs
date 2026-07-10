@@ -2233,7 +2233,10 @@ mod tests {
         let (q, params) = parse_conditions(&cond).unwrap();
         assert!(q.contains("@ts:[1609459200 +inf]"), "q={}", q);
         assert!(q.contains("@ts:[-inf (1640995200]"), "q={}", q);
-        assert!(!params.keys().any(|k| k.starts_with("ts_")), "no range params");
+        assert!(
+            !params.keys().any(|k| k.starts_with("ts_")),
+            "no range params"
+        );
     }
 
     #[test]
@@ -2253,12 +2256,19 @@ mod tests {
         let gte = parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": 5}}}]}))
             .unwrap()
             .0;
-        assert!(gte.contains("@n:[5 +inf]") && !gte.contains("(5"), "gte: {}", gte);
+        assert!(
+            gte.contains("@n:[5 +inf]") && !gte.contains("(5"),
+            "gte: {}",
+            gte
+        );
     }
 
     #[test]
     fn datetime_tolerates_naive_and_date_only() {
-        assert_eq!(datetime_to_epoch_secs("2021-01-01").map(|f| f as i64), Some(1609459200));
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01").map(|f| f as i64),
+            Some(1609459200)
+        );
         assert_eq!(
             datetime_to_epoch_secs("2021-01-01T00:00:00").map(|f| f as i64),
             Some(1609459200)

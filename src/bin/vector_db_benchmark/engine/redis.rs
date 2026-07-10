@@ -2216,7 +2216,10 @@ mod tests {
     #[test]
     fn datetime_tolerates_naive_and_date_only() {
         // Better than upstream (RFC-3339 only): accept naive + date-only bounds.
-        assert_eq!(datetime_to_epoch_secs("2021-01-01").map(|f| f as i64), Some(1609459200));
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01").map(|f| f as i64),
+            Some(1609459200)
+        );
         assert_eq!(
             datetime_to_epoch_secs("2021-01-01T00:00:00").map(|f| f as i64),
             Some(1609459200)
@@ -2233,11 +2236,19 @@ mod tests {
         let (gt, _) =
             super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gt": 5}}}]}))
                 .unwrap();
-        assert!(gt.contains("@n:[($n_0_gt +inf]"), "gt not exclusive: {}", gt);
+        assert!(
+            gt.contains("@n:[($n_0_gt +inf]"),
+            "gt not exclusive: {}",
+            gt
+        );
         let (gte, _) =
             super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": 5}}}]}))
                 .unwrap();
-        assert!(gte.contains("@n:[$n_0_gte +inf]") && !gte.contains("[("), "gte: {}", gte);
+        assert!(
+            gte.contains("@n:[$n_0_gte +inf]") && !gte.contains("[("),
+            "gte: {}",
+            gte
+        );
     }
 
     #[test]
@@ -2246,7 +2257,11 @@ mod tests {
         let (q, params) =
             super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": "nope"}}}]}))
                 .unwrap_or_default();
-        assert!(!q.contains("$n_0_gte") || params.contains_key("n_0_gte"), "dangling: {}", q);
+        assert!(
+            !q.contains("$n_0_gte") || params.contains_key("n_0_gte"),
+            "dangling: {}",
+            q
+        );
     }
 
     #[test]
