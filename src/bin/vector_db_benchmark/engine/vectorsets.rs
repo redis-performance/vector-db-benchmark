@@ -1035,16 +1035,113 @@ fn build_clause(
 }
 
 fn build_match_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
+    // match_any (IN-list) takes precedence: {"match": {"any": [...]}}. The
+    // canonical IN-list shape has NO "value" key, so without this arm the whole
+    // clause returned None; when every clause is None, VSIM omits FILTER entirely
+    // and runs UNFILTERED. Emitted as an OR-of-equality expression, mirroring the
+    // OR-of-values semantics of redis build_match_any_filter / qdrant matches().
+    if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+        return Some(build_match_any_clause(field_name, any));
+    }
+
+    // Full-text {"match": {"text": ...}}.
+    //
+    // IMPORTANT: VectorSets has NO real tokenized full-text index — `contains`
+    // and `startswith` BOTH error on a live server (verified on Redis 8.8). The
+    // best available approximation is `"<text>" in .field`, whose value-`in`-field
+    // form does SUBSTRING/word-membership matching on a scalar string (verified:
+    // `"quick" in .body` matches `.body == "the quick brown fox"`). This is a
+    // best-effort single-term "contains", NOT true full-text: no stemming, no
+    // relevance ranking, no multi-term/phrase logic, and it can over-match a term
+    // that appears as a substring of a longer word. So text-filter recall for
+    // VectorSets is NOT directly comparable to a tokenized engine (e.g. redis
+    // `@field:(token)`). It is emitted (never dropped) so the query is never run
+    // UNFILTERED. Blank text → an unsatisfiable never-match.
+    if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Some(never_match_clause(field_name));
+        }
+        return Some(format!("\"{}\" in .{}", escape_str(trimmed), field_name));
+    }
+
     let value = criteria.get("value")?;
+    // bool → `.field == "true"`/`"false"`. Booleans are stored as JSON STRINGS
+    // ("true"/"false") on upload (see readers::metadata), and a BARE bool literal
+    // `.field == true` is a SYNTAX ERROR in VSIM FILTER (verified on Redis 8.8 —
+    // it errors the WHOLE query), so it must be quoted to match storage. Mirrors
+    // redis build_exact_match_filter's true/false token. Checked before the
+    // numeric arms because serde treats JSON true/false as neither i64 nor f64.
+    if let Some(b) = value.as_bool() {
+        let token = if b { "true" } else { "false" };
+        return Some(format!(".{} == \"{}\"", field_name, token));
+    }
     if let Some(s) = value.as_str() {
-        // Escape double quotes in the string value
-        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-        Some(format!(".{} == \"{}\"", field_name, escaped))
+        Some(format!(".{} == \"{}\"", field_name, escape_str(s)))
     } else if let Some(n) = value.as_i64() {
         Some(format!(".{} == {}", field_name, n))
     } else {
         value.as_f64().map(|f| format!(".{} == {}", field_name, f))
     }
+}
+
+/// Escape a string literal for a VectorSets FILTER expression (backslash first,
+/// then double quote).
+fn escape_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Build a `match_any` (IN-list) clause as a per-element OR, covering keyword,
+/// int AND float lists. Forms verified against a live VectorSets server
+/// (Redis 8.8):
+///
+/// - string element → `.field == "<escaped>"` — EXACT equality. NOTE: the
+///   value-`in`-field form (`"v" in .field`) does SUBSTRING/word matching on a
+///   scalar string (`"blue" in .color` wrongly matches `.color == "dark blue"`),
+///   which violates the exact/whole-value keyword semantics of qdrant/redis
+///   match_any, so we use `==`. (A multi-valued `labels` array would need `in`
+///   for membership, but no keyword match_any in the benchmark targets an array
+///   field — keyword filters are scalar — and exact-match is the tested contract.)
+/// - numeric element (i64 OR f64) → `.field == <n>` — VSIM coerces numeric
+///   strings ("1" == 1; numbers are stored as JSON strings on upload).
+/// - OR all representable elements, parenthesized. Empty-string tokens are dropped
+///   (they can never match an exact keyword).
+/// - Empty / no representable values → a never-match contradiction so an empty
+///   IN-set matches NOTHING rather than being dropped (dropping the sole clause
+///   would leave no FILTER and run over ALL vectors — the inverse of the filter).
+fn build_match_any_clause(field_name: &str, any: &[serde_json::Value]) -> String {
+    let clauses: Vec<String> = any
+        .iter()
+        .filter_map(|v| {
+            if let Some(s) = v.as_str() {
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(format!(".{} == \"{}\"", field_name, escape_str(s)))
+                }
+            } else if let Some(i) = v.as_i64() {
+                Some(format!(".{} == {}", field_name, i))
+            } else {
+                v.as_f64().map(|f| format!(".{} == {}", field_name, f))
+            }
+        })
+        .collect();
+
+    match clauses.len() {
+        0 => never_match_clause(field_name),
+        1 => clauses.into_iter().next().unwrap(),
+        _ => format!("({})", clauses.join(" or ")),
+    }
+}
+
+/// An unsatisfiable clause (`.f == "x" and .f != "x"`) used when a filter can
+/// never match, so it restricts to NOTHING instead of being dropped (which would
+/// leave the query unfiltered).
+fn never_match_clause(field_name: &str) -> String {
+    format!(
+        "(.{0} == \"__never_match__\" and .{0} != \"__never_match__\")",
+        field_name
+    )
 }
 
 fn build_range_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
@@ -1124,5 +1221,158 @@ mod vsim_parse_tests {
         let resp = vec![Value::Nil, Value::Nil];
         assert_eq!(parse_vsim_response(&resp), vec![(0, 0.0)]);
         assert_eq!(parse_vsim_response(&[]), vec![]);
+    }
+}
+
+#[cfg(test)]
+mod filter_expr_tests {
+    use super::build_filter_expression;
+    use serde_json::json;
+
+    // ── scalar match / range (grammar baseline) ──
+
+    #[test]
+    fn and_string_match() {
+        let cond = json!({"and": [{"color": {"match": {"value": "red"}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".color == \"red\"".to_string())
+        );
+    }
+
+    #[test]
+    fn and_numeric_match() {
+        let cond = json!({"and": [{"f": {"match": {"value": 10}}}]});
+        assert_eq!(build_filter_expression(&cond), Some(".f == 10".to_string()));
+    }
+
+    #[test]
+    fn string_value_quotes_and_backslashes_escaped() {
+        let cond = json!({"and": [{"name": {"match": {"value": "a\"b\\c"}}}]});
+        // " → \" and \ → \\ (backslash escaped first).
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".name == \"a\\\"b\\\\c\"".to_string())
+        );
+    }
+
+    #[test]
+    fn range_bounds_joined_with_and() {
+        let cond = json!({"and": [{"age": {"range": {"gt": 1, "gte": 2, "lt": 9, "lte": 8}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".age > 1 and .age >= 2 and .age < 9 and .age <= 8".to_string())
+        );
+    }
+
+    #[test]
+    fn or_block_parenthesized() {
+        let cond = json!({"or": [
+            {"a": {"match": {"value": "x"}}},
+            {"b": {"match": {"value": "y"}}},
+        ]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.a == \"x\" or .b == \"y\")".to_string())
+        );
+    }
+
+    // ── FAILING-then-fixed: previously each returned None → unfiltered ──
+
+    #[test]
+    fn match_any_keyword_list_yields_exact_equality_or() {
+        // EXACT equality (`==`), NOT `"v" in .field`: on a live Redis 8.8 server
+        // `"blue" in .color` substring-matches `.color == "dark blue"`, breaking
+        // whole-value keyword semantics — verified in integration_vectorsets.
+        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.color == \"red\" or .color == \"blue\")".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_int_list_yields_numeric_equality_or() {
+        // Numbers use `.field == N` (value-in-field does NOT work for numbers).
+        let cond = json!({"and": [{"size": {"match": {"any": [1, 2]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.size == 1 or .size == 2)".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_float_list_yields_numeric_equality_or() {
+        let cond = json!({"and": [{"score": {"match": {"any": [1.5, 2.5]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.score == 1.5 or .score == 2.5)".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_mixed_list_uses_per_element_form() {
+        // Mixed int + string: numbers use `== N`, strings use exact `== "s"`.
+        let cond = json!({"and": [{"n": {"match": {"any": [1, "red"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.n == 1 or .n == \"red\")".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_single_value_unwrapped() {
+        let cond = json!({"and": [{"color": {"match": {"any": ["red"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".color == \"red\"".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_empty_list_is_non_none_never_match() {
+        // Must NOT be dropped (dropping the sole clause → unfiltered).
+        let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
+        let expr = build_filter_expression(&cond).expect("empty match_any must not be dropped");
+        assert!(expr.contains("=="), "expr={}", expr);
+        assert!(expr.contains("!="), "expr={}", expr);
+    }
+
+    #[test]
+    fn full_text_match_degrades_to_value_in_field() {
+        // VSIM has no tokenized text; best-effort exact-match via value-in-field.
+        let cond = json!({"and": [{"body": {"match": {"text": "quick"}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("\"quick\" in .body".to_string())
+        );
+    }
+
+    #[test]
+    fn bool_value_quotes_true_matching_string_storage() {
+        // Bare `.flag == true` is a VSIM syntax error; bools are stored as the
+        // JSON strings "true"/"false", so we must quote.
+        let cond = json!({"and": [{"flag": {"match": {"value": true}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".flag == \"true\"".to_string())
+        );
+    }
+
+    #[test]
+    fn bool_value_quotes_false() {
+        let cond = json!({"and": [{"flag": {"match": {"value": false}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".flag == \"false\"".to_string())
+        );
+    }
+
+    // ── empty / passthrough ──
+
+    #[test]
+    fn empty_conditions_none() {
+        assert!(build_filter_expression(&json!({})).is_none());
+        assert!(build_filter_expression(&json!({"and": [], "or": []})).is_none());
     }
 }

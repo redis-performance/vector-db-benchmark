@@ -444,22 +444,38 @@ fn parse_es_conditions(conditions: &serde_json::Value) -> Option<serde_json::Val
     let and_filters = obj
         .get("and")
         .and_then(|v| v.as_array())
-        .map(|entries| build_subfilters(entries));
+        .map(|entries| build_subfilters(entries))
+        .filter(|f| !f.is_empty());
     let or_filters = obj
         .get("or")
         .and_then(|v| v.as_array())
-        .map(|entries| build_subfilters(entries));
+        .map(|entries| build_subfilters(entries))
+        .filter(|f| !f.is_empty());
 
     if and_filters.is_none() && or_filters.is_none() {
         return None;
     }
 
-    Some(serde_json::json!({
-        "bool": {
-            "must": and_filters.unwrap_or_default(),
-            "should": or_filters.unwrap_or_default(),
-        }
-    }))
+    // Mirror parse_os_conditions: omit empty `must`/`should` keys entirely and
+    // set `minimum_should_match: 1` whenever `should` is present. Previously we
+    // always emitted both arrays via `unwrap_or_default()` and never set
+    // minimum_should_match, so an OR-only filter produced
+    // `{bool:{must:[],should:[...]}}` — with an empty `must` present, ES treats
+    // `should` as OPTIONAL (scoring only), matching ALL documents and silently
+    // running the query UNFILTERED.
+    let mut bool_query = serde_json::Map::new();
+    if let Some(must) = and_filters {
+        bool_query.insert("must".to_string(), serde_json::Value::Array(must));
+    }
+    if let Some(should) = or_filters {
+        bool_query.insert("should".to_string(), serde_json::Value::Array(should));
+        bool_query.insert(
+            "minimum_should_match".to_string(),
+            serde_json::Value::from(1),
+        );
+    }
+
+    Some(serde_json::json!({ "bool": bool_query }))
 }
 
 fn build_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -497,6 +513,10 @@ fn build_filter(
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 return Some(serde_json::json!({"terms": {field_name: any}}));
             }
+            // follow-up: full-text `{"match": {"text": …}}` conditions are dropped
+            // here (no "value" key → None). This is PRE-EXISTING and shared with
+            // OpenSearch's build_filter; fixing text filtering in both is out of
+            // scope for this PR.
             let value = criteria.get("value")?;
             Some(serde_json::json!({"match": {field_name: value}}))
         }
@@ -1045,5 +1065,54 @@ mod tests {
         assert_eq!(engine.config.ef_construction, 256);
         assert_eq!(engine.config.batch_size, 1000);
         assert_eq!(engine.config.parallel, 8);
+    }
+
+    // ── parse_es_conditions bool-query shape (mirrors OpenSearch tests) ──
+
+    #[test]
+    fn es_or_only_sets_minimum_should_match_no_empty_must() {
+        // FAILING-then-fixed: before the fix this emitted `must:[]` and no
+        // `minimum_should_match`, so ES matched ALL docs (unfiltered).
+        let conditions = serde_json::json!({"or": [{"a": {"match": {"value": 1}}}]});
+        let parsed = parse_es_conditions(&conditions).expect("should parse");
+        let bool_query = &parsed["bool"];
+
+        assert_eq!(bool_query["minimum_should_match"], 1);
+        assert_eq!(bool_query["should"].as_array().unwrap().len(), 1);
+        // No empty `must` array should be emitted for an OR-only filter.
+        assert!(bool_query.get("must").is_none());
+    }
+
+    #[test]
+    fn es_and_only_omits_should() {
+        let conditions = serde_json::json!({"and": [{"a": {"match": {"value": 1}}}]});
+        let parsed = parse_es_conditions(&conditions).expect("should parse");
+        let bool_query = &parsed["bool"];
+
+        assert_eq!(bool_query["must"].as_array().unwrap().len(), 1);
+        assert!(bool_query.get("should").is_none());
+        assert!(bool_query.get("minimum_should_match").is_none());
+    }
+
+    #[test]
+    fn es_and_or_combined_keeps_both_and_min_should() {
+        let conditions = serde_json::json!({
+            "and": [{"a": {"match": {"value": 1}}}],
+            "or": [{"b": {"match": {"value": 2}}}],
+        });
+        let parsed = parse_es_conditions(&conditions).expect("should parse");
+        let bool_query = &parsed["bool"];
+
+        assert_eq!(bool_query["must"].as_array().unwrap().len(), 1);
+        assert_eq!(bool_query["should"].as_array().unwrap().len(), 1);
+        // minimum_should_match:1 keeps the OR restrictive even alongside must.
+        assert_eq!(bool_query["minimum_should_match"], 1);
+    }
+
+    #[test]
+    fn es_empty_conditions_return_none() {
+        assert!(parse_es_conditions(&serde_json::json!({})).is_none());
+        // Present-but-empty sub-arrays should not produce a filter either.
+        assert!(parse_es_conditions(&serde_json::json!({"and": [], "or": []})).is_none());
     }
 }
