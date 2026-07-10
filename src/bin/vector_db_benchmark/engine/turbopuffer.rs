@@ -251,6 +251,25 @@ fn parse_single_condition(condition: &serde_json::Value) -> Option<serde_json::V
                     // this arm the clause was silently dropped and the query ran
                     // UNFILTERED). Mirrors qdrant's OR-of-values / redis match_any.
                     if let Some(any) = operand.get("any").and_then(|v| v.as_array()) {
+                        // Empty IN-set must match NOTHING. Turbopuffer has no bool
+                        // literal, so emit a provably-unsatisfiable contradiction
+                        // (Eq AND NotEq the same sentinel) rather than ["In",[]],
+                        // whose empty-set semantics on the cloud service are
+                        // unverified (could run unfiltered or 400).
+                        if any.is_empty() {
+                            let sentinel = "__match_any_never_match__";
+                            return Some(serde_json::json!([
+                                "And",
+                                [
+                                    [field_name, "Eq", sentinel],
+                                    [field_name, "NotEq", sentinel]
+                                ]
+                            ]));
+                        }
+                        // follow-up: element-type coercion (int vs string) and
+                        // multi-valued attributes in turbopuffer's In are
+                        // dataset-dependent and cloud-only (untestable locally);
+                        // the common keyword/int IN-list is covered.
                         return Some(serde_json::json!([field_name, "In", any]));
                     }
                     // {"match": {"value": x}} => ["field_name", "Eq", x]
@@ -755,6 +774,27 @@ mod filter_tests {
         let cond = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
         let f = parse_turbopuffer_filter(&cond).expect("match_any must produce a filter");
         assert_eq!(f, json!(["And", [["size", "In", [1, 2, 3]]]]));
+    }
+
+    #[test]
+    fn match_any_empty_list_emits_never_match_contradiction() {
+        // Empty any:[] must match NOTHING, not run unfiltered. Emitted as an
+        // Eq-AND-NotEq contradiction wrapped by the top-level "And".
+        let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
+        let f = parse_turbopuffer_filter(&cond).expect("empty any must not be dropped");
+        assert_eq!(
+            f,
+            json!([
+                "And",
+                [[
+                    "And",
+                    [
+                        ["color", "Eq", "__match_any_never_match__"],
+                        ["color", "NotEq", "__match_any_never_match__"]
+                    ]
+                ]]
+            ])
+        );
     }
 
     #[test]

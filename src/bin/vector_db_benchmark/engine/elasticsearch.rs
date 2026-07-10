@@ -513,6 +513,10 @@ fn build_filter(
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 return Some(serde_json::json!({"terms": {field_name: any}}));
             }
+            // follow-up: full-text `{"match": {"text": …}}` conditions are dropped
+            // here (no "value" key → None). This is PRE-EXISTING and shared with
+            // OpenSearch's build_filter; fixing text filtering in both is out of
+            // scope for this PR.
             let value = criteria.get("value")?;
             Some(serde_json::json!({"match": {field_name: value}}))
         }

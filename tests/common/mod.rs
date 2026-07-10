@@ -51,6 +51,50 @@ fn matches_filter(id: usize) -> bool {
     MATCH_ANY_COLORS.contains(&color_for(id))
 }
 
+/// Ground-truth distance metric for the brute-forced neighbours. Engines that
+/// rank by L2 (Redis/Valkey FT, pgvector, …) use `L2`; VectorSets ranks by
+/// cosine similarity intrinsically (VADD/VSIM take no metric), so its fixtures
+/// must declare `cosine` and brute-force cosine ground truth — otherwise even a
+/// perfectly-applied filter scores low recall against an L2 ranking.
+#[derive(Clone, Copy)]
+pub enum GtMetric {
+    L2,
+    Cosine,
+}
+
+impl GtMetric {
+    /// datasets.json `distance` string.
+    fn name(self) -> &'static str {
+        match self {
+            GtMetric::L2 => "l2",
+            GtMetric::Cosine => "cosine",
+        }
+    }
+
+    /// Distance (smaller = closer) between two vectors under this metric. For
+    /// cosine we return `1 - cosine_similarity`; it is scale-invariant, so it
+    /// matches VSIM's cosine ranking whether or not the vectors are normalized.
+    fn dist(self, a: &[f32], b: &[f32]) -> f64 {
+        match self {
+            GtMetric::L2 => a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+                .sum(),
+            GtMetric::Cosine => {
+                let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
+                let na: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+                let nb: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+                if na * nb > 0.0 {
+                    1.0 - dot / (na * nb)
+                } else {
+                    1.0
+                }
+            }
+        }
+    }
+}
+
 /// Build a full temp project (datasets + config + results dir) for a
 /// `match_any` benchmark and return its root. `engine_configs_json` is the
 /// verbatim contents of `experiments/configurations/test.json` (a JSON array
@@ -60,6 +104,25 @@ pub fn write_match_any_project(
     engine_configs_json: &str,
     dim: usize,
 ) -> MatchAnyProject {
+    write_match_any_project_metric(dataset_name, engine_configs_json, dim, GtMetric::L2)
+}
+
+/// Cosine-ground-truth variant of [`write_match_any_project`] for engines that
+/// rank by cosine similarity (VectorSets).
+pub fn write_match_any_cosine_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> MatchAnyProject {
+    write_match_any_project_metric(dataset_name, engine_configs_json, dim, GtMetric::Cosine)
+}
+
+fn write_match_any_project_metric(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    metric: GtMetric,
+) -> MatchAnyProject {
     // Deterministic data/queries so ground truth is reproducible across engines.
     let mut rng = StdRng::seed_from_u64(0xA11CE);
     let gen_vec =
@@ -67,17 +130,11 @@ pub fn write_match_any_project(
     let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
     let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
 
-    let l2 = |a: &[f32], b: &[f32]| -> f64 {
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
-            .sum()
-    };
     // Nearest neighbours computed over the FILTERED corpus only.
     let filtered_gt = |q: &[f32]| -> Vec<i64> {
         let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
             .filter(|id| matches_filter(*id))
-            .map(|id| (id as i64, l2(q, &vectors[id])))
+            .map(|id| (id as i64, metric.dist(q, &vectors[id])))
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         scored.iter().take(TOP).map(|(id, _)| *id).collect()
@@ -127,7 +184,7 @@ pub fn write_match_any_project(
         "name": dataset_name,
         "type": "tar",
         "path": format!("{}/", dataset_name),
-        "distance": "l2",
+        "distance": metric.name(),
         "vector_size": dim,
         "vector_count": N_DOCS,
         "schema": { "color": "keyword", "size": "int" },
@@ -179,6 +236,25 @@ pub fn write_match_any_int_project(
     engine_configs_json: &str,
     dim: usize,
 ) -> MatchAnyProject {
+    write_match_any_int_project_metric(dataset_name, engine_configs_json, dim, GtMetric::L2)
+}
+
+/// Cosine-ground-truth variant of [`write_match_any_int_project`] for engines
+/// that rank by cosine similarity (VectorSets).
+pub fn write_match_any_int_cosine_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> MatchAnyProject {
+    write_match_any_int_project_metric(dataset_name, engine_configs_json, dim, GtMetric::Cosine)
+}
+
+fn write_match_any_int_project_metric(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    metric: GtMetric,
+) -> MatchAnyProject {
     // Deterministic data/queries so ground truth is reproducible across engines.
     let mut rng = StdRng::seed_from_u64(0x5133_u64);
     let gen_vec =
@@ -186,17 +262,11 @@ pub fn write_match_any_int_project(
     let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
     let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
 
-    let l2 = |a: &[f32], b: &[f32]| -> f64 {
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
-            .sum()
-    };
     // Nearest neighbours computed over the size-FILTERED corpus only.
     let filtered_gt = |q: &[f32]| -> Vec<i64> {
         let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
             .filter(|id| matches_int_filter(*id))
-            .map(|id| (id as i64, l2(q, &vectors[id])))
+            .map(|id| (id as i64, metric.dist(q, &vectors[id])))
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         scored.iter().take(TOP).map(|(id, _)| *id).collect()
@@ -243,7 +313,7 @@ pub fn write_match_any_int_project(
         "name": dataset_name,
         "type": "tar",
         "path": format!("{}/", dataset_name),
-        "distance": "l2",
+        "distance": metric.name(),
         "vector_size": dim,
         "vector_count": N_DOCS,
         "schema": { "color": "keyword", "size": "int" },
@@ -289,10 +359,12 @@ pub struct FilterProject {
 /// returns the per-document payload object, `condition` is the (shared) filter
 /// JSON attached to every query, and `matches` decides whether a document id
 /// satisfies the filter (used to brute-force the filtered ground truth).
+#[allow(clippy::too_many_arguments)]
 fn write_filter_project(
     dataset_name: &str,
     engine_configs_json: &str,
     dim: usize,
+    metric: GtMetric,
     schema: serde_json::Value,
     payload_for: impl Fn(usize) -> serde_json::Value,
     condition: serde_json::Value,
@@ -303,6 +375,7 @@ fn write_filter_project(
         dataset_name,
         engine_configs_json,
         dim,
+        metric,
         N_QUERIES,
         schema,
         payload_for,
@@ -324,6 +397,7 @@ fn write_filter_project_multi(
     dataset_name: &str,
     engine_configs_json: &str,
     dim: usize,
+    metric: GtMetric,
     n_queries: usize,
     schema: serde_json::Value,
     payload_for: impl Fn(usize) -> serde_json::Value,
@@ -336,18 +410,12 @@ fn write_filter_project_multi(
     let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
     let queries: Vec<Vec<f32>> = (0..n_queries).map(|_| gen_vec(&mut rng)).collect();
 
-    let l2 = |a: &[f32], b: &[f32]| -> f64 {
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
-            .sum()
-    };
     // Nearest neighbours for query `q`, computed over ONLY the docs that satisfy
     // query `q`'s filter (its tenant/subset).
     let filtered_gt = |q_idx: usize, q: &[f32]| -> Vec<i64> {
         let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
             .filter(|id| matches_for(q_idx, *id))
-            .map(|id| (id as i64, l2(q, &vectors[id])))
+            .map(|id| (id as i64, metric.dist(q, &vectors[id])))
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         scored.iter().take(TOP).map(|(id, _)| *id).collect()
@@ -389,7 +457,7 @@ fn write_filter_project_multi(
         "name": dataset_name,
         "type": "tar",
         "path": format!("{}/", dataset_name),
-        "distance": "l2",
+        "distance": metric.name(),
         "vector_size": dim,
         "vector_count": N_DOCS,
         "schema": schema,
@@ -426,10 +494,30 @@ pub fn write_bool_project(
     engine_configs_json: &str,
     dim: usize,
 ) -> FilterProject {
+    write_bool_project_metric(dataset_name, engine_configs_json, dim, GtMetric::L2)
+}
+
+/// Cosine-ground-truth variant of [`write_bool_project`] for engines that rank by
+/// cosine similarity (VectorSets).
+pub fn write_bool_cosine_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_bool_project_metric(dataset_name, engine_configs_json, dim, GtMetric::Cosine)
+}
+
+fn write_bool_project_metric(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    metric: GtMetric,
+) -> FilterProject {
     write_filter_project(
         dataset_name,
         engine_configs_json,
         dim,
+        metric,
         serde_json::json!({ "flag": "bool" }),
         |id| serde_json::json!({ "flag": id % 2 == 0 }),
         serde_json::json!({ "and": [ { "flag": { "match": { "value": true } } } ] }),
@@ -456,6 +544,7 @@ pub fn write_uuid_project(
         dataset_name,
         engine_configs_json,
         dim,
+        GtMetric::L2,
         serde_json::json!({ "uid": "uuid" }),
         |id| serde_json::json!({ "uid": UUIDS[id % UUIDS.len()] }),
         serde_json::json!({ "and": [ { "uid": { "match": { "value": UUIDS[0] } } } ] }),
@@ -475,6 +564,7 @@ pub fn write_fulltext_project(
         dataset_name,
         engine_configs_json,
         dim,
+        GtMetric::L2,
         serde_json::json!({ "body": "text" }),
         |id| {
             let body = if id % 2 == 0 {
@@ -506,6 +596,7 @@ pub fn write_datetime_project(
         dataset_name,
         engine_configs_json,
         dim,
+        GtMetric::L2,
         serde_json::json!({ "ts": "datetime" }),
         move |id| serde_json::json!({ "ts": iso_for(id as i64) }),
         serde_json::json!({ "and": [ { "ts": { "range": { "gte": gte, "lt": lt } } } ] }),
@@ -550,6 +641,7 @@ pub fn write_tenant_project(
         dataset_name,
         engine_configs_json,
         dim,
+        GtMetric::L2,
         N_TENANTS,
         serde_json::json!({ "tenant": "keyword" }),
         |id| serde_json::json!({ "tenant": tenant_for(id) }),
