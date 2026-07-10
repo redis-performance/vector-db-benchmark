@@ -1881,3 +1881,67 @@ fn test_binary_redis_match_any_resp3() {
         recall
     );
 }
+
+// ── New filter datatypes: bool / uuid / full-text / datetime ────────────────
+//
+// Each drives the real binary against a compound dataset whose queries carry a
+// single filter type, with ground truth brute-forced over only the matching
+// docs — a high recall proves the corresponding filter arm (TAG bool, TAG uuid,
+// TEXT full-text, NUMERIC datetime range) is applied end-to-end.
+
+/// Shared driver: build the project with `build`, run the binary, assert recall.
+fn run_filter_recall_test(
+    name: &str,
+    dataset: &str,
+    build: impl Fn(&str, &str, usize) -> common::FilterProject,
+) {
+    wait_for_redis();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": name, "engine": "redis",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = build(dataset, &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            name,
+            dataset,
+            "localhost",
+            &[("REDIS_PORT", &TEST_PORT.to_string())],
+        ),
+        "redis {} run failed",
+        name
+    );
+
+    let recall = common::read_recall(&proj.root, name);
+    println!("redis {} recall={:.3}", name, recall);
+    assert!(recall >= 0.9, "redis {} recall {:.3} < 0.9", name, recall);
+}
+
+#[test]
+fn test_binary_redis_bool() {
+    run_filter_recall_test("redis-bool", "bool-test", common::write_bool_project);
+}
+
+#[test]
+fn test_binary_redis_uuid() {
+    run_filter_recall_test("redis-uuid", "uuid-test", common::write_uuid_project);
+}
+
+#[test]
+fn test_binary_redis_fulltext() {
+    run_filter_recall_test("redis-text", "text-test", common::write_fulltext_project);
+}
+
+#[test]
+fn test_binary_redis_datetime() {
+    run_filter_recall_test("redis-dt", "dt-test", common::write_datetime_project);
+}

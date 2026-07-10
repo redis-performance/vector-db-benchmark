@@ -2,7 +2,7 @@
 //!
 //! Implements the Engine trait for RediSearch vector similarity.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -31,6 +31,12 @@ pub struct RedisEngineConfig {
     pub batch_size: usize,
     pub parallel: usize,
     pub skip_vector_index: bool,
+    /// Schema field names declared as `datetime`. Values for these fields are
+    /// ISO-8601 strings in the payload; they are converted to epoch seconds at
+    /// HSET time so the NUMERIC index/range filters match. Populated in
+    /// `configure()` from the dataset schema. Wrapped in `Arc` so the per-thread
+    /// config clones share one set.
+    pub datetime_fields: Arc<HashSet<String>>,
 }
 
 pub struct RedisEngine {
@@ -91,6 +97,7 @@ impl RedisEngine {
                 batch_size,
                 parallel,
                 skip_vector_index: engine_config.skip_vector_index,
+                datetime_fields: Arc::new(HashSet::new()),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             commandstats_baseline: None,
@@ -152,7 +159,11 @@ impl RedisEngine {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
                     match ft {
-                        "keyword" => {
+                        // keyword/uuid/bool are all exact-match TAG fields.
+                        // uuid & bool values are single tokens (a UUID string, or
+                        // "true"/"false"); SEPARATOR ; + SORTABLE UNF matches the
+                        // keyword treatment so exact TAG matching works.
+                        "keyword" | "uuid" | "bool" => {
                             cmd.arg(field_name)
                                 .arg("TAG")
                                 .arg("SEPARATOR")
@@ -161,6 +172,12 @@ impl RedisEngine {
                                 .arg("UNF");
                         }
                         "int" | "float" => {
+                            cmd.arg(field_name).arg("NUMERIC").arg("SORTABLE");
+                        }
+                        // datetime is stored as epoch seconds (see upload) and
+                        // indexed NUMERIC so range filters work with either ISO or
+                        // numeric bounds.
+                        "datetime" => {
                             cmd.arg(field_name).arg("NUMERIC").arg("SORTABLE");
                         }
                         "text" => {
@@ -666,7 +683,10 @@ fn upload_batch_internal(
             for (k, v) in &meta.fields {
                 match v {
                     MetadataValue::String(s) => {
-                        fields.push((k.as_bytes().to_vec(), s.as_bytes().to_vec()));
+                        fields.push((
+                            k.as_bytes().to_vec(),
+                            encode_string_field(config, k, s).into_bytes(),
+                        ));
                     }
                     MetadataValue::Labels(labels) => {
                         fields.push((k.as_bytes().to_vec(), labels.join(";").into_bytes()));
@@ -786,9 +806,12 @@ fn build_filter(
 ) -> Option<ParsedFilter> {
     match condition_type {
         "match" => {
-            // match_any (IN-list) takes precedence over exact {value}.
+            // match_any (IN-list) takes precedence over exact {value}, which
+            // takes precedence over full-text {text}.
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 Some(build_match_any_filter(field_name, any, counter))
+            } else if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+                Some(build_text_filter(field_name, text, counter))
             } else {
                 build_exact_match_filter(field_name, criteria, counter)
             }
@@ -883,6 +906,15 @@ fn build_exact_match_filter(
 
     let mut params = HashMap::new();
 
+    // bool → TAG match on the literal "true"/"false" token. Checked before the
+    // numeric arms because serde treats JSON `true`/`false` as neither i64 nor
+    // f64 (and never as a string).
+    if let Some(b) = value.as_bool() {
+        let token = if b { "true" } else { "false" };
+        params.insert(param_name.clone(), FilterParamValue::Str(token.to_string()));
+        return Some((format!("@{}:{{${}}}", field_name, param_name), params));
+    }
+
     if let Some(s) = value.as_str() {
         params.insert(param_name.clone(), FilterParamValue::Str(s.to_string()));
         Some((format!("@{}:{{${}}}", field_name, param_name), params))
@@ -903,6 +935,39 @@ fn build_exact_match_filter(
     }
 }
 
+/// Build a full-text filter over a TEXT field: `@field:($param)`.
+///
+/// The search terms are passed as a single Str param (DIALECT 2 substitutes it
+/// into the text-search context), so RediSearch tokenizes and matches them
+/// against the indexed TEXT field. An empty/blank query would be invalid text
+/// syntax, so it degrades to a never-match `(@f:($p) -@f:($p))` contradiction
+/// rather than an empty clause (which, as the sole prefilter, would run kNN over
+/// ALL docs — the inverse of the intended filter).
+fn build_text_filter(field_name: &str, text: &str, counter: &mut usize) -> ParsedFilter {
+    let param_name = format!("{}_{}", field_name, counter);
+    *counter += 1;
+
+    let mut params = HashMap::new();
+    let trimmed = text.trim();
+
+    if trimmed.is_empty() {
+        params.insert(
+            param_name.clone(),
+            FilterParamValue::Str("__text_never_match__".to_string()),
+        );
+        return (
+            format!("(@{0}:(${1}) -@{0}:(${1}))", field_name, param_name),
+            params,
+        );
+    }
+
+    params.insert(
+        param_name.clone(),
+        FilterParamValue::Str(trimmed.to_string()),
+    );
+    (format!("@{}:(${})", field_name, param_name), params)
+}
+
 /// Build range filter: @field:[-inf ($param_lt], @field:[($param_gt +inf], etc.
 fn build_range_filter(
     field_name: &str,
@@ -915,25 +980,25 @@ fn build_range_filter(
     let mut params = HashMap::new();
     let mut clauses = Vec::new();
 
-    if let Some(lt) = criteria.get("lt") {
-        let pname = format!("{}_lt", param_prefix);
-        insert_number_param(&mut params, &pname, lt);
-        clauses.push(format!("@{}:[-inf (${}]", field_name, pname));
-    }
-    if let Some(gt) = criteria.get("gt") {
-        let pname = format!("{}_gt", param_prefix);
-        insert_number_param(&mut params, &pname, gt);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
-    }
-    if let Some(lte) = criteria.get("lte") {
-        let pname = format!("{}_lte", param_prefix);
-        insert_number_param(&mut params, &pname, lte);
-        clauses.push(format!("@{}:[-inf ${}]", field_name, pname));
-    }
-    if let Some(gte) = criteria.get("gte") {
-        let pname = format!("{}_gte", param_prefix);
-        insert_number_param(&mut params, &pname, gte);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    // (suffix, condition key, clause template). `gt` is EXCLUSIVE (`[($p +inf]`),
+    // `gte` inclusive; `lt` exclusive, `lte` inclusive.
+    let bounds = [
+        ("lt", "lt", "@{f}:[-inf (${p}]"),
+        ("gt", "gt", "@{f}:[(${p} +inf]"),
+        ("lte", "lte", "@{f}:[-inf ${p}]"),
+        ("gte", "gte", "@{f}:[${p} +inf]"),
+    ];
+    for (key, suffix, tmpl) in bounds {
+        if let Some(v) = criteria.get(key) {
+            let pname = format!("{}_{}", param_prefix, suffix);
+            insert_number_param(&mut params, &pname, v);
+            // Only emit the clause when the bound actually parsed into a param —
+            // otherwise a `$param` with no PARAMS entry makes FT.SEARCH
+            // hard-error ("Parameter not found").
+            if params.contains_key(&pname) {
+                clauses.push(tmpl.replace("{f}", field_name).replace("{p}", &pname));
+            }
+        }
     }
 
     if clauses.is_empty() {
@@ -971,7 +1036,16 @@ fn build_geo_filter(
     ))
 }
 
-/// Insert a JSON number value into the params map.
+/// Insert a JSON number (or ISO-8601 datetime / numeric string) into the params
+/// map as a NUMERIC bound.
+///
+/// - integer / float JSON → the numeric value.
+/// - ISO-8601 string → epoch **seconds** (datetime range bound). This lets a
+///   `datetime` field be filtered with ISO bounds, e.g.
+///   `{"range":{"gte":"2021-01-01T00:00:00Z"}}`.
+/// - other numeric string → parsed as f64 (accepts a numeric-epoch bound too, so
+///   both ISO and raw-epoch datetime bounds work — better than upstream's
+///   ISO-only handling).
 fn insert_number_param(
     params: &mut HashMap<String, FilterParamValue>,
     name: &str,
@@ -981,6 +1055,16 @@ fn insert_number_param(
         params.insert(name.to_string(), FilterParamValue::Int(i));
     } else if let Some(f) = value.as_f64() {
         params.insert(name.to_string(), FilterParamValue::Float(f));
+    } else if let Some(s) = value.as_str() {
+        if let Some(epoch) = datetime_to_epoch_secs(s) {
+            // Epoch is whole seconds — emit as an integer param (more robust than
+            // a float across RediSearch/ValkeySearch NUMERIC param substitution).
+            params.insert(name.to_string(), FilterParamValue::Int(epoch as i64));
+        } else if let Ok(i) = s.parse::<i64>() {
+            params.insert(name.to_string(), FilterParamValue::Int(i));
+        } else if let Ok(f) = s.parse::<f64>() {
+            params.insert(name.to_string(), FilterParamValue::Float(f));
+        }
     }
 }
 
@@ -1314,7 +1398,7 @@ fn hset_single(
         for (k, v) in &meta.fields {
             match v {
                 MetadataValue::String(s) => {
-                    cmd.arg(k.as_str()).arg(s.as_str());
+                    cmd.arg(k.as_str()).arg(encode_string_field(config, k, s));
                 }
                 MetadataValue::Labels(labels) => {
                     cmd.arg(k.as_str()).arg(labels.join(";"));
@@ -1331,6 +1415,54 @@ fn hset_single(
         .map_err(|e| format!("HSET update error: {}", e))
 }
 
+/// Format a string metadata field for storage. `datetime` schema fields whose
+/// value is an ISO-8601 string are converted to epoch seconds so the NUMERIC
+/// index/range filters match; every other field is stored verbatim. A value
+/// that is already numeric (epoch) is left as-is (RFC3339 parse fails → raw).
+fn encode_string_field(config: &RedisEngineConfig, key: &str, value: &str) -> String {
+    if config.datetime_fields.contains(key) {
+        if let Some(epoch) = datetime_to_epoch_secs(value) {
+            return (epoch as i64).to_string();
+        }
+    }
+    value.to_string()
+}
+
+/// Collect the schema field names typed `datetime`.
+fn datetime_fields_from_schema(dataset: &Dataset) -> HashSet<String> {
+    let mut set = HashSet::new();
+    if let Some(schema) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+        for (field, ty) in schema {
+            if ty.as_str() == Some("datetime") {
+                set.insert(field.clone());
+            }
+        }
+    }
+    set
+}
+
+/// Parse an ISO-8601 / RFC 3339 timestamp to epoch **seconds**. Returns `None`
+/// for non-datetime strings (e.g. a plain numeric-epoch string), letting callers
+/// fall back to numeric handling.
+fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
+    // RFC-3339 (with offset / `Z`) first.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp() as f64);
+    }
+    // Naive datetime (no offset) → interpret as UTC. Accepts both the `T` and
+    // space separators (upstream tolerates these; RFC-3339 does not).
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc().timestamp() as f64);
+        }
+    }
+    // Date only → midnight UTC.
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp() as f64);
+    }
+    None
+}
+
 // ── Engine trait implementation ──────────────────────────────────────────
 
 impl Engine for RedisEngine {
@@ -1344,6 +1476,10 @@ impl Engine for RedisEngine {
 
     fn configure(&mut self, dataset: &Dataset) -> Result<(), String> {
         let mut conn = self.get_connection()?;
+
+        // Record which schema fields are `datetime` so upload can convert their
+        // ISO-8601 payload values to epoch seconds for the NUMERIC index.
+        self.config.datetime_fields = Arc::new(datetime_fields_from_schema(dataset));
 
         if self.config.skip_vector_index {
             println!("Skipping vector index (filter-only mode)");
@@ -1988,6 +2124,169 @@ mod tests {
         let (q, params) = parse_conditions(&cond).unwrap();
         assert!(q.contains("@color:{$color_0}"), "q={}", q);
         assert!(matches!(params.get("color_0"), Some(FilterParamValue::Str(s)) if s == "red"));
+    }
+
+    // ── New filter datatypes: bool / uuid / full-text / datetime ───────────
+    use super::{datetime_to_epoch_secs, encode_string_field, RedisEngineConfig};
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn match_bool_true_emits_tag_true_token() {
+        let cond = serde_json::json!({"and":[{"flag":{"match":{"value": true}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@flag:{$flag_0}"), "q={}", q);
+        assert!(matches!(params.get("flag_0"), Some(FilterParamValue::Str(s)) if s == "true"));
+    }
+
+    #[test]
+    fn match_bool_false_emits_tag_false_token() {
+        let cond = serde_json::json!({"and":[{"flag":{"match":{"value": false}}}]});
+        let (_q, params) = parse_conditions(&cond).unwrap();
+        assert!(matches!(params.get("flag_0"), Some(FilterParamValue::Str(s)) if s == "false"));
+    }
+
+    #[test]
+    fn match_uuid_value_emits_tag_param() {
+        // uuid is a keyword-style string → TAG param match.
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cond = serde_json::json!({"and":[{"uid":{"match":{"value": uuid}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@uid:{$uid_0}"), "q={}", q);
+        assert!(matches!(params.get("uid_0"), Some(FilterParamValue::Str(s)) if s == uuid));
+    }
+
+    #[test]
+    fn match_text_emits_fulltext_clause() {
+        let cond = serde_json::json!({"and":[{"body":{"match":{"text": "quick"}}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@body:($body_0)"), "q={}", q);
+        assert!(matches!(params.get("body_0"), Some(FilterParamValue::Str(s)) if s == "quick"));
+    }
+
+    #[test]
+    fn match_text_empty_is_never_match() {
+        let cond = serde_json::json!({"and":[{"body":{"match":{"text": "   "}}}]});
+        let (q, _) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("-@body:("), "expected never-match, q={}", q);
+    }
+
+    #[test]
+    fn range_datetime_iso_bounds_parse_to_epoch() {
+        let cond = serde_json::json!({"and":[{"ts":{"range":{
+            "gte": "2021-01-01T00:00:00Z",
+            "lt":  "2022-01-01T00:00:00Z"
+        }}}]});
+        let (q, params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@ts:[$ts_0_gte +inf]"), "q={}", q);
+        assert!(q.contains("@ts:[-inf ($ts_0_lt]"), "q={}", q);
+        // 2021-01-01T00:00:00Z == 1609459200, 2022-01-01T00:00:00Z == 1640995200.
+        // Emitted as integer epoch params.
+        assert!(matches!(
+            params.get("ts_0_gte"),
+            Some(FilterParamValue::Int(1609459200))
+        ));
+        assert!(matches!(
+            params.get("ts_0_lt"),
+            Some(FilterParamValue::Int(1640995200))
+        ));
+    }
+
+    #[test]
+    fn range_datetime_numeric_epoch_bounds_still_work() {
+        // Numeric-epoch bounds (better-than-upstream: upstream is ISO-only).
+        let cond = serde_json::json!({"and":[{"ts":{"range":{"gte": 1609459200}}}]});
+        let (_q, params) = parse_conditions(&cond).unwrap();
+        assert!(matches!(
+            params.get("ts_0_gte"),
+            Some(FilterParamValue::Int(1609459200))
+        ));
+    }
+
+    #[test]
+    fn datetime_to_epoch_secs_parses_rfc3339_and_rejects_plain() {
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00Z").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert!(datetime_to_epoch_secs("not-a-date").is_none());
+        assert!(datetime_to_epoch_secs("1609459200").is_none());
+    }
+
+    #[test]
+    fn datetime_tolerates_naive_and_date_only() {
+        // Better than upstream (RFC-3339 only): accept naive + date-only bounds.
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01T00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+        assert_eq!(
+            datetime_to_epoch_secs("2021-01-01 00:00:00").map(|f| f as i64),
+            Some(1609459200)
+        );
+    }
+
+    #[test]
+    fn range_gt_is_exclusive_gte_inclusive() {
+        // gt must be exclusive `[($p +inf]`; gte inclusive `[$p +inf]`.
+        let (gt, _) =
+            super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gt": 5}}}]}))
+                .unwrap();
+        assert!(
+            gt.contains("@n:[($n_0_gt +inf]"),
+            "gt not exclusive: {}",
+            gt
+        );
+        let (gte, _) =
+            super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": 5}}}]}))
+                .unwrap();
+        assert!(
+            gte.contains("@n:[$n_0_gte +inf]") && !gte.contains("[("),
+            "gte: {}",
+            gte
+        );
+    }
+
+    #[test]
+    fn range_unparseable_bound_emits_no_dangling_param() {
+        // A bound that can't parse must NOT leave a `$param` with no PARAMS entry.
+        let (q, params) =
+            super::parse_conditions(&serde_json::json!({"and":[{"n":{"range":{"gte": "nope"}}}]}))
+                .unwrap_or_default();
+        assert!(
+            !q.contains("$n_0_gte") || params.contains_key("n_0_gte"),
+            "dangling: {}",
+            q
+        );
+    }
+
+    #[test]
+    fn encode_string_field_converts_datetime_and_passes_through_others() {
+        let mut dt = HashSet::new();
+        dt.insert("ts".to_string());
+        let cfg = RedisEngineConfig {
+            m: 16,
+            ef_construction: 128,
+            data_type: "FLOAT32".to_string(),
+            algorithm: "hnsw".to_string(),
+            batch_size: 1,
+            parallel: 1,
+            skip_vector_index: false,
+            datetime_fields: Arc::new(dt),
+        };
+        // datetime field → epoch seconds string
+        assert_eq!(
+            encode_string_field(&cfg, "ts", "2021-01-01T00:00:00Z"),
+            "1609459200"
+        );
+        // datetime field already numeric epoch → left as-is
+        assert_eq!(encode_string_field(&cfg, "ts", "1609459200"), "1609459200");
+        // non-datetime field → verbatim
+        assert_eq!(encode_string_field(&cfg, "color", "red"), "red");
     }
 
     #[test]

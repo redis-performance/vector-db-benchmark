@@ -151,6 +151,211 @@ pub fn write_match_any_project(
     }
 }
 
+// ── Generic filter-datatype fixtures (bool / uuid / full-text / datetime) ──
+//
+// Mirrors `write_match_any_project` but is parameterised by the filter under
+// test. Each builds a compound (`tar`) dataset (`vectors.npy` +
+// `payloads.jsonl` + `tests.jsonl`) whose queries carry a fixed `conditions`
+// filter, with ground truth brute-forced over ONLY the documents that satisfy
+// the filter. A high recall therefore proves the engine actually applied the
+// filter (returned the filtered nearest neighbours, not the whole corpus's).
+
+/// A built filter-benchmark project (same shape as `MatchAnyProject`).
+pub struct FilterProject {
+    pub root: PathBuf,
+    pub dataset_name: String,
+    pub top: usize,
+    /// Number of documents satisfying the filter (sanity bound: >> top).
+    pub matching_docs: usize,
+}
+
+/// Core builder: `schema` is the datasets.json `schema` object, `payload_for`
+/// returns the per-document payload object, `condition` is the (shared) filter
+/// JSON attached to every query, and `matches` decides whether a document id
+/// satisfies the filter (used to brute-force the filtered ground truth).
+fn write_filter_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    schema: serde_json::Value,
+    payload_for: impl Fn(usize) -> serde_json::Value,
+    condition: serde_json::Value,
+    matches: impl Fn(usize) -> bool,
+) -> FilterProject {
+    let mut rng = StdRng::seed_from_u64(0xF117E);
+    let gen_vec =
+        |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
+    let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+
+    let l2 = |a: &[f32], b: &[f32]| -> f64 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+            .sum()
+    };
+    let filtered_gt = |q: &[f32]| -> Vec<i64> {
+        let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
+            .filter(|id| matches(*id))
+            .map(|id| (id as i64, l2(q, &vectors[id])))
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        scored.iter().take(TOP).map(|(id, _)| *id).collect()
+    };
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+
+    let ds_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&ds_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    write_npy_vectors(ds_dir.join("vectors.npy").to_str().unwrap(), &vectors).unwrap();
+
+    let payloads: String = (0..N_DOCS)
+        .map(|id| payload_for(id).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("payloads.jsonl"), payloads).unwrap();
+
+    let tests: String = queries
+        .iter()
+        .map(|q| {
+            serde_json::json!({
+                "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+                "conditions": condition,
+                "closest_ids": filtered_gt(q),
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("tests.jsonl"), tests).unwrap();
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name,
+        "type": "tar",
+        "path": format!("{}/", dataset_name),
+        "distance": "l2",
+        "vector_size": dim,
+        "vector_count": N_DOCS,
+        "schema": schema,
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    FilterProject {
+        root,
+        dataset_name: dataset_name.to_string(),
+        top: TOP,
+        matching_docs: (0..N_DOCS).filter(|id| matches(*id)).count(),
+    }
+}
+
+/// bool filter: field `flag` (schema type `bool`), value `id % 2 == 0`. The
+/// query filters `flag == true`, so half the corpus matches.
+pub fn write_bool_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        serde_json::json!({ "flag": "bool" }),
+        |id| serde_json::json!({ "flag": id % 2 == 0 }),
+        serde_json::json!({ "and": [ { "flag": { "match": { "value": true } } } ] }),
+        |id| id % 2 == 0,
+    )
+}
+
+/// UUID values assigned round-robin by `id % 4`. The query filters on the first
+/// UUID (exact keyword/TAG match), so a quarter of the corpus matches.
+pub const UUIDS: [&str; 4] = [
+    "550e8400-e29b-41d4-a716-446655440000",
+    "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "6ba7b812-9dad-11d1-80b4-00c04fd430c8",
+];
+
+/// uuid filter: field `uid` (schema type `uuid`), exact match on `UUIDS[0]`.
+pub fn write_uuid_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        serde_json::json!({ "uid": "uuid" }),
+        |id| serde_json::json!({ "uid": UUIDS[id % UUIDS.len()] }),
+        serde_json::json!({ "and": [ { "uid": { "match": { "value": UUIDS[0] } } } ] }),
+        |id| id % UUIDS.len() == 0,
+    )
+}
+
+/// full-text filter: field `body` (schema type `text`). Even docs contain the
+/// term "quick"; odd docs do not. The query is a single-term full-text match on
+/// "quick" (works on Redis TEXT and on Valkey's degraded tokenised-TAG path).
+pub fn write_fulltext_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        serde_json::json!({ "body": "text" }),
+        |id| {
+            let body = if id % 2 == 0 {
+                "the quick brown fox"
+            } else {
+                "lazy dog sleeps here"
+            };
+            serde_json::json!({ "body": body })
+        },
+        serde_json::json!({ "and": [ { "body": { "match": { "text": "quick" } } } ] }),
+        |id| id % 2 == 0,
+    )
+}
+
+/// datetime filter: field `ts` (schema type `datetime`), one ISO-8601 timestamp
+/// per doc spaced one day apart from 2021-01-01. The query is an ISO range
+/// `[day 100, day 300)`, selecting ids 100..=299 (200 docs).
+pub fn write_datetime_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    use chrono::{Duration, TimeZone, Utc};
+    let base = Utc.timestamp_opt(1_609_459_200, 0).unwrap(); // 2021-01-01T00:00:00Z
+    let iso_for = move |day: i64| (base + Duration::days(day)).to_rfc3339();
+    let gte = iso_for(100);
+    let lt = iso_for(300);
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        serde_json::json!({ "ts": "datetime" }),
+        move |id| serde_json::json!({ "ts": iso_for(id as i64) }),
+        serde_json::json!({ "and": [ { "ts": { "range": { "gte": gte, "lt": lt } } } ] }),
+        |id| (100..300).contains(&id),
+    )
+}
+
 /// Path to the compiled binary under test. Cargo exports
 /// `CARGO_BIN_EXE_vector-db-benchmark` to integration tests automatically.
 pub fn binary_path() -> PathBuf {
