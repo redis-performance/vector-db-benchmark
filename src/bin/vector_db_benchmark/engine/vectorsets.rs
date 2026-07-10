@@ -703,13 +703,6 @@ impl Engine for VectorSetsEngine {
             queries.len()
         };
 
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let update_times: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
         let search_idx = Arc::new(AtomicUsize::new(0));
         let update_idx = Arc::new(AtomicUsize::new(0));
 
@@ -720,7 +713,21 @@ impl Engine for VectorSetsEngine {
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
+        // Each worker accumulates search + update samples into thread-local
+        // buffers and returns them on join; the main thread concatenates. This
+        // keeps the timed hot loop free of the 5-6 cross-thread Mutex<Vec> pushes
+        // per query that serialized workers at high parallelism (matching the main
+        // search() path). Dispatch counters use Relaxed (only their own
+        // monotonicity matters) and the progress bar is advanced in batches.
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut u_times: Vec<f64> = Vec::new();
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
                 let config = self.config.clone();
@@ -731,30 +738,33 @@ impl Engine for VectorSetsEngine {
                 let upd_vectors = &upd_vectors;
                 let upd_metadata = &upd_metadata;
                 let update_seq = &update_seq;
-                let search_times = Arc::clone(&search_times);
-                let update_times = Arc::clone(&update_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    // Thread-local sample buffers — no cross-thread lock per query.
+                    let mut t: Vec<f64> = Vec::new();
+                    let mut p: Vec<f64> = Vec::new();
+                    let mut r: Vec<f64> = Vec::new();
+                    let mut mr: Vec<f64> = Vec::new();
+                    let mut nd: Vec<f64> = Vec::new();
+                    let mut ut: Vec<f64> = Vec::new();
+                    let mut pb_pending: u64 = 0;
+
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd, ut),
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd, ut),
                     };
 
                     'outer: loop {
                         // Search phase: do S searches
                         for _ in 0..ratio_searches {
-                            let idx = search_idx.fetch_add(1, Ordering::SeqCst);
+                            let idx = search_idx.fetch_add(1, Ordering::Relaxed);
                             if idx >= num_to_run {
                                 break 'outer;
                             }
@@ -782,7 +792,6 @@ impl Engine for VectorSetsEngine {
 
                             match results {
                                 Ok(result_ids) => {
-                                    search_times.lock().unwrap().push(query_time);
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
                                     let m = crate::metrics::compute_metrics(
@@ -790,21 +799,26 @@ impl Engine for VectorSetsEngine {
                                         &neighbors[idx],
                                         top,
                                     );
-                                    precisions.lock().unwrap().push(m.precision);
-                                    recalls.lock().unwrap().push(m.recall);
-                                    mrrs.lock().unwrap().push(m.mrr);
-                                    ndcgs.lock().unwrap().push(m.ndcg);
+                                    t.push(query_time);
+                                    p.push(m.precision);
+                                    r.push(m.recall);
+                                    mr.push(m.mrr);
+                                    nd.push(m.ndcg);
                                 }
                                 Err(e) => {
                                     eprintln!("Search query {} failed: {}", idx, e);
                                 }
                             }
-                            pb.inc(1);
+                            pb_pending += 1;
+                            if pb_pending >= 256 {
+                                pb.inc(pb_pending);
+                                pb_pending = 0;
+                            }
                         }
 
                         // Update phase: do U updates
                         for _ in 0..ratio_updates {
-                            let uidx = update_idx.fetch_add(1, Ordering::SeqCst);
+                            let uidx = update_idx.fetch_add(1, Ordering::Relaxed);
                             let data_idx = update_seq[uidx % update_seq_len];
 
                             let update_start = Instant::now();
@@ -816,82 +830,49 @@ impl Engine for VectorSetsEngine {
                                 upd_metadata[data_idx].as_ref(),
                             );
                             let update_time = update_start.elapsed().as_secs_f64();
-                            update_times.lock().unwrap().push(update_time);
+                            ut.push(update_time);
                         }
                     }
-                });
+                    if pb_pending > 0 {
+                        pb.inc(pb_pending);
+                    }
+                    (t, p, r, mr, nd, ut)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd, ut) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrr_vals.extend(mr);
+                ndcg_vals.extend(nd);
+                u_times.extend(ut);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
 
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrr_vals = mrrs.lock().unwrap();
-        let ndcg_vals = ndcgs.lock().unwrap();
-        let u_times = update_times.lock().unwrap();
-
         if times.is_empty() {
             return Err("No searches completed".to_string());
         }
 
-        let rps = times.len() as f64 / total_time;
-        let mean_precision = precs.iter().sum::<f64>() / precs.len() as f64;
-        let mean_recall = recs.iter().sum::<f64>() / recs.len() as f64;
-        let mean_mrr = mrr_vals.iter().sum::<f64>() / mrr_vals.len() as f64;
-        let mean_ndcg = ndcg_vals.iter().sum::<f64>() / ndcg_vals.len() as f64;
-        let mean_time = times.iter().sum::<f64>() / times.len() as f64;
-        let std_time = (times.iter().map(|t| (t - mean_time).powi(2)).sum::<f64>()
-            / times.len() as f64)
-            .sqrt();
-        let min_time = times.iter().copied().fold(f64::INFINITY, f64::min);
-        let max_time = times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
-        let mut sorted_times: Vec<f64> = times.clone();
-        sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        let p50_idx = (sorted_times.len() as f64 * 0.50) as usize;
-        let p95_idx = (sorted_times.len() as f64 * 0.95) as usize;
-        let p99_idx = (sorted_times.len() as f64 * 0.99) as usize;
-
-        let p50_time = sorted_times.get(p50_idx).copied().unwrap_or(0.0);
-        let p95_time = sorted_times
-            .get(p95_idx.min(sorted_times.len() - 1))
-            .copied()
-            .unwrap_or(0.0);
-        let p99_time = sorted_times
-            .get(p99_idx.min(sorted_times.len() - 1))
-            .copied()
-            .unwrap_or(0.0);
-
-        // Update latency stats
+        // Update latency stats (linear-interpolation percentiles, matching the
+        // shared search-stats path).
         let (update_count, update_rps, update_mean_time, update_p50, update_p95, update_p99) =
             if !u_times.is_empty() {
                 let u_rps = u_times.len() as f64 / total_time;
                 let u_mean = u_times.iter().sum::<f64>() / u_times.len() as f64;
                 let mut u_sorted: Vec<f64> = u_times.clone();
                 u_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let u_p50 = u_sorted
-                    .get((u_sorted.len() as f64 * 0.50) as usize)
-                    .copied()
-                    .unwrap_or(0.0);
-                let u_p95 = u_sorted
-                    .get(((u_sorted.len() as f64 * 0.95) as usize).min(u_sorted.len() - 1))
-                    .copied()
-                    .unwrap_or(0.0);
-                let u_p99 = u_sorted
-                    .get(((u_sorted.len() as f64 * 0.99) as usize).min(u_sorted.len() - 1))
-                    .copied()
-                    .unwrap_or(0.0);
                 (
                     Some(u_times.len()),
                     Some(u_rps),
                     Some(u_mean),
-                    Some(u_p50),
-                    Some(u_p95),
-                    Some(u_p99),
+                    Some(crate::engine::percentile_linear(&u_sorted, 0.50)),
+                    Some(crate::engine::percentile_linear(&u_sorted, 0.95)),
+                    Some(crate::engine::percentile_linear(&u_sorted, 0.99)),
                 )
             } else {
                 (None, None, None, None, None, None)
@@ -906,40 +887,21 @@ impl Engine for VectorSetsEngine {
             self.commandstats_baseline.as_ref(),
         )?;
 
-        Ok(SearchResults {
-            total_time,
-            mean_time,
-            mean_precision,
-            mean_recall,
-            mean_mrr,
-            mean_ndcg,
-            std_time,
-            min_time,
-            max_time,
-            rps,
-            p50_time,
-            p95_time,
-            p99_time,
-            precisions: precs.to_vec(),
-            recalls: recs.to_vec(),
-            mrrs: mrr_vals.to_vec(),
-            ndcgs: ndcg_vals.to_vec(),
-            latencies: times.to_vec(),
-            top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
-            num_queries: times.len(),
-            requested_queries: num_to_run,
-            failed_queries: num_to_run.saturating_sub(times.len()),
-            parallel,
-            update_count,
-            update_rps,
-            update_mean_time,
-            update_p50_time: update_p50,
-            update_p95_time: update_p95,
-            update_p99_time: update_p99,
-            update_latencies: Some(u_times.to_vec()),
-            update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
-            ..Default::default()
-        })
+        // Search latency + quality stats through the shared percentile path so the
+        // mixed harness matches the main search() footing.
+        let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
+        let mut results = crate::engine::compute_search_stats(
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
+        )?;
+        results.update_count = update_count;
+        results.update_rps = update_rps;
+        results.update_mean_time = update_mean_time;
+        results.update_p50_time = update_p50;
+        results.update_p95_time = update_p95;
+        results.update_p99_time = update_p99;
+        results.update_latencies = Some(u_times);
+        results.update_search_ratio = Some(format!("{}:{}", ratio.updates, ratio.searches));
+        Ok(results)
     }
 
     fn delete(&mut self) -> Result<(), String> {
