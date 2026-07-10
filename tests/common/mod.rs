@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use vector_db_benchmark::readers::write_npy_vectors;
+use vector_db_benchmark::readers::{write_npy_vectors, write_sparse_matrix, SparseVector};
 
 /// Keyword values assigned round-robin to documents by `id % 4`.
 ///
@@ -444,6 +444,302 @@ pub fn write_tenant_project(
         },
         |q, id| id % N_TENANTS == q % N_TENANTS,
     )
+}
+
+// ── Sparse-vector fixture ───────────────────────────────────────────────────
+//
+// Builds a small sparse (`type: "sparse"`) dataset: `data.csr` + `queries.csr`
+// + `neighbours.jsonl`. Ground truth is brute-forced by sparse DOT PRODUCT and
+// sorted DESCENDING (sparse similarity is MIPS — larger dot = more similar), so
+// a high recall proves the engine ran a real sparse-index search. Sorting the
+// wrong way (ascending, as if it were an L2 distance) would pick the least
+// similar docs and silently zero out recall — hence the explicit `b.cmp a`.
+
+/// A built sparse-benchmark project.
+pub struct SparseProject {
+    pub root: PathBuf,
+    pub dataset_name: String,
+    pub top: usize,
+}
+
+/// Build a temp project with a deterministic random sparse dataset and its
+/// dot-product (descending) ground truth. `engine_configs_json` is the verbatim
+/// `experiments/configurations/test.json`.
+pub fn write_sparse_project(dataset_name: &str, engine_configs_json: &str) -> SparseProject {
+    const DIM: usize = 300;
+    const NNZ: usize = 10;
+    const N: usize = 150;
+    const Q: usize = 10;
+    const TOP: usize = 10;
+
+    // Fixed seed → reproducible data/queries/ground-truth across engines & runs.
+    let mut rng = StdRng::seed_from_u64(0x5A5A_5EED);
+    let mut make = |count: usize| -> Vec<SparseVector> {
+        (0..count)
+            .map(|_| {
+                let mut idx: Vec<u32> = Vec::with_capacity(NNZ);
+                while idx.len() < NNZ {
+                    let c = rng.gen_range(0..DIM as u32);
+                    if !idx.contains(&c) {
+                        idx.push(c);
+                    }
+                }
+                idx.sort_unstable();
+                let values: Vec<f32> = (0..NNZ).map(|_| rng.gen_range(0.1..1.0)).collect();
+                SparseVector {
+                    indices: idx,
+                    values,
+                }
+            })
+            .collect()
+    };
+    let data = make(N);
+    let queries = make(Q);
+
+    // Brute-force sparse dot product; sort DESCENDING (MIPS).
+    let dot = |a: &SparseVector, b: &SparseVector| -> f64 {
+        let mut s = 0.0f64;
+        for (i, &ai) in a.indices.iter().enumerate() {
+            if let Some(j) = b.indices.iter().position(|&bi| bi == ai) {
+                s += a.values[i] as f64 * b.values[j] as f64;
+            }
+        }
+        s
+    };
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|qv| {
+            let mut scored: Vec<(i64, f64)> = data
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (i as i64, dot(qv, d)))
+                .collect();
+            // DESCENDING by dot product (b vs a). Do NOT flip this.
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            scored.iter().take(TOP).map(|(id, _)| *id).collect()
+        })
+        .collect();
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+
+    let ds_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&ds_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+    write_sparse_matrix(ds_dir.join("data.csr").to_str().unwrap(), &data).unwrap();
+    write_sparse_matrix(ds_dir.join("queries.csr").to_str().unwrap(), &queries).unwrap();
+    write_neighbours(&ds_dir, &neighbors);
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name, "type": "sparse", "path": dataset_name,
+        "distance": "dot", "vector_size": DIM, "vector_count": N,
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    SparseProject {
+        root,
+        dataset_name: dataset_name.to_string(),
+        top: TOP,
+    }
+}
+
+// ── Hybrid (dense + sparse) fixture ─────────────────────────────────────────
+//
+// Builds a `type: "hybrid"` dataset: dense `vectors.npy`/`queries.npy` (L2) +
+// sparse `data.csr`/`queries.csr` (dot/MIPS) + a SHARED `neighbours.jsonl`.
+//
+// GROUND-TRUTH / RECALL-FLOOR CHOICE (documented on purpose):
+// We deliberately do NOT brute-force the exact RRF order — its constant `k` is a
+// server detail and reproducing it is fiddly and brittle. Instead we PLANT, for
+// each query, a set of K "relevant" docs (R) that are simultaneously the top-K
+// nearest by BOTH modalities:
+//   * dense: R sits ~0.04 (L2) from the query centre; a ring of dense-only
+//     distractors (U) sits at exactly 1.0 (ranks K..2K); everything else ~10.
+//   * sparse: R has dot = 2·K with the query; a ring of sparse-only distractors
+//     (T) has dot = K (ranks K..2K); everything else 0.
+// Under RRF, an R doc scores 1/(k+rank_dense) + 1/(k+rank_sparse) with BOTH
+// ranks < K, while U scores only from dense (rank ≥ K) and T only from sparse
+// (rank ≥ K). Since 2/(k+K-1) > 1/(k+K) for every k ≥ 0, the fused top-K is
+// exactly R for ANY RRF constant. The ground truth is therefore R, and a
+// correct hybrid pipeline yields recall ≈ 1.0; we assert a 0.9 FLOOR to absorb
+// ANN approximation. The distractors give the test teeth: they make each
+// modality individually return a wrong ranking beyond rank K, and an inverted
+// sparse ordering (ascending, as if L2) drops R out of the sparse list and
+// pushes T up, cutting recall below the floor. (Limitation: because R is top-K
+// in both modalities, this validates end-to-end fusion + orientation, not an
+// exclusively-fusion contribution.)
+
+/// A built hybrid-benchmark project.
+pub struct HybridProject {
+    pub root: PathBuf,
+    pub dataset_name: String,
+    pub top: usize,
+}
+
+/// Build a temp project with a deterministic planted hybrid dataset (dense +
+/// sparse) whose fused (RRF) top-K ground truth is the planted relevant set.
+pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> HybridProject {
+    const K: usize = 8; // top-k / relevant-set size
+    const Q: usize = 6; // queries (and dense centre axes)
+    const DENSE_DIM: usize = 16; // >= Q (centre dims) + K (distractor bump dims)
+    const FILLER: usize = 6;
+    const N: usize = Q * 3 * K + FILLER; // R + U + T per query, then filler = 150
+    const BUMP_DIMS: usize = DENSE_DIM - Q; // dims Q..DENSE_DIM used for U bumps
+
+    // Sparse layout: query q owns index block F_q = [q*K .. q*K+K); U/filler use
+    // a disjoint "junk" block J so their dot with any query is 0.
+    const SPARSE_DIM: usize = Q * K + K; // per-query blocks + junk block
+
+    let mut rng = StdRng::seed_from_u64(0xB19_1DEA);
+    let tiny = |rng: &mut StdRng| -> f32 { rng.gen_range(-0.01f32..0.01) };
+
+    // Doc-id block layout for query q: base = q*3K.
+    let base = |q: usize| q * 3 * K;
+    let r_id = |q: usize, j: usize| base(q) + j; // relevant  [base, base+K)
+    let u_id = |q: usize, j: usize| base(q) + K + j; // dense-only [base+K, base+2K)
+    let t_id = |q: usize, j: usize| base(q) + 2 * K + j; // sparse-only[base+2K, base+3K)
+    let filler_start = Q * 3 * K;
+
+    // Dense centre for query q: 10.0 on axis q, else 0. Regions are ~14 apart.
+    let centre = |q: usize| -> Vec<f32> {
+        let mut v = vec![0.0f32; DENSE_DIM];
+        v[q] = 10.0;
+        v
+    };
+
+    // Build dense + sparse per doc.
+    let mut dense: Vec<Vec<f32>> = vec![vec![0.0f32; DENSE_DIM]; N];
+    let mut sparse: Vec<SparseVector> = vec![
+        SparseVector {
+            indices: vec![],
+            values: vec![]
+        };
+        N
+    ];
+    let junk: Vec<u32> = (Q * K..Q * K + K).map(|i| i as u32).collect();
+
+    for q in 0..Q {
+        let c = centre(q);
+        let f_q: Vec<u32> = (q * K..q * K + K).map(|i| i as u32).collect();
+        for j in 0..K {
+            // R: dense ≈ centre (~0.04 away); sparse dot = 2·K (top).
+            let mut rv = c.clone();
+            for x in rv.iter_mut() {
+                *x += tiny(&mut rng);
+            }
+            dense[r_id(q, j)] = rv;
+            sparse[r_id(q, j)] = SparseVector {
+                indices: f_q.clone(),
+                values: vec![2.0f32; K],
+            };
+
+            // U: dense = centre + unit bump (exactly 1.0 away → ranks K..2K);
+            // sparse = junk block → dot 0 (absent from sparse list).
+            let mut uv = c.clone();
+            uv[Q + (j % BUMP_DIMS)] += 1.0;
+            dense[u_id(q, j)] = uv;
+            sparse[u_id(q, j)] = SparseVector {
+                indices: junk.clone(),
+                values: vec![1.0f32; K],
+            };
+
+            // T: dense ≈ origin (~10 away → absent from dense list); sparse dot =
+            // K (ranks K..2K, below R's 2·K).
+            let mut tv = vec![0.0f32; DENSE_DIM];
+            for x in tv.iter_mut() {
+                *x += tiny(&mut rng);
+            }
+            dense[t_id(q, j)] = tv;
+            sparse[t_id(q, j)] = SparseVector {
+                indices: f_q.clone(),
+                values: vec![1.0f32; K],
+            };
+        }
+    }
+    // Filler: dense ≈ origin, sparse in junk block (dot 0 with every query).
+    for (i, id) in (filler_start..N).enumerate() {
+        let _ = i;
+        let mut fv = vec![0.0f32; DENSE_DIM];
+        for x in fv.iter_mut() {
+            *x += tiny(&mut rng);
+        }
+        dense[id] = fv;
+        sparse[id] = SparseVector {
+            indices: junk.clone(),
+            values: vec![1.0f32; K],
+        };
+    }
+
+    // Queries: dense = centre_q, sparse = ones on F_q. Ground truth = R_q.
+    let mut dense_q: Vec<Vec<f32>> = Vec::with_capacity(Q);
+    let mut sparse_q: Vec<SparseVector> = Vec::with_capacity(Q);
+    let mut neighbours: Vec<Vec<i64>> = Vec::with_capacity(Q);
+    for q in 0..Q {
+        dense_q.push(centre(q));
+        sparse_q.push(SparseVector {
+            indices: (q * K..q * K + K).map(|i| i as u32).collect(),
+            values: vec![1.0f32; K],
+        });
+        neighbours.push((0..K).map(|j| r_id(q, j) as i64).collect());
+    }
+    debug_assert_eq!(SPARSE_DIM, Q * K + K);
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+
+    let ds_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&ds_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    write_npy_vectors(ds_dir.join("vectors.npy").to_str().unwrap(), &dense).unwrap();
+    write_npy_vectors(ds_dir.join("queries.npy").to_str().unwrap(), &dense_q).unwrap();
+    write_sparse_matrix(ds_dir.join("data.csr").to_str().unwrap(), &sparse).unwrap();
+    write_sparse_matrix(ds_dir.join("queries.csr").to_str().unwrap(), &sparse_q).unwrap();
+    write_neighbours(&ds_dir, &neighbours);
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name, "type": "hybrid", "path": dataset_name,
+        "distance": "l2", "vector_size": DENSE_DIM, "vector_count": N,
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    HybridProject {
+        root,
+        dataset_name: dataset_name.to_string(),
+        top: K,
+    }
+}
+
+/// Write `neighbours.jsonl` (one JSON id-array per line) into `ds_dir`.
+fn write_neighbours(ds_dir: &Path, neighbours: &[Vec<i64>]) {
+    let nb = neighbours
+        .iter()
+        .map(|nn| serde_json::to_string(nn).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("neighbours.jsonl"), nb).unwrap();
 }
 
 /// Path to the compiled binary under test. Cargo exports

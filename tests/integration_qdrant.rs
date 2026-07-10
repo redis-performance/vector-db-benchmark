@@ -548,112 +548,61 @@ fn test_binary_qdrant_query_points_and_prefetch() {
     );
 }
 
-/// End-to-end sparse-vector coverage: build a small sparse dataset, run the real
-/// engine (sparse collection + upsert + query_points using="sparse"), and assert
-/// recall vs brute-force dot-product ground truth.
+/// End-to-end sparse-vector coverage: build a small sparse dataset (via the
+/// shared `write_sparse_project` fixture), run the real engine (sparse collection,
+/// upsert, and a `query_points` search using the named "sparse" vector), then
+/// assert recall against brute-force dot-product (descending / MIPS) ground truth.
 #[test]
 fn test_binary_qdrant_sparse() {
-    use std::fs;
-    use vector_db_benchmark::readers::{write_sparse_matrix, SparseVector};
-
     wait_for_qdrant();
 
-    let dim = 300usize;
-    let nnz = 10usize;
-    let n = 150usize;
-    let q = 10usize;
-    let top = 10usize;
-    let mut rng = rand::thread_rng();
-
-    let mut make = |count: usize| -> Vec<SparseVector> {
-        (0..count)
-            .map(|_| {
-                let mut idx: Vec<u32> = Vec::with_capacity(nnz);
-                while idx.len() < nnz {
-                    let c = rng.gen_range(0..dim as u32);
-                    if !idx.contains(&c) {
-                        idx.push(c);
-                    }
-                }
-                idx.sort_unstable();
-                let values: Vec<f32> = (0..nnz).map(|_| rng.gen_range(0.1..1.0)).collect();
-                SparseVector {
-                    indices: idx,
-                    values,
-                }
-            })
-            .collect()
-    };
-    let data = make(n);
-    let queries = make(q);
-
-    // Brute-force sparse dot product for ground truth.
-    let dot = |a: &SparseVector, b: &SparseVector| -> f64 {
-        let mut s = 0.0f64;
-        for (i, &ai) in a.indices.iter().enumerate() {
-            if let Some(j) = b.indices.iter().position(|&bi| bi == ai) {
-                s += a.values[i] as f64 * b.values[j] as f64;
-            }
-        }
-        s
-    };
-    let neighbors: Vec<Vec<i64>> = queries
-        .iter()
-        .map(|qv| {
-            let mut scored: Vec<(i64, f64)> = data
-                .iter()
-                .enumerate()
-                .map(|(i, d)| (i as i64, dot(qv, d)))
-                .collect();
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            scored.iter().take(top).map(|(id, _)| *id).collect()
-        })
-        .collect();
-
-    // Temp project with CSR sparse dataset.
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let root = tmp.path().to_path_buf();
-    std::mem::forget(tmp);
-    let ds_dir = root.join("datasets").join("sparse-cov");
-    fs::create_dir_all(&ds_dir).unwrap();
-    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
-    fs::create_dir_all(root.join("results")).unwrap();
-    write_sparse_matrix(ds_dir.join("data.csr").to_str().unwrap(), &data).unwrap();
-    write_sparse_matrix(ds_dir.join("queries.csr").to_str().unwrap(), &queries).unwrap();
-    let nb = neighbors
-        .iter()
-        .map(|nn| serde_json::to_string(nn).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(ds_dir.join("neighbours.jsonl"), nb).unwrap();
-
-    let datasets_json = serde_json::json!([{
-        "name": "sparse-cov", "type": "sparse", "path": "sparse-cov",
-        "distance": "dot", "vector_size": dim, "vector_count": n,
-    }]);
-    fs::write(
-        root.join("datasets/datasets.json"),
-        serde_json::to_string_pretty(&datasets_json).unwrap(),
-    )
-    .unwrap();
     let configs = serde_json::json!([{
         "name": "qdrant-sparse-cov", "engine": "qdrant",
         "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
         "search_params": [{"parallel": 1}], "upload_params": {"parallel": 1, "batch_size": 50}
     }]);
-    fs::write(
-        root.join("experiments/configurations/test.json"),
-        serde_json::to_string(&configs).unwrap(),
-    )
-    .unwrap();
+    let proj =
+        common::write_sparse_project("sparse-cov", &serde_json::to_string(&configs).unwrap());
 
     assert!(
-        run_qdrant_binary(&root, "qdrant-sparse-cov", "sparse-cov"),
+        run_qdrant_binary(&proj.root, "qdrant-sparse-cov", "sparse-cov"),
         "sparse run failed"
     );
-    let precision = read_precision(&root, "qdrant-sparse-cov");
-    println!("qdrant sparse precision={:.3}", precision);
+    let precision = read_precision(&proj.root, "qdrant-sparse-cov");
+    println!(
+        "qdrant sparse precision={:.3} (top={})",
+        precision, proj.top
+    );
     assert!(precision >= 0.9, "sparse precision {:.3} < 0.9", precision);
+}
+
+/// End-to-end HYBRID (dense + sparse) coverage: build a planted hybrid dataset
+/// (via `write_hybrid_project`), run the real engine (hybrid collection with a
+/// named "dense" + named "sparse" vector, upsert of both, and a query that fuses
+/// a dense prefetch and a sparse prefetch server-side with RRF), and assert the
+/// fused recall clears the 0.9 floor. See `write_hybrid_project` for the
+/// ground-truth / floor justification.
+#[test]
+fn test_binary_qdrant_hybrid() {
+    wait_for_qdrant();
+
+    let configs = serde_json::json!([{
+        "name": "qdrant-hybrid-cov", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        // prefetch.limit sets the per-modality candidate depth fused by RRF.
+        "search_params": [{"parallel": 1, "search_params": {"prefetch": {"limit": 32}}}],
+        "upload_params": {"parallel": 1, "batch_size": 50}
+    }]);
+    let proj =
+        common::write_hybrid_project("hybrid-cov", &serde_json::to_string(&configs).unwrap());
+
+    assert!(
+        run_qdrant_binary(&proj.root, "qdrant-hybrid-cov", "hybrid-cov"),
+        "hybrid run failed"
+    );
+    let recall = common::read_recall(&proj.root, "qdrant-hybrid-cov");
+    println!("qdrant hybrid recall={:.3} (top={})", recall, proj.top);
+    assert!(recall >= 0.9, "hybrid recall {:.3} < 0.9", recall);
 }
 
 /// End-to-end `match_any` coverage. Qdrant already supports `match_any`, so this
