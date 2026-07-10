@@ -596,8 +596,7 @@ fn near_vector_search(
 /// This is the high-throughput query path; the class-level `ef` set via the REST
 /// schema update still governs recall. Returns (int-id, distance) pairs, mapping
 /// the object UUID back through `uuid_to_int` (inverse of the upload id_to_uuid).
-fn near_vector_search_grpc(
-    handle: &tokio::runtime::Handle,
+async fn near_vector_search_grpc(
     client: &mut WeaviateClient<tonic::transport::Channel>,
     class_name: &str,
     api_key: Option<&str>,
@@ -629,8 +628,9 @@ fn near_vector_search_grpc(
         request.metadata_mut().insert("authorization", val);
     }
 
-    let reply = handle
-        .block_on(client.search(request))
+    let reply = client
+        .search(request)
+        .await
         .map_err(|e| format!("gRPC search failed: {}", e))?
         .into_inner();
 
@@ -939,14 +939,11 @@ impl Engine for WeaviateEngine {
 
         let pb = self.create_progress_bar(num_to_run);
 
-        // gRPC search setup (default). One shared multi-thread tokio runtime drives
-        // the async RPCs; each worker thread gets its own lazily-connected channel
-        // and calls block_on via the shared handle. Disable with WEAVIATE_USE_GRAPHQL.
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("failed to build tokio runtime: {}", e))?;
-        let handle = rt.handle().clone();
+        // Vector search runs over gRPC by default (packed vectors — the
+        // high-throughput path); GraphQL is the fallback for filtered datasets
+        // (gRPC filter translation not implemented) or when WEAVIATE_USE_GRAPHQL
+        // is set. gRPC concurrency is async tasks on a shared runtime (one
+        // connection per task, HTTP/2); GraphQL concurrency is blocking OS threads.
         let grpc_ep: Option<tonic::transport::Endpoint> = if std::env::var("WEAVIATE_USE_GRAPHQL")
             .is_ok()
         {
@@ -966,74 +963,137 @@ impl Engine for WeaviateEngine {
                 }
             }
         };
+        let use_grpc = grpc_ep.is_some() && parsed_filters.iter().all(|f| f.is_none());
+
+        let queries = Arc::new(queries);
+        let neighbors = Arc::new(neighbors);
+        let parsed_filters = Arc::new(parsed_filters);
 
         let start_time = Instant::now();
 
-        std::thread::scope(|s| {
-            for _ in 0..parallel {
-                let base_url = self.base_url.clone();
-                let class_name = self.class_name.clone();
-                let api_key = self.api_key.clone();
-                let timeout = self.timeout;
-                let handle = handle.clone();
-                let grpc_ep = grpc_ep.clone();
-                let queries = &queries;
-                let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
-                let query_idx = Arc::clone(&query_idx);
-                let pb = &pb;
-
-                s.spawn(move || {
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(timeout))
-                        .build()
-                    {
-                        Ok(c) => c,
-                        Err(_) => return,
-                    };
-
-                    // Enter the runtime context for this thread so the lazily
-                    // connected channel (and its background hyper tasks/timers)
-                    // have a reactor. Guard lives for the whole worker closure.
-                    let _rt_guard = handle.enter();
-                    // Per-thread gRPC client (own channel; multiplexes over one
-                    // connection). None => GraphQL path (filters / opt-out).
-                    let mut grpc_client =
-                        grpc_ep.as_ref().map(|ep| WeaviateClient::new(ep.connect_lazy()));
-
-                    loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
-                        if idx >= num_to_run {
-                            break;
-                        }
-
-                        let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
+        if use_grpc {
+            // ── gRPC: async task fan-out. `parallel` tasks, each its own
+            //     connection, awaiting searches off a shared atomic work queue.
+            //     This scales with concurrency (unlike thread-per-block_on). ──
+            let endpoint = grpc_ep.unwrap();
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to build tokio runtime: {}", e))?;
+            rt.block_on(async {
+                let mut tasks = Vec::with_capacity(parallel);
+                for _ in 0..parallel {
+                    let endpoint = endpoint.clone();
+                    let class_name = self.class_name.clone();
+                    let api_key = self.api_key.clone();
+                    let queries = Arc::clone(&queries);
+                    let neighbors = Arc::clone(&neighbors);
+                    let query_idx = Arc::clone(&query_idx);
+                    let search_times = Arc::clone(&search_times);
+                    let precisions = Arc::clone(&precisions);
+                    let recalls = Arc::clone(&recalls);
+                    let mrrs = Arc::clone(&mrrs);
+                    let ndcgs = Arc::clone(&ndcgs);
+                    let pb = pb.clone();
+                    tasks.push(tokio::spawn(async move {
+                        let channel = match endpoint.connect().await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("gRPC connect failed: {}", e);
+                                return;
                             }
-                        });
-
-                        let query_start = Instant::now();
-                        // gRPC for plain kNN; GraphQL when a filter is present
-                        // (gRPC filter translation not implemented) or gRPC disabled.
-                        let results = match (grpc_client.as_mut(), parsed_filters[idx].as_ref()) {
-                            (Some(gc), None) => near_vector_search_grpc(
-                                &handle,
-                                gc,
+                        };
+                        let mut client = WeaviateClient::new(channel);
+                        loop {
+                            let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                            if idx >= num_to_run {
+                                break;
+                            }
+                            let top = explicit_top.unwrap_or_else(|| {
+                                let n = neighbors[idx].len();
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
+                            });
+                            let query_start = Instant::now();
+                            let results = near_vector_search_grpc(
+                                &mut client,
                                 &class_name,
                                 api_key.as_deref(),
                                 &queries[idx],
                                 top,
-                            ),
-                            _ => near_vector_search(
+                            )
+                            .await;
+                            let query_time = query_start.elapsed().as_secs_f64();
+                            match results {
+                                Ok(result_ids) => {
+                                    search_times.lock().unwrap().push(query_time);
+                                    let ordered_ids: Vec<i64> =
+                                        result_ids.iter().map(|(id, _)| *id).collect();
+                                    let m = crate::metrics::compute_metrics(
+                                        &ordered_ids,
+                                        &neighbors[idx],
+                                        top,
+                                    );
+                                    precisions.lock().unwrap().push(m.precision);
+                                    recalls.lock().unwrap().push(m.recall);
+                                    mrrs.lock().unwrap().push(m.mrr);
+                                    ndcgs.lock().unwrap().push(m.ndcg);
+                                }
+                                Err(e) => eprintln!("Search query {} failed: {}", idx, e),
+                            }
+                            pb.inc(1);
+                        }
+                    }));
+                }
+                for t in tasks {
+                    let _ = t.await;
+                }
+            });
+        } else {
+            // ── GraphQL: blocking OS-thread fan-out (each thread its own client). ──
+            std::thread::scope(|s| {
+                for _ in 0..parallel {
+                    let base_url = self.base_url.clone();
+                    let class_name = self.class_name.clone();
+                    let api_key = self.api_key.clone();
+                    let timeout = self.timeout;
+                    let queries = Arc::clone(&queries);
+                    let neighbors = Arc::clone(&neighbors);
+                    let parsed_filters = Arc::clone(&parsed_filters);
+                    let search_times = Arc::clone(&search_times);
+                    let precisions = Arc::clone(&precisions);
+                    let recalls = Arc::clone(&recalls);
+                    let mrrs = Arc::clone(&mrrs);
+                    let ndcgs = Arc::clone(&ndcgs);
+                    let query_idx = Arc::clone(&query_idx);
+                    let pb = &pb;
+
+                    s.spawn(move || {
+                        let client = match reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_secs(timeout))
+                            .build()
+                        {
+                            Ok(c) => c,
+                            Err(_) => return,
+                        };
+                        loop {
+                            let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                            if idx >= num_to_run {
+                                break;
+                            }
+                            let top = explicit_top.unwrap_or_else(|| {
+                                let n = neighbors[idx].len();
+                                if n > 0 {
+                                    n
+                                } else {
+                                    10
+                                }
+                            });
+                            let query_start = Instant::now();
+                            let results = near_vector_search(
                                 &client,
                                 &base_url,
                                 &class_name,
@@ -1041,34 +1101,31 @@ impl Engine for WeaviateEngine {
                                 &queries[idx],
                                 top,
                                 parsed_filters[idx].as_ref(),
-                            ),
-                        };
-                        let query_time = query_start.elapsed().as_secs_f64();
-
-                        match results {
-                            Ok(result_ids) => {
-                                search_times.lock().unwrap().push(query_time);
-                                let ordered_ids: Vec<i64> =
-                                    result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = crate::metrics::compute_metrics(
-                                    &ordered_ids,
-                                    &neighbors[idx],
-                                    top,
-                                );
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                            );
+                            let query_time = query_start.elapsed().as_secs_f64();
+                            match results {
+                                Ok(result_ids) => {
+                                    search_times.lock().unwrap().push(query_time);
+                                    let ordered_ids: Vec<i64> =
+                                        result_ids.iter().map(|(id, _)| *id).collect();
+                                    let m = crate::metrics::compute_metrics(
+                                        &ordered_ids,
+                                        &neighbors[idx],
+                                        top,
+                                    );
+                                    precisions.lock().unwrap().push(m.precision);
+                                    recalls.lock().unwrap().push(m.recall);
+                                    mrrs.lock().unwrap().push(m.mrr);
+                                    ndcgs.lock().unwrap().push(m.ndcg);
+                                }
+                                Err(e) => eprintln!("Search query {} failed: {}", idx, e),
                             }
-                            Err(e) => {
-                                eprintln!("Search query {} failed: {}", idx, e);
-                            }
+                            pb.inc(1);
                         }
-                        pb.inc(1);
-                    }
-                });
-            }
-        });
+                    });
+                }
+            });
+        }
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
