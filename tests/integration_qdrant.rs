@@ -576,33 +576,71 @@ fn test_binary_qdrant_sparse() {
     assert!(precision >= 0.9, "sparse precision {:.3} < 0.9", precision);
 }
 
-/// End-to-end HYBRID (dense + sparse) coverage: build a planted hybrid dataset
-/// (via `write_hybrid_project`), run the real engine (hybrid collection with a
-/// named "dense" + named "sparse" vector, upsert of both, and a query that fuses
-/// a dense prefetch and a sparse prefetch server-side with RRF), and assert the
-/// fused recall clears the 0.9 floor. See `write_hybrid_project` for the
-/// ground-truth / floor justification.
+/// End-to-end HYBRID (dense + sparse) coverage WITH a negative control.
+///
+/// The planted dataset's ground truth is recoverable ONLY by fusing both
+/// modalities (see `write_hybrid_project`). We assert two things against live
+/// qdrant:
+///   1. the HYBRID engine (named "dense" + "sparse" vectors, upsert of both, a
+///      query fusing a dense prefetch and a sparse prefetch via RRF) clears the
+///      0.9 recall floor, and
+///   2. a NEGATIVE CONTROL — a plain dense search over the SAME dense vectors +
+///      SAME ground truth (the `*-dense` jsonl view) — stays strictly LOW
+///      (< 0.6). Together these prove the dataset genuinely requires fusion and
+///      the hybrid path is doing real work, not silently collapsing to one
+///      modality.
 #[test]
 fn test_binary_qdrant_hybrid() {
     wait_for_qdrant();
 
-    let configs = serde_json::json!([{
-        "name": "qdrant-hybrid-cov", "engine": "qdrant",
-        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
-        // prefetch.limit sets the per-modality candidate depth fused by RRF.
-        "search_params": [{"parallel": 1, "search_params": {"prefetch": {"limit": 32}}}],
-        "upload_params": {"parallel": 1, "batch_size": 50}
-    }]);
+    let configs = serde_json::json!([
+        {
+            "name": "qdrant-hybrid-cov", "engine": "qdrant",
+            "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+            // prefetch.limit sets the per-modality candidate depth fused by RRF
+            // (>= 2*top so each ground-truth doc is visible in both prefetches).
+            "search_params": [{"parallel": 1, "search_params": {"prefetch": {"limit": 32}}}],
+            "upload_params": {"parallel": 1, "batch_size": 50}
+        },
+        {
+            "name": "qdrant-hybrid-dense-neg", "engine": "qdrant",
+            "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+            "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+            "upload_params": {"parallel": 1, "batch_size": 50}
+        }
+    ]);
     let proj =
         common::write_hybrid_project("hybrid-cov", &serde_json::to_string(&configs).unwrap());
 
+    // 1. Fused hybrid recall must clear the floor.
     assert!(
-        run_qdrant_binary(&proj.root, "qdrant-hybrid-cov", "hybrid-cov"),
+        run_qdrant_binary(&proj.root, "qdrant-hybrid-cov", &proj.dataset_name),
         "hybrid run failed"
     );
     let recall = common::read_recall(&proj.root, "qdrant-hybrid-cov");
     println!("qdrant hybrid recall={:.3} (top={})", recall, proj.top);
     assert!(recall >= 0.9, "hybrid recall {:.3} < 0.9", recall);
+
+    // 2. Negative control: plain dense search over the SAME data must be LOW,
+    //    proving the ground truth is unreachable without the sparse modality.
+    assert!(
+        run_qdrant_binary(
+            &proj.root,
+            "qdrant-hybrid-dense-neg",
+            &proj.dense_dataset_name
+        ),
+        "dense-only negative-control run failed"
+    );
+    let dense_recall = common::read_recall(&proj.root, "qdrant-hybrid-dense-neg");
+    println!("qdrant hybrid dense-only negative-control recall={dense_recall:.3}");
+    assert!(
+        dense_recall < 0.6,
+        "negative control recall {dense_recall:.3} >= 0.6 — dataset does NOT require fusion",
+    );
+    assert!(
+        recall > dense_recall + 0.3,
+        "fusion ({recall:.3}) must beat dense-only ({dense_recall:.3}) by a wide margin",
+    );
 }
 
 /// End-to-end `match_any` coverage. Qdrant already supports `match_any`, so this

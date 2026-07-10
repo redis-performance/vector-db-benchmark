@@ -559,66 +559,92 @@ pub fn write_sparse_project(dataset_name: &str, engine_configs_json: &str) -> Sp
 // Builds a `type: "hybrid"` dataset: dense `vectors.npy`/`queries.npy` (L2) +
 // sparse `data.csr`/`queries.csr` (dot/MIPS) + a SHARED `neighbours.jsonl`.
 //
-// GROUND-TRUTH / RECALL-FLOOR CHOICE (documented on purpose):
-// We deliberately do NOT brute-force the exact RRF order — its constant `k` is a
-// server detail and reproducing it is fiddly and brittle. Instead we PLANT, for
-// each query, a set of K "relevant" docs (R) that are simultaneously the top-K
-// nearest by BOTH modalities:
-//   * dense: R sits ~0.04 (L2) from the query centre; a ring of dense-only
-//     distractors (U) sits at exactly 1.0 (ranks K..2K); everything else ~10.
-//   * sparse: R has dot = 2·K with the query; a ring of sparse-only distractors
-//     (T) has dot = K (ranks K..2K); everything else 0.
-// Under RRF, an R doc scores 1/(k+rank_dense) + 1/(k+rank_sparse) with BOTH
-// ranks < K, while U scores only from dense (rank ≥ K) and T only from sparse
-// (rank ≥ K). Since 2/(k+K-1) > 1/(k+K) for every k ≥ 0, the fused top-K is
-// exactly R for ANY RRF constant. The ground truth is therefore R, and a
-// correct hybrid pipeline yields recall ≈ 1.0; we assert a 0.9 FLOOR to absorb
-// ANN approximation. The distractors give the test teeth: they make each
-// modality individually return a wrong ranking beyond rank K, and an inverted
-// sparse ordering (ascending, as if L2) drops R out of the sparse list and
-// pushes T up, cutting recall below the floor. (Limitation: because R is top-K
-// in both modalities, this validates end-to-end fusion + orientation, not an
-// exclusively-fusion contribution.)
+// GROUND-TRUTH / RECALL-FLOOR CHOICE — the ground truth R is recoverable ONLY
+// via fusion; NEITHER modality alone reaches the floor.
+//
+// We deliberately do NOT brute-force the exact RRF order (its constant `k` is a
+// server detail). Instead we PLANT, per query, K ground-truth docs split into
+// two halves and two rings of single-modality distractors:
+//   * R_dense (K/2 docs): dense ranks 0..K/2 (nearest by L2), but only MODERATE
+//     sparse dot → in the sparse ranking they land at ranks K..3K/2 (below both
+//     R_sparse and the sparse distractors).
+//   * R_sparse (K/2 docs): sparse ranks 0..K/2 (highest dot), but only MODERATE
+//     dense distance → in the dense ranking they land at ranks K..3K/2.
+//   * D_d (K/2 dense-only distractors): dense ranks K/2..K (just past R_dense),
+//     ~zero sparse dot → absent from the meaningful sparse list.
+//   * D_s (K/2 sparse-only distractors): sparse ranks K/2..K (just below
+//     R_sparse), dense-far → absent from the meaningful dense list.
+//
+// Consequence:
+//   * dense-only top-K  = R_dense + D_d  → recall(R) ≈ 0.5
+//   * sparse-only top-K = R_sparse + D_s → recall(R) ≈ 0.5
+//   * fused (RRF) top-K = R (all K)      → recall(R) ≈ 1.0
+// Under RRF every R doc appears in BOTH prefetches (its "off" modality ranks it
+// at K..3K/2, still inside the prefetch depth), so it collects TWO 1/(k+rank)
+// terms — and one of them has rank < K/2. Every distractor appears in only ONE
+// prefetch with rank ≥ K/2, so its best (only meaningful) term is ≤ 1/(k+K/2) <
+// 1/(k+K/2−1). Thus every R doc outscores every distractor for ANY k ≥ 0, and
+// the fused top-K is exactly R. We assert a 0.9 FLOOR on the fused recall to
+// absorb ANN slack, and the companion `*-dense` view (registered below) drives
+// the SAME data through a plain dense search as a NEGATIVE CONTROL that MUST
+// score < 0.6 — proving the dataset genuinely requires fusion. An inverted
+// sparse orientation (ascending, as if L2), a dropped sparse prefetch, or a
+// broken `Fusion::Rrf` all collapse the fused result toward one modality and
+// fail the floor.
 
-/// A built hybrid-benchmark project.
+/// A built hybrid-benchmark project. `dataset_name` is the `type:"hybrid"`
+/// dataset; `dense_dataset_name` is a dense-only (`type:"jsonl"`) VIEW over the
+/// SAME dense vectors + SAME ground truth, used as a negative control.
 pub struct HybridProject {
     pub root: PathBuf,
     pub dataset_name: String,
+    pub dense_dataset_name: String,
     pub top: usize,
 }
 
-/// Build a temp project with a deterministic planted hybrid dataset (dense +
-/// sparse) whose fused (RRF) top-K ground truth is the planted relevant set.
+/// Build a temp project with a deterministic planted hybrid dataset whose fused
+/// (RRF) top-K ground truth is recoverable ONLY by combining both modalities.
 pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> HybridProject {
-    const K: usize = 8; // top-k / relevant-set size
+    const K: usize = 8; // top-k / ground-truth-set size (must be even)
+    const HALF: usize = K / 2; // per-half / per-distractor-ring size
     const Q: usize = 6; // queries (and dense centre axes)
-    const DENSE_DIM: usize = 16; // >= Q (centre dims) + K (distractor bump dims)
-    const FILLER: usize = 6;
-    const N: usize = Q * 3 * K + FILLER; // R + U + T per query, then filler = 150
-    const BUMP_DIMS: usize = DENSE_DIM - Q; // dims Q..DENSE_DIM used for U bumps
+    const DENSE_DIM: usize = 16; // >= Q centre dims + HALF distractor bump dims
+    const PER_Q: usize = 4 * HALF; // R_dense + R_sparse + D_d + D_s per query
+    const FILLER: usize = 24;
+    const N: usize = Q * PER_Q + FILLER; // = 120
+    const BIG: f32 = 100.0; // centre magnitude → regions ~141 apart, origin ~100
 
-    // Sparse layout: query q owns index block F_q = [q*K .. q*K+K); U/filler use
-    // a disjoint "junk" block J so their dot with any query is 0.
-    const SPARSE_DIM: usize = Q * K + K; // per-query blocks + junk block
+    // Sparse layout: query q owns index block F_q = [q*HALF .. q*HALF+HALF);
+    // dense-only distractors / filler use a disjoint "junk" block J (dot 0).
+    const F_TOTAL: usize = Q * HALF;
 
     let mut rng = StdRng::seed_from_u64(0xB19_1DEA);
     let tiny = |rng: &mut StdRng| -> f32 { rng.gen_range(-0.01f32..0.01) };
 
-    // Doc-id block layout for query q: base = q*3K.
-    let base = |q: usize| q * 3 * K;
-    let r_id = |q: usize, j: usize| base(q) + j; // relevant  [base, base+K)
-    let u_id = |q: usize, j: usize| base(q) + K + j; // dense-only [base+K, base+2K)
-    let t_id = |q: usize, j: usize| base(q) + 2 * K + j; // sparse-only[base+2K, base+3K)
-    let filler_start = Q * 3 * K;
+    // Doc-id block layout for query q: base = q*PER_Q, then four HALF-sized rings.
+    let base = |q: usize| q * PER_Q;
+    let r_dense_id = |q: usize, j: usize| base(q) + j; //            [base,       base+HALF)
+    let r_sparse_id = |q: usize, j: usize| base(q) + HALF + j; //    [base+HALF,  base+2HALF)
+    let d_d_id = |q: usize, j: usize| base(q) + 2 * HALF + j; //     [base+2HALF, base+3HALF)
+    let d_s_id = |q: usize, j: usize| base(q) + 3 * HALF + j; //     [base+3HALF, base+4HALF)
+    let filler_start = Q * PER_Q;
 
-    // Dense centre for query q: 10.0 on axis q, else 0. Regions are ~14 apart.
+    // Dense centre for query q: BIG on axis q, else 0.
     let centre = |q: usize| -> Vec<f32> {
         let mut v = vec![0.0f32; DENSE_DIM];
-        v[q] = 10.0;
+        v[q] = BIG;
+        v
+    };
+    // A dense doc = centre + `mag` along a distractor axis (dims Q..DENSE_DIM),
+    // so its L2 distance from the query (= centre) is exactly `mag`.
+    let offset_from = |c: &[f32], mag: f32, j: usize| -> Vec<f32> {
+        let mut v = c.to_vec();
+        v[Q + (j % (DENSE_DIM - Q))] += mag;
         v
     };
 
-    // Build dense + sparse per doc.
+    let junk: Vec<u32> = (F_TOTAL..F_TOTAL + HALF).map(|i| i as u32).collect();
+
     let mut dense: Vec<Vec<f32>> = vec![vec![0.0f32; DENSE_DIM]; N];
     let mut sparse: Vec<SparseVector> = vec![
         SparseVector {
@@ -627,49 +653,40 @@ pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> Hy
         };
         N
     ];
-    let junk: Vec<u32> = (Q * K..Q * K + K).map(|i| i as u32).collect();
 
     for q in 0..Q {
         let c = centre(q);
-        let f_q: Vec<u32> = (q * K..q * K + K).map(|i| i as u32).collect();
-        for j in 0..K {
-            // R: dense ≈ centre (~0.04 away); sparse dot = 2·K (top).
-            let mut rv = c.clone();
-            for x in rv.iter_mut() {
+        let f_q: Vec<u32> = (q * HALF..q * HALF + HALF).map(|i| i as u32).collect();
+        // Per-doc tiny increments break ties so tiers stay crisply ordered.
+        let sp = |indices: &[u32], val: f32, j: usize| SparseVector {
+            indices: indices.to_vec(),
+            values: indices.iter().map(|_| val + 0.001 * j as f32).collect(),
+        };
+        for j in 0..HALF {
+            // R_dense: dense dist 1.0 (ranks 0..HALF); sparse dot ~ HALF*1 (low).
+            dense[r_dense_id(q, j)] = offset_from(&c, 1.0, j);
+            sparse[r_dense_id(q, j)] = sp(&f_q, 1.0, j);
+
+            // D_d: dense dist 2.0 (ranks HALF..K); sparse = junk → dot 0.
+            dense[d_d_id(q, j)] = offset_from(&c, 2.0, HALF + j);
+            sparse[d_d_id(q, j)] = sp(&junk, 1.0, j);
+
+            // R_sparse: dense dist 3.0 (ranks K..3K/2); sparse dot ~ HALF*3 (top).
+            dense[r_sparse_id(q, j)] = offset_from(&c, 3.0, 2 * HALF + j);
+            sparse[r_sparse_id(q, j)] = sp(&f_q, 3.0, j);
+
+            // D_s: dense ≈ origin (dist ~BIG, absent from dense top); sparse dot ~
+            // HALF*2 (ranks HALF..K, between R_sparse and R_dense).
+            let mut ds_v = vec![0.0f32; DENSE_DIM];
+            for x in ds_v.iter_mut() {
                 *x += tiny(&mut rng);
             }
-            dense[r_id(q, j)] = rv;
-            sparse[r_id(q, j)] = SparseVector {
-                indices: f_q.clone(),
-                values: vec![2.0f32; K],
-            };
-
-            // U: dense = centre + unit bump (exactly 1.0 away → ranks K..2K);
-            // sparse = junk block → dot 0 (absent from sparse list).
-            let mut uv = c.clone();
-            uv[Q + (j % BUMP_DIMS)] += 1.0;
-            dense[u_id(q, j)] = uv;
-            sparse[u_id(q, j)] = SparseVector {
-                indices: junk.clone(),
-                values: vec![1.0f32; K],
-            };
-
-            // T: dense ≈ origin (~10 away → absent from dense list); sparse dot =
-            // K (ranks K..2K, below R's 2·K).
-            let mut tv = vec![0.0f32; DENSE_DIM];
-            for x in tv.iter_mut() {
-                *x += tiny(&mut rng);
-            }
-            dense[t_id(q, j)] = tv;
-            sparse[t_id(q, j)] = SparseVector {
-                indices: f_q.clone(),
-                values: vec![1.0f32; K],
-            };
+            dense[d_s_id(q, j)] = ds_v;
+            sparse[d_s_id(q, j)] = sp(&f_q, 2.0, j);
         }
     }
     // Filler: dense ≈ origin, sparse in junk block (dot 0 with every query).
-    for (i, id) in (filler_start..N).enumerate() {
-        let _ = i;
+    for id in filler_start..N {
         let mut fv = vec![0.0f32; DENSE_DIM];
         for x in fv.iter_mut() {
             *x += tiny(&mut rng);
@@ -677,23 +694,25 @@ pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> Hy
         dense[id] = fv;
         sparse[id] = SparseVector {
             indices: junk.clone(),
-            values: vec![1.0f32; K],
+            values: vec![1.0f32; HALF],
         };
     }
 
-    // Queries: dense = centre_q, sparse = ones on F_q. Ground truth = R_q.
+    // Queries: dense = centre_q, sparse = ones on F_q. Ground truth R_q =
+    // R_dense ∪ R_sparse (the full K planted docs).
     let mut dense_q: Vec<Vec<f32>> = Vec::with_capacity(Q);
     let mut sparse_q: Vec<SparseVector> = Vec::with_capacity(Q);
     let mut neighbours: Vec<Vec<i64>> = Vec::with_capacity(Q);
     for q in 0..Q {
         dense_q.push(centre(q));
         sparse_q.push(SparseVector {
-            indices: (q * K..q * K + K).map(|i| i as u32).collect(),
-            values: vec![1.0f32; K],
+            indices: (q * HALF..q * HALF + HALF).map(|i| i as u32).collect(),
+            values: vec![1.0f32; HALF],
         });
-        neighbours.push((0..K).map(|j| r_id(q, j) as i64).collect());
+        let mut gt: Vec<i64> = (0..HALF).map(|j| r_dense_id(q, j) as i64).collect();
+        gt.extend((0..HALF).map(|j| r_sparse_id(q, j) as i64));
+        neighbours.push(gt);
     }
-    debug_assert_eq!(SPARSE_DIM, Q * K + K);
 
     let tmp = tempfile::tempdir().expect("temp dir");
     let root = tmp.path().to_path_buf();
@@ -710,10 +729,25 @@ pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> Hy
     write_sparse_matrix(ds_dir.join("queries.csr").to_str().unwrap(), &sparse_q).unwrap();
     write_neighbours(&ds_dir, &neighbours);
 
-    let datasets_json = serde_json::json!([{
-        "name": dataset_name, "type": "hybrid", "path": dataset_name,
-        "distance": "l2", "vector_size": DENSE_DIM, "vector_count": N,
-    }]);
+    // Dense-only VIEW (negative control): same dense vectors + same ground truth
+    // as a plain jsonl dataset, so an ordinary dense search can be run on it.
+    let dense_dataset_name = format!("{dataset_name}-dense");
+    let dv_dir = root.join("datasets").join(&dense_dataset_name);
+    fs::create_dir_all(&dv_dir).unwrap();
+    write_jsonl_vectors(&dv_dir.join("vectors.jsonl"), &dense);
+    write_jsonl_vectors(&dv_dir.join("queries.jsonl"), &dense_q);
+    write_neighbours(&dv_dir, &neighbours);
+
+    let datasets_json = serde_json::json!([
+        {
+            "name": dataset_name, "type": "hybrid", "path": dataset_name,
+            "distance": "l2", "vector_size": DENSE_DIM, "vector_count": N,
+        },
+        {
+            "name": dense_dataset_name, "type": "jsonl", "path": format!("{dense_dataset_name}/"),
+            "distance": "l2", "vector_size": DENSE_DIM, "vector_count": N,
+        },
+    ]);
     fs::write(
         root.join("datasets/datasets.json"),
         serde_json::to_string_pretty(&datasets_json).unwrap(),
@@ -728,8 +762,20 @@ pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> Hy
     HybridProject {
         root,
         dataset_name: dataset_name.to_string(),
+        dense_dataset_name,
         top: K,
     }
+}
+
+/// Write `vectors` as a `.jsonl` file (one JSON float-array per line), the
+/// layout the `type:"jsonl"` reader expects.
+fn write_jsonl_vectors(path: &Path, vectors: &[Vec<f32>]) {
+    let body = vectors
+        .iter()
+        .map(|v| serde_json::to_string(&v.iter().map(|x| *x as f64).collect::<Vec<_>>()).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(path, body).unwrap();
 }
 
 /// Write `neighbours.jsonl` (one JSON id-array per line) into `ds_dir`.

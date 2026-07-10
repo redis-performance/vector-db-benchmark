@@ -276,6 +276,28 @@ Or provide a custom file with `--engines-file`:
 vector-db-benchmark --engines-file my_engines.json --datasets glove-25-angular
 ```
 
+### Qdrant hybrid (dense + sparse) search
+
+`experiments/configurations/qdrant-hybrid.json` runs Qdrant's server-side
+reciprocal-rank fusion (RRF) of a dense-vector prefetch and a sparse-vector
+prefetch. It **requires a `type: "hybrid"` dataset** — running it against an
+ordinary dense dataset silently degrades to a plain dense search (there is no
+sparse vector to fuse). A hybrid dataset directory must contain all of:
+
+```
+vectors.npy      # dense document vectors  (npy, row i == point id i)
+queries.npy      # dense query vectors      (npy)
+data.csr         # sparse document vectors  (binary CSR, row-aligned with vectors.npy)
+queries.csr      # sparse query vectors     (binary CSR, row-aligned with queries.npy)
+neighbours.jsonl # fused ground truth: one JSON array of ids per query line
+```
+
+Register it in `datasets/datasets.json` with `"type": "hybrid"` and the dense
+`vector_size`/`distance`. The end-to-end hybrid path (collection with a named
+`dense` + named `sparse` vector, dual-vector upsert, and RRF fusion) is covered
+by `tests/integration_qdrant.rs::test_binary_qdrant_hybrid`, which also
+generates a tiny hybrid fixture you can consult for the exact layout.
+
 ## How to register a dataset?
 
 Datasets are configured in [`datasets/datasets.json`](./datasets/datasets.json). The tool automatically downloads datasets on first use if a download link is provided.

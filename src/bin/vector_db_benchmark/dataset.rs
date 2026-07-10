@@ -316,12 +316,18 @@ impl Dataset {
         }
 
         let gt_path = dir.join("neighbours.jsonl");
-        let neighbours: Vec<Vec<i64>> = std::fs::read_to_string(&gt_path)
-            .map_err(|e| format!("read {}: {}", gt_path.display(), e))?
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str::<Vec<i64>>(l).map_err(|e| e.to_string()))
-            .collect::<Result<_, _>>()?;
+        let neighbours = read_neighbours_strict(&gt_path)?;
+
+        // Ground truth must be row-aligned with the queries: a short (or long)
+        // neighbours.jsonl would otherwise index out of bounds mid-run, or
+        // silently score the wrong rows.
+        if neighbours.len() != dense_queries.len() {
+            return Err(format!(
+                "hybrid ground-truth row mismatch: {} queries vs {} neighbour rows",
+                dense_queries.len(),
+                neighbours.len()
+            ));
+        }
         Ok((dense_queries, sparse_queries, neighbours))
     }
 
@@ -371,6 +377,37 @@ impl Dataset {
 
         Ok((queries, neighbors))
     }
+}
+
+/// Parse a `neighbours.jsonl` ground-truth file (one JSON id-array per line)
+/// with STRICT line alignment: every line must be a valid id-array so that row
+/// `i` is unambiguously query `i`'s ground truth. A blank OR unparseable line in
+/// the interior is rejected (a blanket "skip empty lines" would shift every
+/// subsequent row up by one and silently corrupt recall). Exactly one trailing
+/// newline is tolerated.
+fn read_neighbours_strict(path: &std::path::Path) -> Result<Vec<Vec<i64>>, String> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let mut lines: Vec<&str> = raw.split('\n').collect();
+    // Tolerate a single trailing newline (final split element is "").
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "{}: blank line at row {} (ground-truth rows must be contiguous)",
+                path.display(),
+                i + 1
+            ));
+        }
+        let row: Vec<i64> = serde_json::from_str(trimmed)
+            .map_err(|e| format!("{}: parse row {}: {}", path.display(), i + 1, e))?;
+        out.push(row);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -447,6 +484,87 @@ mod tests {
         assert_eq!(dq, dense_q);
         assert_eq!(sq, sparse_q);
         assert_eq!(nb, vec![vec![0i64, 1]]);
+    }
+
+    /// Helper: write the four hybrid data files (2 docs / 1 query) into `p`,
+    /// leaving `neighbours.jsonl` for the caller to control.
+    fn write_hybrid_files_without_neighbours(p: &std::path::Path) {
+        write_npy_vectors(
+            p.join("vectors.npy").to_str().unwrap(),
+            &[vec![1.0f32, 0.0, 0.0], vec![0.0, 1.0, 0.0]],
+        )
+        .unwrap();
+        write_sparse_matrix(
+            p.join("data.csr").to_str().unwrap(),
+            &[
+                SparseVector {
+                    indices: vec![0],
+                    values: vec![1.0],
+                },
+                SparseVector {
+                    indices: vec![1],
+                    values: vec![1.0],
+                },
+            ],
+        )
+        .unwrap();
+        write_npy_vectors(
+            p.join("queries.npy").to_str().unwrap(),
+            &[vec![1.0f32, 1.0, 1.0]],
+        )
+        .unwrap();
+        write_sparse_matrix(
+            p.join("queries.csr").to_str().unwrap(),
+            &[SparseVector {
+                indices: vec![0],
+                values: vec![1.0],
+            }],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn read_hybrid_queries_rejects_neighbour_count_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        write_hybrid_files_without_neighbours(p);
+        // 1 query but 2 ground-truth rows → must error (finding 3).
+        std::fs::write(p.join("neighbours.jsonl"), "[0]\n[1]\n").unwrap();
+        let ds = hybrid_dataset(p);
+        let err = ds.read_hybrid_queries().unwrap_err();
+        assert!(err.contains("ground-truth row mismatch"), "got: {err}");
+    }
+
+    #[test]
+    fn read_hybrid_queries_rejects_interior_blank_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        write_hybrid_files_without_neighbours(p);
+        // Interior blank line would silently shift rows → must error (finding 5).
+        std::fs::write(p.join("neighbours.jsonl"), "\n[0]\n").unwrap();
+        let ds = hybrid_dataset(p);
+        let err = ds.read_hybrid_queries().unwrap_err();
+        assert!(err.contains("blank line"), "got: {err}");
+    }
+
+    #[test]
+    fn read_neighbours_strict_tolerates_single_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("neighbours.jsonl");
+        std::fs::write(&p, "[1, 2]\n[3]\n").unwrap();
+        let nb = read_neighbours_strict(&p).unwrap();
+        assert_eq!(nb, vec![vec![1i64, 2], vec![3]]);
+
+        // No trailing newline is also fine.
+        std::fs::write(&p, "[1, 2]\n[3]").unwrap();
+        assert_eq!(
+            read_neighbours_strict(&p).unwrap(),
+            vec![vec![1i64, 2], vec![3]]
+        );
+
+        // A doubled trailing newline leaves an interior blank → rejected.
+        std::fs::write(&p, "[1]\n\n").unwrap();
+        assert!(read_neighbours_strict(&p).is_err());
     }
 
     #[test]

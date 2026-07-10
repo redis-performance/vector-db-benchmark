@@ -227,9 +227,31 @@ impl QdrantEngine {
             create_builder = create_builder.hnsw_config(hnsw_config);
         }
 
-        // Pass through optimizers_config (e.g. the rps-tuned default_segment_number /
-        // max_segment_size / memmap_threshold) — mirrors the python engine, which
-        // forwards collection_params verbatim.
+        // Pass through optimizers_config + quantization_config (shared with the
+        // hybrid create path).
+        create_builder = self.apply_optimizers_and_quantization(create_builder)?;
+
+        self.rt
+            .block_on(self.client.create_collection(create_builder))
+            .map_err(|e| format!("Failed to create collection: {}", e))?;
+
+        // Disable optimization during indexing.
+        self.disable_indexing_optimizers();
+
+        self.create_payload_indexes(dataset);
+
+        Ok(())
+    }
+
+    /// Apply `collection_params.optimizers_config` (rps-tuned segment / memmap
+    /// knobs) and `collection_params.quantization_config` (scalar/binary) to a
+    /// `CreateCollectionBuilder`. Shared verbatim by the dense-only and hybrid
+    /// create paths so the hybrid collection honours the SAME tuning (e.g.
+    /// qdrant-hybrid.json's `memmap_threshold`).
+    fn apply_optimizers_and_quantization(
+        &self,
+        mut create_builder: CreateCollectionBuilder,
+    ) -> Result<CreateCollectionBuilder, String> {
         if let Some(opt) = self.collection_params_extra.get("optimizers_config") {
             let mut diff = OptimizersConfigDiff::default();
             if let Some(v) = opt.get("default_segment_number").and_then(|v| v.as_u64()) {
@@ -244,7 +266,6 @@ impl QdrantEngine {
             create_builder = create_builder.optimizers_config(diff);
         }
 
-        // Pass through quantization_config (sq/bq tuned setups).
         if let Some(q) = self.collection_params_extra.get("quantization_config") {
             let quantization = if let Some(s) = q.get("scalar") {
                 let qtype = match s.get("type").and_then(|v| v.as_str()) {
@@ -270,12 +291,12 @@ impl QdrantEngine {
                 create_builder = create_builder.quantization_config(quantization);
             }
         }
+        Ok(create_builder)
+    }
 
-        self.rt
-            .block_on(self.client.create_collection(create_builder))
-            .map_err(|e| format!("Failed to create collection: {}", e))?;
-
-        // Disable optimization during indexing
+    /// Throttle optimizer threads to 0 during bulk indexing (re-enabled to auto
+    /// by `wait_collection_green`). Shared by the dense and hybrid create paths.
+    fn disable_indexing_optimizers(&self) {
         let _ = self.rt.block_on(
             self.client.update_collection(
                 qdrant_client::qdrant::UpdateCollectionBuilder::new(&self.collection_name)
@@ -289,10 +310,6 @@ impl QdrantEngine {
                     }),
             ),
         );
-
-        self.create_payload_indexes(dataset);
-
-        Ok(())
     }
 
     /// Create Qdrant payload indexes for the dataset's schema fields.
@@ -371,12 +388,20 @@ impl QdrantEngine {
         let mut sparse_cfg = SparseVectorsConfigBuilder::default();
         sparse_cfg.add_named_vector_params("sparse", SparseVectorParamsBuilder::default());
 
-        let create_builder = CreateCollectionBuilder::new(&self.collection_name)
+        let mut create_builder = CreateCollectionBuilder::new(&self.collection_name)
             .vectors_config(dense_cfg)
             .sparse_vectors_config(sparse_cfg);
+        // Honour the SAME optimizers_config / quantization_config tuning as the
+        // dense-only path (finding: hybrid previously dropped e.g. memmap_threshold).
+        create_builder = self.apply_optimizers_and_quantization(create_builder)?;
+
         self.rt
             .block_on(self.client.create_collection(create_builder))
             .map_err(|e| format!("Failed to create hybrid collection: {}", e))?;
+
+        // Throttle optimizer threads during indexing, same as the dense path.
+        self.disable_indexing_optimizers();
+
         self.create_payload_indexes(dataset);
         Ok(())
     }
@@ -1116,12 +1141,15 @@ impl Engine for QdrantEngine {
                         let mut query_builder = if is_hybrid {
                             // Hybrid: two prefetches (dense NN + sparse NN) fused
                             // server-side with reciprocal-rank fusion (RRF). Each
-                            // prefetch pulls `hybrid_prefetch_limit` candidates from
-                            // its own named vector; RRF ranks by combined rank.
+                            // prefetch pulls `pf_limit` candidates from its own named
+                            // vector; RRF ranks by combined rank. Floor the depth at
+                            // `top` so the fusion pool is never smaller than the
+                            // requested result count (which would understate recall).
+                            let pf_limit = hybrid_prefetch_limit.max(top as u64);
                             let dense_pf = PrefetchQueryBuilder::default()
                                 .using("dense")
                                 .query(Query::new_nearest(queries[idx].clone()))
-                                .limit(hybrid_prefetch_limit)
+                                .limit(pf_limit)
                                 .build();
                             let sv = &sparse_queries[idx];
                             let sparse_pf = PrefetchQueryBuilder::default()
@@ -1130,7 +1158,7 @@ impl Engine for QdrantEngine {
                                     sv.indices.clone(),
                                     sv.values.clone(),
                                 ))
-                                .limit(hybrid_prefetch_limit)
+                                .limit(pf_limit)
                                 .build();
                             QueryPointsBuilder::new(collection_name.clone())
                                 .query(Query::new_fusion(Fusion::Rrf))
