@@ -10,6 +10,7 @@ mod download;
 mod engine;
 mod experiment;
 mod metrics;
+mod plot;
 mod proc_cpu;
 mod summary;
 
@@ -44,6 +45,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+
+    // Handle --plot: render a chart from existing results instead of benchmarking.
+    if args.plot.is_some() {
+        if let Err(e) = plot::export_chart(&args) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+        return;
     }
 
     // Run experiments

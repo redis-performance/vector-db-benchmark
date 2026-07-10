@@ -127,7 +127,17 @@ Options:
     --update-search-ratio <U:S> Mixed benchmark: interleave U updates per S searches
     --describe <TYPE>          Describe available 'datasets' or 'engines'
     -v, --verbose              Verbose output for --describe
+    --plot <OUTPUT.svg>        Render a QPS-vs-precision trade-off chart from results/
     -h, --help                 Print help
+```
+
+### Charts
+
+Render a QPS-vs-precision trade-off plot (SVG, no dependencies) from existing `*-summary.json` results — one colored series per engine, filtered by `--engines`/`--datasets`:
+
+```bash
+# Compare all engines on one dataset
+vector-db-benchmark --plot tradeoff.svg --engines '*' --datasets glove-100-angular
 ```
 
 ## Mixed Benchmarks (Update + Search)
