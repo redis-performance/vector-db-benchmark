@@ -445,21 +445,97 @@ fn run_single_experiment(
                     );
                 }
 
-                let search_result = match phase {
-                    Some(ratio) => {
-                        engine.search_mixed(dataset, effective_params, args.queries, ratio)
-                    }
-                    None => engine.search(dataset, effective_params, args.queries),
-                };
+                // Run the measured search `repetitions` times and keep the
+                // best-RPS run. Restores v0's REPETITIONS behavior: the first run
+                // is often cold (OS page cache / index warm-up), and best-of
+                // discards it, so published QPS is a warm figure comparable to
+                // the Python tool. --repetitions 1 disables it.
+                let repetitions = args.repetitions.max(1);
+                let mut best: Option<crate::engine::SearchResults> = None;
+                let mut last_err: Option<String> = None;
 
-                match search_result {
-                    Ok(results) => {
+                for rep in 0..repetitions {
+                    // Sample client CPU around the search so we can flag runs where
+                    // the benchmark client — not the database — was the bottleneck.
+                    let cpu_before = crate::proc_cpu::sample();
+                    let search_result = match phase {
+                        Some(ratio) => {
+                            engine.search_mixed(dataset, effective_params, args.queries, ratio)
+                        }
+                        None => engine.search(dataset, effective_params, args.queries),
+                    };
+                    let cpu_after = crate::proc_cpu::sample();
+
+                    match search_result {
+                        Ok(mut results) => {
+                            // Attach CPU / oversubscription / saturation coverage.
+                            let sat = crate::proc_cpu::compute(
+                                cpu_before,
+                                cpu_after,
+                                results.parallel,
+                                crate::proc_cpu::available_cores(),
+                            );
+                            results.available_cores = sat.available_cores;
+                            results.oversubscribed = sat.oversubscribed;
+                            results.client_cpu_cores_used = sat.client_cpu_cores_used;
+                            results.system_cpu_pct = sat.system_cpu_pct;
+                            results.client_saturated = sat.client_saturated;
+                            results.saturation_reason = sat.saturation_reason;
+                            if repetitions > 1 {
+                                println!(
+                                    "\t  rep {}/{}: QPS {:.1}",
+                                    rep + 1,
+                                    repetitions,
+                                    results.rps
+                                );
+                            }
+                            if best.as_ref().map(|b| results.rps > b.rps).unwrap_or(true) {
+                                best = Some(results);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("\tSearch failed (rep {}/{}): {}", rep + 1, repetitions, e);
+                            last_err = Some(e);
+                        }
+                    }
+                }
+
+                match best {
+                    Some(results) => {
                         if skip_vector_index {
                             println!("\t→ QPS: {:.1} (filter-only, no precision)", results.rps);
                         } else {
                             println!(
-                                "\t→ QPS: {:.1}, Recall: {:.4}, Precision: {:.4}, MRR: {:.4}, NDCG: {:.4}",
-                                results.rps, results.mean_recall, results.mean_precision, results.mean_mrr, results.mean_ndcg
+                                "\t→ QPS: {:.1}, Recall: {:.4}, Precision: {:.4}, MRR: {:.4}, NDCG: {:.4}{}",
+                                results.rps, results.mean_recall, results.mean_precision, results.mean_mrr, results.mean_ndcg,
+                                if repetitions > 1 { " (best of reps)" } else { "" }
+                            );
+                        }
+                        // Surface dropped queries loudly: latency percentiles and
+                        // recall above cover only the successful subset, so a
+                        // nonzero count means the numbers are not over the full
+                        // requested workload.
+                        if results.failed_queries > 0 {
+                            eprintln!(
+                                "\t⚠ WARNING: {}/{} queries FAILED (only {} succeeded); \
+                                 latency/recall/QPS above reflect the successful subset only",
+                                results.failed_queries,
+                                results.requested_queries,
+                                results.num_queries,
+                            );
+                        }
+                        // Flag client-side saturation: when the benchmark client is
+                        // the bottleneck the QPS/latency above are not clean
+                        // server-side measurements.
+                        if results.client_saturated {
+                            let cpu = results
+                                .client_cpu_cores_used
+                                .map(|c| format!("{:.1} cores", c))
+                                .unwrap_or_else(|| "cpu n/a".to_string());
+                            eprintln!(
+                                "\t⚠ WARNING: CLIENT LIKELY SATURATED ({}) — client used {}; \
+                                 QPS/latency may reflect the client, not the database",
+                                results.saturation_reason, cpu,
                             );
                         }
                         save_search_results(
@@ -477,8 +553,12 @@ fn run_single_experiment(
                             results,
                         });
                     }
-                    Err(e) => {
-                        eprintln!("\tSearch failed: {}", e);
+                    None => {
+                        eprintln!(
+                            "\tSearch failed (all {} repetition(s)){}",
+                            repetitions,
+                            last_err.map(|e| format!(": {}", e)).unwrap_or_default()
+                        );
                     }
                 }
             }
@@ -618,6 +698,24 @@ fn save_search_results(
         "results": {
             "total_time": results.total_time,
             "mean_time": results.mean_time,
+            // Query accounting: rps and the latency percentiles are computed over
+            // succeeded_queries only, while total_time (the rps denominator) spans
+            // the whole run. A nonzero failed_queries means the reported latency
+            // distribution covers a partial set — typically the regime where a
+            // saturated client or an overloaded server sheds timeouts.
+            "requested_queries": results.requested_queries,
+            "succeeded_queries": results.num_queries,
+            "failed_queries": results.failed_queries,
+            // Client CPU / concurrency-saturation coverage: client_saturated=true
+            // means the run was likely client-bound and the numbers below should
+            // not be read as clean server-side measurements.
+            "parallel": results.parallel,
+            "available_cores": results.available_cores,
+            "oversubscribed": results.oversubscribed,
+            "client_cpu_cores_used": results.client_cpu_cores_used,
+            "system_cpu_pct": results.system_cpu_pct,
+            "client_saturated": results.client_saturated,
+            "saturation_reason": results.saturation_reason,
             "mean_precisions": results.mean_precision,
             "mean_recall": results.mean_recall,
             "mean_mrr": results.mean_mrr,

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "qdrant-hybrid",
+    "engine": "qdrant",
+    "connection_params": { "timeout": 300 },
+    "collection_params": {
+      "timeout": 300,
+      "hnsw_config": { "m": 16, "ef_construct": 128 },
+      "optimizers_config": { "memmap_threshold": 25000000 }
+    },
+    "search_params": [
+      { "parallel": 1, "search_params": { "prefetch": { "limit": 100 } } },
+      { "parallel": 8, "search_params": { "prefetch": { "limit": 100 } } }
+    ],
+    "upload_params": { "parallel": 16, "batch_size": 1024 }
+  }
+]

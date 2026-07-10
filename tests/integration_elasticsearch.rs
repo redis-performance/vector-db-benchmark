@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -902,4 +904,47 @@ fn test_es_full_cycle_configure_upload_search_delete() {
         .send()
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
+}
+
+/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
+/// engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the `terms` filter arm.
+#[test]
+fn test_binary_elasticsearch_match_any() {
+    wait_for_elasticsearch();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "es-ma", "engine": "elasticsearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "es-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[
+                ("ELASTIC_PORT", "9201"),
+                ("ELASTIC_INDEX", "bench_matchany")
+            ],
+        ),
+        "es match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "es-ma");
+    println!("es match_any recall={:.3}", recall);
+    assert!(recall >= 0.9, "es match_any recall {:.3} < 0.9", recall);
 }

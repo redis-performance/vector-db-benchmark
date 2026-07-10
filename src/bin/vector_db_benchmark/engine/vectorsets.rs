@@ -320,8 +320,15 @@ fn vsim_search(
     }
 
     let response: Vec<redis::Value> = cmd.query(conn).map_err(|e| format!("VSIM error: {}", e))?;
+    Ok(parse_vsim_response(&response))
+}
 
-    // Parse alternating [id, score, id, score, ...]
+/// Parse a `VSIM … WITHSCORES` reply — an alternating `[id, score, id, score, …]`
+/// array. IDs arrive as bulk strings (RESP2) or integers; scores as bulk strings
+/// (RESP2) or doubles (RESP3). VectorSets returns similarity (1 = identical), so
+/// each score is converted to a distance via `1.0 - score`. Unrecognized value
+/// variants fall back to `0`/`0.0` rather than panicking.
+fn parse_vsim_response(response: &[redis::Value]) -> Vec<(i64, f64)> {
     let mut results = Vec::new();
     let mut i = 0;
     while i + 1 < response.len() {
@@ -346,7 +353,7 @@ fn vsim_search(
         i += 2;
     }
 
-    Ok(results)
+    results
 }
 
 /// Single-record VADD update (for mixed benchmark).
@@ -529,43 +536,48 @@ impl Engine for VectorSetsEngine {
             queries.len()
         };
 
-        let search_times: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let precisions: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let recalls: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let mrrs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
-        let ndcgs: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(num_to_run)));
+        // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
+        // contention in the timed loop (see redis.rs::search). Metrics are
+        // order-independent so results are unchanged; work counter uses Relaxed.
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
+        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
+
         std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
                 let queries = &queries;
                 let neighbors = &neighbors;
                 let filters = &filters;
-                let search_times = Arc::clone(&search_times);
-                let precisions = Arc::clone(&precisions);
-                let recalls = Arc::clone(&recalls);
-                let mrrs = Arc::clone(&mrrs);
-                let ndcgs = Arc::clone(&ndcgs);
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
-                s.spawn(move || {
+                handles.push(s.spawn(move || {
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return,
+                        Err(_) => return (t, p, r, mr, nd),
                     };
 
                     loop {
-                        let idx = query_idx.fetch_add(1, Ordering::SeqCst);
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
@@ -589,7 +601,6 @@ impl Engine for VectorSetsEngine {
 
                         match results {
                             Ok(result_ids) => {
-                                search_times.lock().unwrap().push(query_time);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = crate::metrics::compute_metrics(
@@ -597,10 +608,11 @@ impl Engine for VectorSetsEngine {
                                     &neighbors[idx],
                                     top,
                                 );
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                t.push(query_time);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -608,18 +620,22 @@ impl Engine for VectorSetsEngine {
                         }
                         pb.inc(1);
                     }
-                });
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                times.extend(t);
+                precs.extend(p);
+                recs.extend(r);
+                mrr_vals.extend(mr);
+                ndcg_vals.extend(nd);
             }
         });
 
         pb.finish_and_clear();
         let total_time = start_time.elapsed().as_secs_f64();
-
-        let times = search_times.lock().unwrap();
-        let precs = precisions.lock().unwrap();
-        let recs = recalls.lock().unwrap();
-        let mrr_vals = mrrs.lock().unwrap();
-        let ndcg_vals = ndcgs.lock().unwrap();
 
         if times.is_empty() {
             return Err("No searches completed".to_string());
@@ -636,7 +652,7 @@ impl Engine for VectorSetsEngine {
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel,
+            &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
         )
     }
 
@@ -911,6 +927,8 @@ impl Engine for VectorSetsEngine {
             latencies: times.to_vec(),
             top: explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10)),
             num_queries: times.len(),
+            requested_queries: num_to_run,
+            failed_queries: num_to_run.saturating_sub(times.len()),
             parallel,
             update_count,
             update_rps,
@@ -920,6 +938,7 @@ impl Engine for VectorSetsEngine {
             update_p99_time: update_p99,
             update_latencies: Some(u_times.to_vec()),
             update_search_ratio: Some(format!("{}:{}", ratio.updates, ratio.searches)),
+            ..Default::default()
         })
     }
 
@@ -1058,5 +1077,52 @@ fn format_number(value: &serde_json::Value) -> String {
         f.to_string()
     } else {
         "0".to_string()
+    }
+}
+
+#[cfg(test)]
+mod vsim_parse_tests {
+    use super::parse_vsim_response;
+    use redis::Value;
+
+    #[test]
+    fn parses_resp2_bulk_id_and_score_as_distance() {
+        // RESP2: id + score both bulk strings; score 0.9 similarity → 0.1 distance.
+        let resp = vec![
+            Value::BulkString(b"7".to_vec()),
+            Value::BulkString(b"0.9".to_vec()),
+        ];
+        let hits = parse_vsim_response(&resp);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, 7);
+        assert!((hits[0].1 - 0.1).abs() < 1e-9, "distance={}", hits[0].1);
+    }
+
+    #[test]
+    fn parses_resp3_int_id_and_double_score() {
+        // RESP3: id as Int, score as Double similarity 1.0 → distance 0.0.
+        let resp = vec![Value::Int(42), Value::Double(1.0)];
+        let hits = parse_vsim_response(&resp);
+        assert_eq!(hits, vec![(42, 0.0)]);
+    }
+
+    #[test]
+    fn multiple_pairs_and_trailing_odd_element_ignored() {
+        let resp = vec![
+            Value::Int(1),
+            Value::Double(0.5),
+            Value::Int(2),
+            Value::Double(0.25),
+            Value::Int(3), // dangling id with no score → dropped
+        ];
+        let hits = parse_vsim_response(&resp);
+        assert_eq!(hits, vec![(1, 0.5), (2, 0.75)]);
+    }
+
+    #[test]
+    fn unknown_variants_fall_back_without_panicking() {
+        let resp = vec![Value::Nil, Value::Nil];
+        assert_eq!(parse_vsim_response(&resp), vec![(0, 0.0)]);
+        assert_eq!(parse_vsim_response(&[]), vec![]);
     }
 }

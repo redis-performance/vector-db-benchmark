@@ -77,6 +77,13 @@ pub struct Args {
     #[arg(long, default_value = "-1")]
     pub queries: i64,
 
+    /// Repeat each measured search config this many times and report the
+    /// best-RPS run (warm best-of, matching v0's REPETITIONS). The first run is
+    /// often cold (OS page cache / index warm-up); best-of discards it. Set 1 to
+    /// disable. Also honored via the REPETITIONS environment variable.
+    #[arg(long, env = "REPETITIONS", default_value = "3")]
+    pub repetitions: usize,
+
     /// Filter search experiments by ef runtime values (comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub ef_runtime: Vec<i64>,
@@ -84,6 +91,12 @@ pub struct Args {
     /// Describe available options: 'datasets' or 'engines'
     #[arg(long)]
     pub describe: Option<String>,
+
+    /// Instead of benchmarking, render a QPS-vs-precision trade-off chart (SVG)
+    /// from existing `*-summary.json` files in results/, filtered by --engines
+    /// and --datasets. One colored series per engine. Value is the output path.
+    #[arg(long, value_name = "OUTPUT.svg")]
+    pub plot: Option<String>,
 
     /// Show detailed information when using --describe
     #[arg(long, short)]

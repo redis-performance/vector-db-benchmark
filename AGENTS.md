@@ -13,7 +13,7 @@ make check              # Run formatting (rustfmt) + linting (clippy) — MUST p
 make vector-db-benchmark # Build the main CLI binary (release mode)
 make build              # Build all binaries (release mode)
 make test               # Run unit tests (no Docker needed)
-make integration-test   # Run integration tests (starts redis:8.6.0 Docker on port 6399)
+make integration-test   # Run integration tests (starts redis:8.8.0 Docker on port 6399)
 make v0-check           # Compare Rust vs Python v0 (precision, QPS, latency) — starts Docker
 make fmt                # Auto-format code
 make clean              # Clean build artifacts
@@ -56,7 +56,7 @@ src/
         vectorsets.rs             # VectorSets engine (VADD, VSIM)
         redis_utils.rs            # Shared utils: commandstats validation
 tests/
-  integration_redis.rs            # Integration tests (requires redis:8.6.0 on port 6399)
+  integration_redis.rs            # Integration tests (requires redis:8.8.0 on port 6399)
 datasets/
   datasets.json                   # Dataset registry (names, paths, download links)
 experiments/
@@ -82,7 +82,7 @@ Datasets are auto-downloaded from the `link` URL in `datasets.json` when not fou
 
 - `HDF5_DIR`: Path to HDF5 library (default: `/usr/lib/x86_64-linux-gnu/hdf5/serial`)
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`: Redis connection (default: `localhost:6379`)
-- Docker: `tests/docker-compose.test.yml` runs redis:8.6.0 on port 6399 for integration tests
+- Docker: `tests/docker-compose.test.yml` runs redis:8.8.0 on port 6399 for integration tests
 
 ## Migration from Python (v0/)
 
@@ -98,8 +98,8 @@ The `v0/` directory contains the original Python implementation. The Rust versio
 | Milvus | `milvus` | `milvus` | `reqwest` (REST API v2) |
 | OpenSearch | `opensearch` | `opensearch` | `opensearch` 2.3 |
 | pgvector | `pgvector` | `pgvector` | `postgres` 0.19 + `pgvector` 0.4 |
-| Qdrant | `qdrant` | `qdrant` | `qdrant-client` 1.13 (gRPC) |
-| Weaviate | `weaviate` | `weaviate` | `reqwest` (REST API) |
+| Qdrant | `qdrant` | `qdrant` | `qdrant-client` 1.17 (gRPC) |
+| Weaviate | `weaviate` | `weaviate` | `tonic`/`prost` (gRPC search) + `reqwest` (REST schema) |
 | MongoDB | — | `mongodb` | `mongodb` 3 (sync) |
 | Valkey | — | `valkey` | `redis` 0.27 \* |
 | Turbopuffer | — | `turbopuffer` | `turbopuffer-client` 0.0.4 |
