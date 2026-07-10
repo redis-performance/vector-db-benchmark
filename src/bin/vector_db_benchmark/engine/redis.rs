@@ -1057,7 +1057,11 @@ fn insert_number_param(
         params.insert(name.to_string(), FilterParamValue::Float(f));
     } else if let Some(s) = value.as_str() {
         if let Some(epoch) = datetime_to_epoch_secs(s) {
-            params.insert(name.to_string(), FilterParamValue::Float(epoch));
+            // Epoch is whole seconds — emit as an integer param (more robust than
+            // a float across RediSearch/ValkeySearch NUMERIC param substitution).
+            params.insert(name.to_string(), FilterParamValue::Int(epoch as i64));
+        } else if let Ok(i) = s.parse::<i64>() {
+            params.insert(name.to_string(), FilterParamValue::Int(i));
         } else if let Ok(f) = s.parse::<f64>() {
             params.insert(name.to_string(), FilterParamValue::Float(f));
         }
@@ -2164,12 +2168,15 @@ mod tests {
         assert!(q.contains("@ts:[$ts_0_gte +inf]"), "q={}", q);
         assert!(q.contains("@ts:[-inf ($ts_0_lt]"), "q={}", q);
         // 2021-01-01T00:00:00Z == 1609459200, 2022-01-01T00:00:00Z == 1640995200.
-        assert!(
-            matches!(params.get("ts_0_gte"), Some(FilterParamValue::Float(f)) if (*f - 1609459200.0).abs() < 1.0)
-        );
-        assert!(
-            matches!(params.get("ts_0_lt"), Some(FilterParamValue::Float(f)) if (*f - 1640995200.0).abs() < 1.0)
-        );
+        // Emitted as integer epoch params.
+        assert!(matches!(
+            params.get("ts_0_gte"),
+            Some(FilterParamValue::Int(1609459200))
+        ));
+        assert!(matches!(
+            params.get("ts_0_lt"),
+            Some(FilterParamValue::Int(1640995200))
+        ));
     }
 
     #[test]

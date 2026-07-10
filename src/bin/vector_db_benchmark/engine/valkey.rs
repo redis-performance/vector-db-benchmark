@@ -1029,38 +1029,51 @@ fn build_range_filter(
     criteria: &serde_json::Value,
     counter: &mut usize,
 ) -> Option<ParsedFilter> {
-    let param_prefix = format!("{}_{}", field_name, counter);
+    // Bump the counter for param-name parity with sibling filters even though the
+    // bounds are INLINED: Valkey Search does not substitute `$param` inside
+    // NUMERIC range brackets (`@f:[$p +inf]` → "Invalid number"); only literal
+    // numbers are accepted there (unlike RediSearch). Bounds are numbers /
+    // epochs from trusted dataset conditions, so inlining is safe.
     *counter += 1;
 
-    let mut params = HashMap::new();
     let mut clauses = Vec::new();
-
-    if let Some(lt) = criteria.get("lt") {
-        let pname = format!("{}_lt", param_prefix);
-        insert_number_param(&mut params, &pname, lt);
-        clauses.push(format!("@{}:[-inf (${}]", field_name, pname));
+    if let Some(v) = criteria.get("lt").and_then(number_literal) {
+        clauses.push(format!("@{}:[-inf ({}]", field_name, v));
     }
-    if let Some(gt) = criteria.get("gt") {
-        let pname = format!("{}_gt", param_prefix);
-        insert_number_param(&mut params, &pname, gt);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    if let Some(v) = criteria.get("gt").and_then(number_literal) {
+        clauses.push(format!("@{}:[({} +inf]", field_name, v));
     }
-    if let Some(lte) = criteria.get("lte") {
-        let pname = format!("{}_lte", param_prefix);
-        insert_number_param(&mut params, &pname, lte);
-        clauses.push(format!("@{}:[-inf ${}]", field_name, pname));
+    if let Some(v) = criteria.get("lte").and_then(number_literal) {
+        clauses.push(format!("@{}:[-inf {}]", field_name, v));
     }
-    if let Some(gte) = criteria.get("gte") {
-        let pname = format!("{}_gte", param_prefix);
-        insert_number_param(&mut params, &pname, gte);
-        clauses.push(format!("@{}:[${} +inf]", field_name, pname));
+    if let Some(v) = criteria.get("gte").and_then(number_literal) {
+        clauses.push(format!("@{}:[{} +inf]", field_name, v));
     }
 
     if clauses.is_empty() {
         return None;
     }
+    Some((clauses.join(" "), HashMap::new()))
+}
 
-    Some((clauses.join(" "), params))
+/// Render a JSON number / ISO-8601 datetime / numeric string as a literal NUMERIC
+/// bound (integers verbatim, ISO-8601 → epoch seconds, numeric strings as-is).
+fn number_literal(value: &serde_json::Value) -> Option<String> {
+    if let Some(i) = value.as_i64() {
+        Some(i.to_string())
+    } else if let Some(f) = value.as_f64() {
+        Some(format!("{}", f))
+    } else if let Some(s) = value.as_str() {
+        if let Some(epoch) = datetime_to_epoch_secs(s) {
+            Some((epoch as i64).to_string())
+        } else if s.parse::<f64>().is_ok() {
+            Some(s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 fn build_geo_filter(
@@ -1105,7 +1118,13 @@ fn insert_number_param(
         params.insert(name.to_string(), FilterParamValue::Float(f));
     } else if let Some(s) = value.as_str() {
         if let Some(epoch) = datetime_to_epoch_secs(s) {
-            params.insert(name.to_string(), FilterParamValue::Float(epoch));
+            // Epoch is whole seconds — emit as an integer param. Valkey Search's
+            // NUMERIC-range param substitution rejects the float rendering
+            // ("Invalid number"), whereas integer params are accepted (as the
+            // match_any NUMERIC path already relies on).
+            params.insert(name.to_string(), FilterParamValue::Int(epoch as i64));
+        } else if let Ok(i) = s.parse::<i64>() {
+            params.insert(name.to_string(), FilterParamValue::Int(i));
         } else if let Ok(f) = s.parse::<f64>() {
             params.insert(name.to_string(), FilterParamValue::Float(f));
         }
@@ -2195,30 +2214,25 @@ mod tests {
     }
 
     #[test]
-    fn range_datetime_iso_bounds_parse_to_epoch() {
+    fn range_datetime_iso_bounds_inline_epoch() {
         let cond = serde_json::json!({"and":[{"ts":{"range":{
             "gte": "2021-01-01T00:00:00Z",
             "lt":  "2022-01-01T00:00:00Z"
         }}}]});
+        // 2021-01-01T00:00:00Z == 1609459200, 2022-01-01T00:00:00Z == 1640995200.
+        // Valkey doesn't substitute $param in NUMERIC brackets → bounds are
+        // inlined as integer epochs; no params emitted for the range.
         let (q, params) = parse_conditions(&cond).unwrap();
-        assert!(q.contains("@ts:[$ts_0_gte +inf]"), "q={}", q);
-        assert!(q.contains("@ts:[-inf ($ts_0_lt]"), "q={}", q);
-        assert!(
-            matches!(params.get("ts_0_gte"), Some(FilterParamValue::Float(f)) if (*f - 1609459200.0).abs() < 1.0)
-        );
-        assert!(
-            matches!(params.get("ts_0_lt"), Some(FilterParamValue::Float(f)) if (*f - 1640995200.0).abs() < 1.0)
-        );
+        assert!(q.contains("@ts:[1609459200 +inf]"), "q={}", q);
+        assert!(q.contains("@ts:[-inf (1640995200]"), "q={}", q);
+        assert!(!params.keys().any(|k| k.starts_with("ts_")), "no range params");
     }
 
     #[test]
-    fn range_datetime_numeric_epoch_bounds_still_work() {
+    fn range_datetime_numeric_epoch_bounds_inline() {
         let cond = serde_json::json!({"and":[{"ts":{"range":{"gte": 1609459200}}}]});
-        let (_q, params) = parse_conditions(&cond).unwrap();
-        assert!(matches!(
-            params.get("ts_0_gte"),
-            Some(FilterParamValue::Int(1609459200))
-        ));
+        let (q, _params) = parse_conditions(&cond).unwrap();
+        assert!(q.contains("@ts:[1609459200 +inf]"), "q={}", q);
     }
 
     #[test]
