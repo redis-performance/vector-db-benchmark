@@ -245,6 +245,14 @@ fn parse_single_condition(condition: &serde_json::Value) -> Option<serde_json::V
         for (op, operand) in constraint_obj {
             match op.as_str() {
                 "match" => {
+                    // match_any (IN-list): {"match": {"any": [...]}} =>
+                    // ["field_name", "In", [...]]. Checked before {"value": ...}
+                    // (the canonical IN-list shape has no "value" key, so without
+                    // this arm the clause was silently dropped and the query ran
+                    // UNFILTERED). Mirrors qdrant's OR-of-values / redis match_any.
+                    if let Some(any) = operand.get("any").and_then(|v| v.as_array()) {
+                        return Some(serde_json::json!([field_name, "In", any]));
+                    }
                     // {"match": {"value": x}} => ["field_name", "Eq", x]
                     if let Some(val) = operand.get("value") {
                         if let Some(arr) = val.as_array() {
@@ -670,6 +678,27 @@ impl Engine for TurbopufferEngine {
     }
 }
 
+/// Build the Turbopuffer query request body. Pure (no network) so it can be
+/// unit-tested. `filters` is only set when a filter is present.
+fn build_query_body(
+    query_vec: Vec<f64>,
+    distance_metric: &str,
+    top_k: usize,
+    filter: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "vector": query_vec,
+        "distance_metric": distance_metric,
+        "top_k": top_k,
+    });
+
+    if let Some(f) = filter {
+        body["filters"] = f.clone();
+    }
+
+    body
+}
+
 /// Execute a single query against Turbopuffer
 fn single_query(
     client: &Client,
@@ -682,15 +711,7 @@ fn single_query(
 ) -> Result<Vec<i64>, String> {
     let query_vec: Vec<f64> = query.iter().map(|f| *f as f64).collect();
 
-    let mut body = serde_json::json!({
-        "vector": query_vec,
-        "distance_metric": distance_metric,
-        "top_k": top_k,
-    });
-
-    if let Some(f) = filter {
-        body["filters"] = f.clone();
-    }
+    let body = build_query_body(query_vec, distance_metric, top_k, filter);
 
     let ns = client.namespace(namespace);
     let response = rt
@@ -707,4 +728,101 @@ fn single_query(
         .collect();
 
     Ok(ids)
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::{build_query_body, parse_turbopuffer_filter};
+    use serde_json::json;
+
+    // NOTE: Turbopuffer is cloud-only (requires TURBOPUFFER_API_KEY and a live
+    // service), so these are UNIT tests of the pure filter/body builders only —
+    // there is intentionally no integration test.
+
+    // ── match_any (the fixed bug): {"match":{"any":[...]}} → [field,"In",[...]] ──
+    // These FAIL before the fix (the "any" shape has no "value" key, so the
+    // clause was dropped and the query ran UNFILTERED).
+
+    #[test]
+    fn match_any_keyword_list_emits_in() {
+        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        let f = parse_turbopuffer_filter(&cond).expect("match_any must produce a filter");
+        assert_eq!(f, json!(["And", [["color", "In", ["red", "blue"]]]]));
+    }
+
+    #[test]
+    fn match_any_int_list_emits_in() {
+        let cond = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
+        let f = parse_turbopuffer_filter(&cond).expect("match_any must produce a filter");
+        assert_eq!(f, json!(["And", [["size", "In", [1, 2, 3]]]]));
+    }
+
+    #[test]
+    fn or_wraps_with_or() {
+        let cond = json!({"or": [{"color": {"match": {"value": "red"}}}]});
+        let f = parse_turbopuffer_filter(&cond).unwrap();
+        assert_eq!(f, json!(["Or", [["color", "Eq", "red"]]]));
+    }
+
+    #[test]
+    fn and_wraps_with_and() {
+        let cond = json!({"and": [{"color": {"match": {"value": "red"}}}]});
+        let f = parse_turbopuffer_filter(&cond).unwrap();
+        assert_eq!(f, json!(["And", [["color", "Eq", "red"]]]));
+    }
+
+    #[test]
+    fn single_top_level_condition_passthrough() {
+        // A bare `{field:{match:{value}}}` with no and/or wrapper.
+        let cond = json!({"color": {"match": {"value": "red"}}});
+        let f = parse_turbopuffer_filter(&cond).unwrap();
+        assert_eq!(f, json!(["color", "Eq", "red"]));
+    }
+
+    #[test]
+    fn range_single_and_multi() {
+        let single = json!({"and": [{"age": {"range": {"gt": 5}}}]});
+        assert_eq!(
+            parse_turbopuffer_filter(&single).unwrap(),
+            json!(["And", [["age", "Gt", 5]]])
+        );
+
+        let multi = json!({"and": [{"age": {"range": {"gte": 5, "lt": 10}}}]});
+        // Inner range with >1 bound is itself an ["And", [...]].
+        assert_eq!(
+            parse_turbopuffer_filter(&multi).unwrap(),
+            json!(["And", [["And", [["age", "Gte", 5], ["age", "Lt", 10]]]]])
+        );
+    }
+
+    #[test]
+    fn geo_is_unsupported_none() {
+        let cond = json!({"and": [{"loc": {"geo": {"lat": 1.0, "lon": 2.0, "radius": 10.0}}}]});
+        // geo yields no clause; the only clause dropping leaves an empty And → None.
+        assert!(parse_turbopuffer_filter(&cond).is_none());
+    }
+
+    #[test]
+    fn empty_conditions_none() {
+        assert!(parse_turbopuffer_filter(&json!({})).is_none());
+        assert!(parse_turbopuffer_filter(&json!({"and": []})).is_none());
+        assert!(parse_turbopuffer_filter(&json!({"or": []})).is_none());
+    }
+
+    // ── request-body builder ──
+    #[test]
+    fn body_without_filter_has_no_filters_key() {
+        let body = build_query_body(vec![0.1, 0.2], "cosine_distance", 10, None);
+        assert_eq!(body["distance_metric"], "cosine_distance");
+        assert_eq!(body["top_k"], 10);
+        assert!(body.get("filters").is_none());
+    }
+
+    #[test]
+    fn body_with_filter_sets_filters_key() {
+        let filter = json!(["And", [["color", "In", ["red", "blue"]]]]);
+        let body = build_query_body(vec![0.1], "euclidean_squared", 5, Some(&filter));
+        assert_eq!(body["filters"], filter);
+        assert_eq!(body["top_k"], 5);
+    }
 }

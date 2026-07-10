@@ -1035,16 +1035,88 @@ fn build_clause(
 }
 
 fn build_match_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
+    // match_any (IN-list) takes precedence: {"match": {"any": [...]}}. The
+    // canonical IN-list shape has NO "value" key, so without this arm the whole
+    // clause returned None; when every clause is None, VSIM omits FILTER entirely
+    // and runs UNFILTERED. Emitted as an OR-of-equality expression, mirroring the
+    // OR-of-values semantics of redis build_match_any_filter / qdrant matches().
+    if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+        return Some(build_match_any_clause(field_name, any));
+    }
+
+    // Full-text {"match": {"text": ...}}. VectorSets has no tokenized full-text
+    // index, so this degrades to exact string equality on the attribute — a
+    // best-effort restriction, which is still far better than dropping the clause
+    // (which would run UNFILTERED). Blank text → an unsatisfiable never-match.
+    if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Some(never_match_clause(field_name));
+        }
+        return Some(format!(".{} == \"{}\"", field_name, escape_str(trimmed)));
+    }
+
     let value = criteria.get("value")?;
+    // bool → `.field == true`/`false`. Checked before the numeric arms because
+    // serde treats JSON true/false as neither i64 nor f64 (and never a string),
+    // so previously bool `{value:true}` fell through to None and was dropped.
+    if let Some(b) = value.as_bool() {
+        return Some(format!(".{} == {}", field_name, b));
+    }
     if let Some(s) = value.as_str() {
-        // Escape double quotes in the string value
-        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-        Some(format!(".{} == \"{}\"", field_name, escaped))
+        Some(format!(".{} == \"{}\"", field_name, escape_str(s)))
     } else if let Some(n) = value.as_i64() {
         Some(format!(".{} == {}", field_name, n))
     } else {
         value.as_f64().map(|f| format!(".{} == {}", field_name, f))
     }
+}
+
+/// Escape a string literal for a VectorSets FILTER expression (backslash first,
+/// then double quote).
+fn escape_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Build an `match_any` (IN-list) clause as an OR of equality comparisons using
+/// the same `.field == x` grammar as scalar matches, e.g.
+/// `(.color == "red" or .color == "blue")`.
+///
+/// - All-integer list → OR of numeric equality.
+/// - Otherwise → OR of string equality over the non-empty tokens (empty-string
+///   tokens are dropped — they can never match an exact keyword).
+/// - Empty / no representable values → a never-match contradiction so an empty
+///   IN-set matches NOTHING rather than being dropped (dropping the sole clause
+///   would leave no FILTER and run over ALL vectors — the inverse of the filter).
+fn build_match_any_clause(field_name: &str, any: &[serde_json::Value]) -> String {
+    let clauses: Vec<String> = if !any.is_empty() && any.iter().all(|v| v.is_i64()) {
+        any.iter()
+            .filter_map(|v| v.as_i64())
+            .map(|i| format!(".{} == {}", field_name, i))
+            .collect()
+    } else {
+        any.iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| format!(".{} == \"{}\"", field_name, escape_str(s)))
+            .collect()
+    };
+
+    match clauses.len() {
+        0 => never_match_clause(field_name),
+        1 => clauses.into_iter().next().unwrap(),
+        _ => format!("({})", clauses.join(" or ")),
+    }
+}
+
+/// An unsatisfiable clause (`.f == "x" and .f != "x"`) used when a filter can
+/// never match, so it restricts to NOTHING instead of being dropped (which would
+/// leave the query unfiltered).
+fn never_match_clause(field_name: &str) -> String {
+    format!(
+        "(.{0} == \"__never_match__\" and .{0} != \"__never_match__\")",
+        field_name
+    )
 }
 
 fn build_range_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
@@ -1124,5 +1196,123 @@ mod vsim_parse_tests {
         let resp = vec![Value::Nil, Value::Nil];
         assert_eq!(parse_vsim_response(&resp), vec![(0, 0.0)]);
         assert_eq!(parse_vsim_response(&[]), vec![]);
+    }
+}
+
+#[cfg(test)]
+mod filter_expr_tests {
+    use super::build_filter_expression;
+    use serde_json::json;
+
+    // ── scalar match / range (grammar baseline) ──
+
+    #[test]
+    fn and_string_match() {
+        let cond = json!({"and": [{"color": {"match": {"value": "red"}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".color == \"red\"".to_string())
+        );
+    }
+
+    #[test]
+    fn and_numeric_match() {
+        let cond = json!({"and": [{"f": {"match": {"value": 10}}}]});
+        assert_eq!(build_filter_expression(&cond), Some(".f == 10".to_string()));
+    }
+
+    #[test]
+    fn string_value_quotes_and_backslashes_escaped() {
+        let cond = json!({"and": [{"name": {"match": {"value": "a\"b\\c"}}}]});
+        // " → \" and \ → \\ (backslash escaped first).
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".name == \"a\\\"b\\\\c\"".to_string())
+        );
+    }
+
+    #[test]
+    fn range_bounds_joined_with_and() {
+        let cond = json!({"and": [{"age": {"range": {"gt": 1, "gte": 2, "lt": 9, "lte": 8}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".age > 1 and .age >= 2 and .age < 9 and .age <= 8".to_string())
+        );
+    }
+
+    #[test]
+    fn or_block_parenthesized() {
+        let cond = json!({"or": [
+            {"a": {"match": {"value": "x"}}},
+            {"b": {"match": {"value": "y"}}},
+        ]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.a == \"x\" or .b == \"y\")".to_string())
+        );
+    }
+
+    // ── FAILING-then-fixed: previously each returned None → unfiltered ──
+
+    #[test]
+    fn match_any_keyword_list_yields_or_of_equality() {
+        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.color == \"red\" or .color == \"blue\")".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_int_list_yields_or_of_equality() {
+        let cond = json!({"and": [{"size": {"match": {"any": [1, 2]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.size == 1 or .size == 2)".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_single_value_unwrapped() {
+        let cond = json!({"and": [{"color": {"match": {"any": ["red"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".color == \"red\"".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_empty_list_is_non_none_never_match() {
+        // Must NOT be dropped (dropping the sole clause → unfiltered).
+        let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
+        let expr = build_filter_expression(&cond).expect("empty match_any must not be dropped");
+        assert!(expr.contains("=="), "expr={}", expr);
+        assert!(expr.contains("!="), "expr={}", expr);
+    }
+
+    #[test]
+    fn full_text_match_yields_non_none() {
+        let cond = json!({"and": [{"body": {"match": {"text": "quick"}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".body == \"quick\"".to_string())
+        );
+    }
+
+    #[test]
+    fn bool_value_yields_non_none() {
+        let cond = json!({"and": [{"flag": {"match": {"value": true}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".flag == true".to_string())
+        );
+    }
+
+    // ── empty / passthrough ──
+
+    #[test]
+    fn empty_conditions_none() {
+        assert!(build_filter_expression(&json!({})).is_none());
+        assert!(build_filter_expression(&json!({"and": [], "or": []})).is_none());
     }
 }
