@@ -10,9 +10,9 @@ A Rust-based benchmarking tool for vector databases. Measures upload throughput,
 | **VectorSets** | `redis` 0.27 | Redis protocol |
 | **Elasticsearch** | `elasticsearch` 8.15 | HTTP/REST |
 | **OpenSearch** | `opensearch` 2.3 | HTTP/REST |
-| **Qdrant** | `qdrant-client` 1.13 | gRPC |
+| **Qdrant** | `qdrant-client` 1.17 | gRPC |
 | **PgVector** | `postgres` 0.19 + `pgvector` 0.4 | PostgreSQL |
-| **Weaviate** | `reqwest` (REST API) | HTTP/REST + GraphQL |
+| **Weaviate** | `tonic` 0.12 / `prost` 0.13 (gRPC) + `reqwest` (REST) | gRPC (search) + HTTP/REST (schema) |
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol |
 | **Valkey** (Valkey Search) | `redis` 0.27 | RESP protocol |
@@ -35,7 +35,7 @@ docker run --rm redis/vector-db-benchmark --describe engines
 
 ```bash
 # Start Redis
-docker run -d --name redis -p 6379:6379 redis:8.6.0
+docker run -d --name redis -p 6379:6379 redis:8.8.0
 
 # Run benchmark against localhost Redis
 docker run --rm --network host \
@@ -93,7 +93,7 @@ The image includes the `random-100` dataset (228KB) for quick smoke tests. For l
 ```yaml
 services:
   redis:
-    image: redis:8.6.0
+    image: redis:8.8.0
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 1s

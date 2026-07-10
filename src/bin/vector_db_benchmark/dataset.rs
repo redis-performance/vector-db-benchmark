@@ -241,6 +241,96 @@ impl Dataset {
         Ok((queries, neighbours))
     }
 
+    /// Whether this is a hybrid (dense + sparse) dataset (`dataset_type: "hybrid"`).
+    ///
+    /// A hybrid dataset directory carries BOTH dense npy files (`vectors.npy` /
+    /// `queries.npy`) and sparse CSR files (`data.csr` / `queries.csr`), sharing
+    /// a single `neighbours.jsonl` ground truth. This lets an engine fuse a dense
+    /// prefetch and a sparse prefetch server-side (e.g. Qdrant RRF). It is a
+    /// SUPERSET of the sparse layout: same CSR files, plus the dense npy files.
+    pub fn is_hybrid(&self) -> bool {
+        self.config.dataset_type.as_deref() == Some("hybrid")
+    }
+
+    /// Read hybrid upload data: dense vectors from `<dir>/vectors.npy` (reusing
+    /// the npy reader) and the row-aligned sparse vectors from `<dir>/data.csr`
+    /// (reusing the sparse CSR reader). Ids are the row indices. The dense and
+    /// sparse matrices MUST have the same row count — one dense AND one sparse
+    /// vector per point.
+    #[allow(clippy::type_complexity)]
+    pub fn read_hybrid_data(
+        &self,
+        normalize: bool,
+    ) -> Result<(Vec<i64>, Vec<Vec<f32>>, Vec<SparseVector>), String> {
+        let dir = self.get_path()?;
+        let (_ids, dense_vectors) = read_npy_vectors(
+            dir.join("vectors.npy")
+                .to_str()
+                .ok_or("Invalid vectors.npy path")?,
+            normalize,
+        )?;
+        let sparse = read_sparse_matrix(
+            dir.join("data.csr")
+                .to_str()
+                .ok_or("Invalid data.csr path")?,
+        )?;
+        if dense_vectors.len() != sparse.len() {
+            return Err(format!(
+                "hybrid data row mismatch: {} dense rows vs {} sparse rows",
+                dense_vectors.len(),
+                sparse.len()
+            ));
+        }
+        let ids: Vec<i64> = (0..dense_vectors.len() as i64).collect();
+        Ok((ids, dense_vectors, sparse))
+    }
+
+    /// Read hybrid queries: dense queries from `<dir>/queries.npy`, the
+    /// row-aligned sparse queries from `<dir>/queries.csr`, and shared
+    /// ground-truth neighbours from `<dir>/neighbours.jsonl` (one JSON array of
+    /// ids per line). The ground truth is shared because it describes the FUSED
+    /// result, not either modality alone.
+    #[allow(clippy::type_complexity)]
+    pub fn read_hybrid_queries(
+        &self,
+    ) -> Result<(Vec<Vec<f32>>, Vec<SparseVector>, Vec<Vec<i64>>), String> {
+        let dir = self.get_path()?;
+        let normalize = self.needs_normalization();
+        let (_ids, dense_queries) = read_npy_vectors(
+            dir.join("queries.npy")
+                .to_str()
+                .ok_or("Invalid queries.npy path")?,
+            normalize,
+        )?;
+        let sparse_queries = read_sparse_matrix(
+            dir.join("queries.csr")
+                .to_str()
+                .ok_or("Invalid queries.csr path")?,
+        )?;
+        if dense_queries.len() != sparse_queries.len() {
+            return Err(format!(
+                "hybrid query row mismatch: {} dense vs {} sparse",
+                dense_queries.len(),
+                sparse_queries.len()
+            ));
+        }
+
+        let gt_path = dir.join("neighbours.jsonl");
+        let neighbours = read_neighbours_strict(&gt_path)?;
+
+        // Ground truth must be row-aligned with the queries: a short (or long)
+        // neighbours.jsonl would otherwise index out of bounds mid-run, or
+        // silently score the wrong rows.
+        if neighbours.len() != dense_queries.len() {
+            return Err(format!(
+                "hybrid ground-truth row mismatch: {} queries vs {} neighbour rows",
+                dense_queries.len(),
+                neighbours.len()
+            ));
+        }
+        Ok((dense_queries, sparse_queries, neighbours))
+    }
+
     /// Read queries from HDF5 file (test + neighbors datasets).
     #[allow(clippy::type_complexity)]
     fn read_hdf5_queries(&self, path_str: &str) -> Result<(Vec<Vec<f32>>, Vec<Vec<i64>>), String> {
@@ -286,5 +376,216 @@ impl Dataset {
             .collect();
 
         Ok((queries, neighbors))
+    }
+}
+
+/// Parse a `neighbours.jsonl` ground-truth file (one JSON id-array per line)
+/// with STRICT line alignment: every line must be a valid id-array so that row
+/// `i` is unambiguously query `i`'s ground truth. A blank OR unparseable line in
+/// the interior is rejected (a blanket "skip empty lines" would shift every
+/// subsequent row up by one and silently corrupt recall). Exactly one trailing
+/// newline is tolerated.
+fn read_neighbours_strict(path: &std::path::Path) -> Result<Vec<Vec<i64>>, String> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let mut lines: Vec<&str> = raw.split('\n').collect();
+    // Tolerate a single trailing newline (final split element is "").
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "{}: blank line at row {} (ground-truth rows must be contiguous)",
+                path.display(),
+                i + 1
+            ));
+        }
+        let row: Vec<i64> = serde_json::from_str(trimmed)
+            .map_err(|e| format!("{}: parse row {}: {}", path.display(), i + 1, e))?;
+        out.push(row);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DatasetConfig;
+    use vector_db_benchmark::readers::{write_npy_vectors, write_sparse_matrix};
+
+    /// Build a `Dataset` whose `path` is an absolute temp dir (so `get_path`
+    /// resolves to it directly — `datasets_dir().join(abs)` == `abs`).
+    fn hybrid_dataset(dir: &std::path::Path) -> Dataset {
+        Dataset::new(DatasetConfig {
+            name: "hybrid-unit".to_string(),
+            dataset_type: Some("hybrid".to_string()),
+            path: serde_json::Value::String(dir.to_str().unwrap().to_string()),
+            distance: Some("l2".to_string()),
+            vector_size: Some(3),
+            vector_count: Some(2),
+            link: None,
+            schema: None,
+            description: None,
+        })
+    }
+
+    #[test]
+    fn is_hybrid_only_for_hybrid_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let ds = hybrid_dataset(dir.path());
+        assert!(ds.is_hybrid());
+        assert!(!ds.is_sparse());
+
+        let mut cfg = ds.config.clone();
+        cfg.dataset_type = Some("sparse".to_string());
+        let sparse = Dataset::new(cfg);
+        assert!(!sparse.is_hybrid());
+        assert!(sparse.is_sparse());
+    }
+
+    #[test]
+    fn reads_hybrid_data_and_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+
+        let dense = vec![vec![1.0f32, 0.0, 0.0], vec![0.0, 2.0, 0.0]];
+        let sparse = vec![
+            SparseVector {
+                indices: vec![0, 2],
+                values: vec![1.0, 3.0],
+            },
+            SparseVector {
+                indices: vec![1],
+                values: vec![5.0],
+            },
+        ];
+        write_npy_vectors(p.join("vectors.npy").to_str().unwrap(), &dense).unwrap();
+        write_sparse_matrix(p.join("data.csr").to_str().unwrap(), &sparse).unwrap();
+
+        let dense_q = vec![vec![1.0f32, 1.0, 1.0]];
+        let sparse_q = vec![SparseVector {
+            indices: vec![0],
+            values: vec![2.0],
+        }];
+        write_npy_vectors(p.join("queries.npy").to_str().unwrap(), &dense_q).unwrap();
+        write_sparse_matrix(p.join("queries.csr").to_str().unwrap(), &sparse_q).unwrap();
+        std::fs::write(p.join("neighbours.jsonl"), "[0, 1]\n").unwrap();
+
+        let ds = hybrid_dataset(p);
+        let (ids, d, s) = ds.read_hybrid_data(false).unwrap();
+        assert_eq!(ids, vec![0, 1]);
+        assert_eq!(d, dense);
+        assert_eq!(s, sparse);
+
+        let (dq, sq, nb) = ds.read_hybrid_queries().unwrap();
+        assert_eq!(dq, dense_q);
+        assert_eq!(sq, sparse_q);
+        assert_eq!(nb, vec![vec![0i64, 1]]);
+    }
+
+    /// Helper: write the four hybrid data files (2 docs / 1 query) into `p`,
+    /// leaving `neighbours.jsonl` for the caller to control.
+    fn write_hybrid_files_without_neighbours(p: &std::path::Path) {
+        write_npy_vectors(
+            p.join("vectors.npy").to_str().unwrap(),
+            &[vec![1.0f32, 0.0, 0.0], vec![0.0, 1.0, 0.0]],
+        )
+        .unwrap();
+        write_sparse_matrix(
+            p.join("data.csr").to_str().unwrap(),
+            &[
+                SparseVector {
+                    indices: vec![0],
+                    values: vec![1.0],
+                },
+                SparseVector {
+                    indices: vec![1],
+                    values: vec![1.0],
+                },
+            ],
+        )
+        .unwrap();
+        write_npy_vectors(
+            p.join("queries.npy").to_str().unwrap(),
+            &[vec![1.0f32, 1.0, 1.0]],
+        )
+        .unwrap();
+        write_sparse_matrix(
+            p.join("queries.csr").to_str().unwrap(),
+            &[SparseVector {
+                indices: vec![0],
+                values: vec![1.0],
+            }],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn read_hybrid_queries_rejects_neighbour_count_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        write_hybrid_files_without_neighbours(p);
+        // 1 query but 2 ground-truth rows → must error (finding 3).
+        std::fs::write(p.join("neighbours.jsonl"), "[0]\n[1]\n").unwrap();
+        let ds = hybrid_dataset(p);
+        let err = ds.read_hybrid_queries().unwrap_err();
+        assert!(err.contains("ground-truth row mismatch"), "got: {err}");
+    }
+
+    #[test]
+    fn read_hybrid_queries_rejects_interior_blank_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        write_hybrid_files_without_neighbours(p);
+        // Interior blank line would silently shift rows → must error (finding 5).
+        std::fs::write(p.join("neighbours.jsonl"), "\n[0]\n").unwrap();
+        let ds = hybrid_dataset(p);
+        let err = ds.read_hybrid_queries().unwrap_err();
+        assert!(err.contains("blank line"), "got: {err}");
+    }
+
+    #[test]
+    fn read_neighbours_strict_tolerates_single_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("neighbours.jsonl");
+        std::fs::write(&p, "[1, 2]\n[3]\n").unwrap();
+        let nb = read_neighbours_strict(&p).unwrap();
+        assert_eq!(nb, vec![vec![1i64, 2], vec![3]]);
+
+        // No trailing newline is also fine.
+        std::fs::write(&p, "[1, 2]\n[3]").unwrap();
+        assert_eq!(
+            read_neighbours_strict(&p).unwrap(),
+            vec![vec![1i64, 2], vec![3]]
+        );
+
+        // A doubled trailing newline leaves an interior blank → rejected.
+        std::fs::write(&p, "[1]\n\n").unwrap();
+        assert!(read_neighbours_strict(&p).is_err());
+    }
+
+    #[test]
+    fn read_hybrid_data_rejects_row_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        // 2 dense rows but only 1 sparse row → must error.
+        write_npy_vectors(
+            p.join("vectors.npy").to_str().unwrap(),
+            &[vec![1.0f32, 0.0, 0.0], vec![0.0, 1.0, 0.0]],
+        )
+        .unwrap();
+        write_sparse_matrix(
+            p.join("data.csr").to_str().unwrap(),
+            &[SparseVector {
+                indices: vec![0],
+                values: vec![1.0],
+            }],
+        )
+        .unwrap();
+        let ds = hybrid_dataset(p);
+        assert!(ds.read_hybrid_data(false).is_err());
     }
 }

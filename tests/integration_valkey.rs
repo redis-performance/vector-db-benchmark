@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 use rand::Rng;
 use redis::Connection;
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1107,4 +1109,223 @@ fn test_valkey_sub_batched_pipeline_upload_high_dim() {
         .arg("idx")
         .query(&mut conn)
         .unwrap();
+}
+
+/// End-to-end `match_any`: filter a keyword (TAG) field to an OR-set and assert
+/// the engine returns the filtered nearest neighbours (recall vs ground truth
+/// brute-forced over only the matching docs). Proves the inlined TAG-OR arm.
+#[test]
+fn test_binary_valkey_match_any() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-ma", "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "valkey-ma",
+            "match-any-test",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+        ),
+        "valkey match_any run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "valkey-ma");
+    println!("valkey match_any recall={:.3}", recall);
+    assert!(recall >= 0.9, "valkey match_any recall {:.3} < 0.9", recall);
+}
+
+/// Same filtered (`match_any`) search as above, but over the **RESP3** protocol
+/// (`VALKEY_PROTOCOL=resp3`). Valkey Search returns FT.SEARCH results as a RESP3
+/// map rather than the RESP2 array, so this exercises the RESP3 branch of the
+/// response parser end-to-end. Recall must match the RESP2 path.
+#[test]
+fn test_binary_valkey_match_any_resp3() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-ma-r3", "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "match-any-test-r3",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "valkey-ma-r3",
+            "match-any-test-r3",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str()), ("VALKEY_PROTOCOL", "resp3")],
+        ),
+        "valkey match_any (RESP3) run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "valkey-ma-r3");
+    println!("valkey match_any RESP3 recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "valkey RESP3 match_any recall {:.3} < 0.9 — RESP3 FT.SEARCH parsing broken?",
+        recall
+    );
+}
+
+// ── New filter datatypes: bool / uuid / full-text / datetime ────────────────
+//
+// Each drives the real binary against a compound dataset whose queries carry a
+// single filter type, with ground truth brute-forced over only the matching
+// docs. Valkey has no TEXT field type, so the full-text case exercises the
+// DEGRADED path (text tokenised to a multi-value TAG on upload + single-term TAG
+// match); single-term recall must still clear the bar.
+
+/// Shared driver: build the project with `build`, run the binary, assert recall.
+fn run_filter_recall_test(
+    name: &str,
+    dataset: &str,
+    build: impl Fn(&str, &str, usize) -> common::FilterProject,
+) {
+    wait_for_valkey();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": name, "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = build(dataset, &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            name,
+            dataset,
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+        ),
+        "valkey {} run failed",
+        name
+    );
+
+    let recall = common::read_recall(&proj.root, name);
+    println!("valkey {} recall={:.3}", name, recall);
+    assert!(recall >= 0.9, "valkey {} recall {:.3} < 0.9", name, recall);
+}
+
+#[test]
+fn test_binary_valkey_bool() {
+    run_filter_recall_test("valkey-bool", "bool-test", common::write_bool_project);
+}
+
+#[test]
+fn test_binary_valkey_uuid() {
+    run_filter_recall_test("valkey-uuid", "uuid-test", common::write_uuid_project);
+}
+
+#[test]
+fn test_binary_valkey_fulltext() {
+    run_filter_recall_test("valkey-text", "text-test", common::write_fulltext_project);
+}
+
+#[test]
+fn test_binary_valkey_datetime() {
+    run_filter_recall_test("valkey-dt", "dt-test", common::write_datetime_project);
+}
+
+/// Multi-tenancy: many tenants share ONE index and every query is scoped to a
+/// single tenant via a keyword-equality filter on a `tenant` field, with ground
+/// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG
+/// filter arm — no new engine code.
+///
+/// STRONGER than the other filter recall tests: the ground truth is tenant-local,
+/// so a cross-tenant document that leaked into a result cannot count toward recall
+/// AND displaces a correct neighbour. Search is exact (ef high over ~16 docs/tenant)
+/// and there is one query per tenant, so a correct engine scores EXACTLY 1.0 on
+/// every query. We therefore assert (a) mean recall == 1.0 and (b) EVERY per-query
+/// recall == 1.0 — any single leaked or mis-scoped tenant fails. (The saved result
+/// JSON records per-query recalls but not the raw returned ids, so the exact
+/// per-query recall is the strongest available tenant-isolation check without
+/// changing engine result serialization.)
+#[test]
+fn test_binary_valkey_tenancy() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-tenancy", "engine": "valkey",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_tenant_project(
+        "tenancy-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "each tenant must have >= top docs (smallest tenant has {})",
+        proj.matching_docs
+    );
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "valkey-tenancy",
+            "tenancy-test",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+        ),
+        "valkey tenancy run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "valkey-tenancy");
+    let per_query = common::read_recalls(&proj.root, "valkey-tenancy");
+    println!(
+        "valkey tenancy mean recall={:.3} per-query={:?}",
+        recall, per_query
+    );
+    // Exact per-query recall (see redis test): tenant-local ground truth means a
+    // single leaked cross-tenant doc drops recall below 1.0.
+    assert!(
+        recall > 0.999,
+        "valkey tenancy mean recall {:.4} != 1.0 — cross-tenant leakage or mis-scope?",
+        recall
+    );
+    for (q, r) in per_query.iter().enumerate() {
+        assert!(
+            *r > 0.999,
+            "valkey tenancy query {} recall {:.4} != 1.0 — cross-tenant leakage?",
+            q,
+            r
+        );
+    }
 }
