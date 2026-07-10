@@ -315,52 +315,81 @@ impl ElasticsearchEngine {
     }
 
     fn force_merge(&self) -> Result<(), String> {
-        println!("Forcing merge into 1 segment...");
+        // Force-merge into 1 segment ASYNCHRONOUSLY. A synchronous force-merge
+        // (wait_for_completion=true) holds the HTTP request open for the entire
+        // HNSW rebuild, which for large indices exceeds the client/Elastic-Cloud
+        // proxy request timeout and fails with "error sending request". Instead
+        // submit with wait_for_completion=false (returns a task id immediately)
+        // and poll the Tasks API — every request stays short-lived.
+        println!("Submitting async force merge into 1 segment...");
 
-        let max_retries = 30;
-        for attempt in 0..=max_retries {
-            let result = self.rt.block_on(
+        let submit = self
+            .rt
+            .block_on(
                 self.client
                     .indices()
                     .forcemerge(IndicesForcemergeParts::Index(&[&self.index_name]))
                     .max_num_segments(1)
+                    .wait_for_completion(false)
+                    .send(),
+            )
+            .map_err(|e| format!("Force merge submit failed: {}", e))?;
+
+        if !submit.status_code().is_success() {
+            return Err(format!(
+                "Force merge submit returned status {}",
+                submit.status_code()
+            ));
+        }
+
+        let body: serde_json::Value = self
+            .rt
+            .block_on(submit.json())
+            .map_err(|e| format!("Force merge submit parse failed: {}", e))?;
+        let task_id = body
+            .get("task")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| format!("Force merge: no task id in response: {}", body))?
+            .to_string();
+        println!("Force merge task {} submitted; polling until complete...", task_id);
+
+        // Poll up to ~3h (2160 * 5s); a large HNSW single-segment merge is slow.
+        let max_polls = 2160;
+        for i in 0..max_polls {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let poll = self.rt.block_on(
+                self.client
+                    .tasks()
+                    .get(elasticsearch::tasks::TasksGetParts::TaskId(&task_id))
                     .send(),
             );
-
-            match result {
-                Ok(resp) if resp.status_code().is_success() => {
-                    self.wait_for_cluster_health()?;
-                    return Ok(());
+            let resp = match poll {
+                Ok(r) if r.status_code().is_success() => r,
+                // Transient poll error (proxy hiccup) — keep polling; the merge
+                // runs server-side regardless of our polling.
+                _ => continue,
+            };
+            let tb: serde_json::Value = match self.rt.block_on(resp.json()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if tb.get("completed").and_then(|c| c.as_bool()).unwrap_or(false) {
+                if let Some(err) = tb.get("error") {
+                    return Err(format!("Force merge task failed: {}", err));
                 }
-                Ok(resp) => {
-                    if attempt < max_retries {
-                        println!(
-                            "Force merge retry {}/{}: status {}",
-                            attempt,
-                            max_retries,
-                            resp.status_code()
-                        );
-                        continue;
-                    }
-                    return Err(format!(
-                        "Force merge failed after {} retries: {}",
-                        max_retries,
-                        resp.status_code()
-                    ));
-                }
-                Err(e) => {
-                    if attempt < max_retries {
-                        println!("Force merge retry {}/{}: {}", attempt, max_retries, e);
-                        continue;
-                    }
-                    return Err(format!(
-                        "Force merge failed after {} retries: {}",
-                        max_retries, e
-                    ));
-                }
+                println!("Force merge task {} completed after ~{}s.", task_id, i * 5);
+                self.wait_for_cluster_health()?;
+                return Ok(());
+            }
+            if i % 24 == 0 {
+                println!("Force merge still running (~{}s)...", i * 5);
             }
         }
-        Ok(())
+        Err(format!(
+            "Force merge task {} did not complete within {}s",
+            task_id,
+            max_polls * 5
+        ))
     }
 
     fn wait_for_cluster_health(&self) -> Result<(), String> {

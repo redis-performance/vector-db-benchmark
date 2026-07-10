@@ -29,7 +29,7 @@ postgres = "0.19"
 pgvector = { version = "0.4", features = ["postgres"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 qdrant-client = "1.17"
-elasticsearch = "8.15.0-alpha.1"
+elasticsearch = { version = "8.15.0-alpha.1", features = ["experimental-apis"] }
 opensearch = "2.3.0"
 mongodb = { version = "3", features = ["sync"] }
 turbopuffer-client = "0.0.4"
