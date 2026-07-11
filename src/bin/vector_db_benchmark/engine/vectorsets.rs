@@ -566,6 +566,7 @@ impl Engine for VectorSetsEngine {
                     let mut r = Vec::new();
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
+                    let mut pb_pending: u64 = 0;
 
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
@@ -618,7 +619,16 @@ impl Engine for VectorSetsEngine {
                                 eprintln!("Search query {} failed: {}", idx, e);
                             }
                         }
-                        pb.inc(1);
+                        // Batch progress updates so the highest-QPS runs don't pay a
+                        // contended atomic per query.
+                        pb_pending += 1;
+                        if pb_pending >= 256 {
+                            pb.inc(pb_pending);
+                            pb_pending = 0;
+                        }
+                    }
+                    if pb_pending > 0 {
+                        pb.inc(pb_pending);
                     }
                     (t, p, r, mr, nd)
                 }));

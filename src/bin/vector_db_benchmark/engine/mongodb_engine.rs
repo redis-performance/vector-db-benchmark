@@ -227,13 +227,19 @@ impl MongoDBEngine {
                         let result = filter_only_find(&coll, filter, top);
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        if let Err(e) = result {
-                            if local_errs.len() < 3 {
-                                local_errs.push(e);
+                        // Record a latency sample only for successful queries, so a
+                        // failed $vectorSearch/find is counted as a failure (num_to_run
+                        // minus successes) rather than folded into RPS/percentiles.
+                        // MongoDB has no check_commandstats backstop, so this is the
+                        // only place failures are surfaced.
+                        match result {
+                            Ok(_) => t.push(query_time),
+                            Err(e) => {
+                                if local_errs.len() < 3 {
+                                    local_errs.push(e);
+                                }
                             }
                         }
-
-                        t.push(query_time);
                         pb_pending += 1;
                         if pb_pending >= 256 {
                             pb.inc(pb_pending);
@@ -1165,6 +1171,7 @@ impl Engine for MongoDBEngine {
                     let mut r = Vec::new();
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
+                    let mut pb_pending: u64 = 0;
 
                     let client = match Client::with_uri_str(&uri) {
                         Ok(c) => c,
@@ -1221,7 +1228,16 @@ impl Engine for MongoDBEngine {
                                 eprintln!("Search query {} failed: {}", idx, e);
                             }
                         }
-                        pb.inc(1);
+                        // Batch progress updates so the highest-QPS runs don't pay a
+                        // contended atomic per query.
+                        pb_pending += 1;
+                        if pb_pending >= 256 {
+                            pb.inc(pb_pending);
+                            pb_pending = 0;
+                        }
+                    }
+                    if pb_pending > 0 {
+                        pb.inc(pb_pending);
                     }
                     (t, p, r, mr, nd)
                 }));
