@@ -104,7 +104,13 @@ pub fn write_match_any_project(
     engine_configs_json: &str,
     dim: usize,
 ) -> MatchAnyProject {
-    write_match_any_project_metric(dataset_name, engine_configs_json, dim, GtMetric::L2)
+    write_match_any_project_metric(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        N_QUERIES,
+    )
 }
 
 /// Cosine-ground-truth variant of [`write_match_any_project`] for engines that
@@ -114,7 +120,48 @@ pub fn write_match_any_cosine_project(
     engine_configs_json: &str,
     dim: usize,
 ) -> MatchAnyProject {
-    write_match_any_project_metric(dataset_name, engine_configs_json, dim, GtMetric::Cosine)
+    write_match_any_project_metric(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::Cosine,
+        N_QUERIES,
+    )
+}
+
+/// [`write_match_any_project`] with an explicit query count. The mixed/filter
+/// harnesses cap `num_to_run` at the number of queries in the fixture, so a
+/// larger count is needed to exercise the multi-worker join-merge (and, for
+/// mixed, to reliably drive updates) at `parallel >= 4`.
+pub fn write_match_any_project_n(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    n_queries: usize,
+) -> MatchAnyProject {
+    write_match_any_project_metric(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        n_queries,
+    )
+}
+
+/// Cosine variant of [`write_match_any_project_n`] (VectorSets).
+pub fn write_match_any_cosine_project_n(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    n_queries: usize,
+) -> MatchAnyProject {
+    write_match_any_project_metric(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::Cosine,
+        n_queries,
+    )
 }
 
 fn write_match_any_project_metric(
@@ -122,13 +169,14 @@ fn write_match_any_project_metric(
     engine_configs_json: &str,
     dim: usize,
     metric: GtMetric,
+    n_queries: usize,
 ) -> MatchAnyProject {
     // Deterministic data/queries so ground truth is reproducible across engines.
     let mut rng = StdRng::seed_from_u64(0xA11CE);
     let gen_vec =
         |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
     let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
-    let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..n_queries).map(|_| gen_vec(&mut rng)).collect();
 
     // Nearest neighbours computed over the FILTERED corpus only.
     let filtered_gt = |q: &[f32]| -> Vec<i64> {
@@ -1083,4 +1131,63 @@ pub fn read_recalls(root: &Path, engine: &str) -> Vec<f64> {
         .iter()
         .map(|x| x.as_f64().unwrap())
         .collect()
+}
+
+/// Like [`run_binary`] but appends `extra` CLI args (e.g. `--skip-vector-index`
+/// for the filter-only harness, or `--update-search-ratio 1:5` for mixed).
+pub fn run_binary_extra(
+    root: &Path,
+    engine: &str,
+    dataset: &str,
+    host: &str,
+    envs: &[(&str, &str)],
+    extra: &[&str],
+) -> bool {
+    let mut cmd = std::process::Command::new(binary_path());
+    cmd.args([
+        "--engines",
+        engine,
+        "--datasets",
+        dataset,
+        "--host",
+        host,
+        "--skip-if-exists",
+        "false",
+    ]);
+    cmd.args(extra);
+    cmd.current_dir(root);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("run vector-db-benchmark");
+    if !out.status.success() {
+        eprintln!(
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    out.status.success()
+}
+
+/// Read the whole `results` object from an engine's search result JSON, so a
+/// test can assert on any field (percentiles, requested/failed_queries,
+/// update_* metrics, the mean_precisions sentinel, …). `engine` is the result
+/// filename prefix — note `--skip-vector-index` renames the engine to
+/// `<engine_type>-no-vector`, so pass that prefix for filter-only runs.
+pub fn read_results_obj(root: &Path, engine: &str) -> serde_json::Value {
+    let pattern = format!("{}-*-search-*.json", engine);
+    let dir = root.join("results");
+    let path = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            glob::Pattern::new(&pattern)
+                .unwrap()
+                .matches(&p.file_name().unwrap().to_string_lossy())
+        })
+        .unwrap_or_else(|| panic!("no search result for {}", engine));
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    v["results"].clone()
 }

@@ -1194,6 +1194,128 @@ fn test_binary_valkey_match_any_resp3() {
     );
 }
 
+/// End-to-end FILTER-ONLY harness (`--skip-vector-index`) at `parallel: 4` with
+/// `--queries 1000`, so the per-worker thread-local latency buffers are merged
+/// across threads (the join-merge path). Asserts the filter-only sentinel
+/// (`mean_precisions == -1`), full query accounting (requested == succeeded,
+/// failed == 0) on a healthy run, positive RPS, and monotone linear percentiles.
+#[test]
+fn test_binary_valkey_filter_only() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-fo", "engine": "valkey",
+        "search_params": [{"parallel": 4, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "valkey-fo-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary_extra(
+            &proj.root,
+            "valkey-fo",
+            "valkey-fo-test",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+            &["--skip-vector-index", "--queries", "1000"],
+        ),
+        "valkey filter-only run failed"
+    );
+
+    let r = common::read_results_obj(&proj.root, "valkey-no-vector");
+    let mp = r["mean_precisions"].as_f64().unwrap();
+    let rps = r["rps"].as_f64().unwrap();
+    let p50 = r["p50_time"].as_f64().unwrap();
+    let p95 = r["p95_time"].as_f64().unwrap();
+    let p99 = r["p99_time"].as_f64().unwrap();
+    let requested = r["requested_queries"].as_u64().unwrap();
+    let succeeded = r["succeeded_queries"].as_u64().unwrap();
+    let failed = r["failed_queries"].as_u64().unwrap();
+    println!(
+        "valkey filter-only: mean_precisions={mp} rps={rps:.1} p50={p50} p95={p95} p99={p99} \
+         requested={requested} succeeded={succeeded} failed={failed}"
+    );
+    assert_eq!(mp, -1.0, "filter-only sentinel lost");
+    assert_eq!(requested, 1000, "requested_queries");
+    assert_eq!(failed, 0, "healthy run must have no failed queries");
+    assert_eq!(succeeded, 1000, "all queries should succeed");
+    assert!(rps > 0.0, "rps should be positive");
+    assert!(
+        p50 <= p95 && p95 <= p99,
+        "percentiles must be monotone: p50={p50} p95={p95} p99={p99}"
+    );
+    fs::remove_dir_all(&proj.root).ok();
+}
+
+/// End-to-end MIXED harness (`--update-search-ratio`) at `parallel: 4`: mirrors
+/// `test_binary_redis_mixed_benchmark` but exercises the valkey mixed path with a
+/// real multi-worker join-merge. Asserts search recall/precision are intact,
+/// updates ran (`update_count > 0`, `update_rps > 0`), and the search percentiles
+/// are monotone.
+#[test]
+fn test_binary_valkey_mixed_benchmark() {
+    wait_for_valkey();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "valkey-mx", "engine": "valkey",
+        "search_params": [{"parallel": 4, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    // 2000 queries so that at parallel: 4 the mixed loop reliably completes many
+    // full search phases (and thus updates), and merges a large per-worker sample
+    // set across threads.
+    let proj = common::write_match_any_project_n(
+        "valkey-mx-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+        2000,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary_extra(
+            &proj.root,
+            "valkey-mx",
+            "valkey-mx-test",
+            "127.0.0.1",
+            &[("VALKEY_PORT", port.as_str())],
+            &["--update-search-ratio", "1:5", "--repetitions", "1"],
+        ),
+        "valkey mixed run failed"
+    );
+
+    let r = common::read_results_obj(&proj.root, "valkey-mx");
+    let recall = r["mean_recall"].as_f64().unwrap();
+    let precision = r["mean_precisions"].as_f64().unwrap();
+    let update_count = r["update_count"].as_u64().unwrap();
+    let update_rps = r["update_rps"].as_f64().unwrap();
+    let p50 = r["p50_time"].as_f64().unwrap();
+    let p95 = r["p95_time"].as_f64().unwrap();
+    let p99 = r["p99_time"].as_f64().unwrap();
+    println!(
+        "valkey mixed: recall={recall:.3} precision={precision:.3} update_count={update_count} \
+         update_rps={update_rps:.1} p50={p50} p95={p95} p99={p99}"
+    );
+    assert!(precision >= 0.8, "mixed precision {precision} < 0.8");
+    assert!(recall >= 0.9, "mixed recall {recall} < 0.9");
+    assert!(update_count > 0, "mixed run performed no updates");
+    assert!(update_rps > 0.0, "update_rps should be positive");
+    assert!(
+        p50 <= p95 && p95 <= p99,
+        "percentiles must be monotone: p50={p50} p95={p95} p99={p99}"
+    );
+    fs::remove_dir_all(&proj.root).ok();
+}
+
 // ── New filter datatypes: bool / uuid / full-text / datetime ────────────────
 //
 // Each drives the real binary against a compound dataset whose queries carry a

@@ -894,6 +894,10 @@ fn test_binary_mongodb_mixed_benchmark() {
         "engine": "mongodb",
         "connection_params": {},
         "collection_params": {},
+        // parallel: 1 — this test asserts an EXACT update_count (2), which only
+        // holds single-threaded (the mixed loop's `break 'outer` makes the update
+        // count interleaving-dependent at parallel > 1). The multi-worker
+        // join-merge is covered by test_binary_mongodb_mixed_parallel.
         "search_params": [{
             "parallel": 1,
             "num_candidates": 20,
@@ -995,6 +999,144 @@ fn test_binary_mongodb_mixed_benchmark() {
 
     drop_test_collection();
     fs::remove_dir_all(&project_root).ok();
+}
+
+/// End-to-end MIXED harness at `parallel: 4` over a 2000-query fixture, so many
+/// full search phases (and updates) run and the per-worker thread-local sample
+/// buffers are merged across threads (the join-merge path — the actual rewrite).
+/// Complements `test_binary_mongodb_mixed_benchmark` (parallel: 1, exact
+/// update_count): here we assert recall/precision are intact, updates ran
+/// (`update_count > 0`, `update_rps > 0`), and search percentiles are monotone.
+#[test]
+fn test_binary_mongodb_mixed_parallel() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-mx", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 4, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project_n(
+        "mongo-mx-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+        2000,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary_extra(
+            &proj.root,
+            "mongo-mx",
+            "mongo-mx-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+            &["--update-search-ratio", "1:5", "--repetitions", "1"],
+        ),
+        "mongodb mixed (parallel) run failed"
+    );
+
+    let r = common::read_results_obj(&proj.root, "mongo-mx");
+    let recall = r["mean_recall"].as_f64().unwrap();
+    let precision = r["mean_precisions"].as_f64().unwrap();
+    let update_count = r["update_count"].as_u64().unwrap();
+    let update_rps = r["update_rps"].as_f64().unwrap();
+    let p50 = r["p50_time"].as_f64().unwrap();
+    let p95 = r["p95_time"].as_f64().unwrap();
+    let p99 = r["p99_time"].as_f64().unwrap();
+    println!(
+        "mongodb mixed (parallel=4): recall={recall:.3} precision={precision:.3} \
+         update_count={update_count} update_rps={update_rps:.1} p50={p50} p95={p95} p99={p99}"
+    );
+    assert!(precision >= 0.8, "mixed precision {precision} < 0.8");
+    assert!(recall >= 0.9, "mixed recall {recall} < 0.9");
+    assert!(update_count > 0, "mixed run performed no updates");
+    assert!(update_rps > 0.0, "update_rps should be positive");
+    assert!(
+        p50 <= p95 && p95 <= p99,
+        "percentiles must be monotone: p50={p50} p95={p95} p99={p99}"
+    );
+    drop_test_collection();
+    fs::remove_dir_all(&proj.root).ok();
+}
+
+/// End-to-end FILTER-ONLY harness (`--skip-vector-index`) at `parallel: 4` with
+/// `--queries 1000`: MongoDB has no `check_commandstats` backstop, so this is the
+/// primary guard that failed `$vectorSearch`/`find` calls are counted (not folded
+/// into RPS/percentiles). Asserts the filter-only sentinel (`mean_precisions ==
+/// -1`), full query accounting (requested == succeeded, failed == 0) on a healthy
+/// run, positive RPS, and monotone linear percentiles, with the per-worker sample
+/// buffers merged across threads.
+#[test]
+fn test_binary_mongodb_filter_only() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-fo", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 4, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_project(
+        "mongo-fo-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary_extra(
+            &proj.root,
+            "mongo-fo",
+            "mongo-fo-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+            &["--skip-vector-index", "--queries", "1000"],
+        ),
+        "mongodb filter-only run failed"
+    );
+
+    let r = common::read_results_obj(&proj.root, "mongodb-no-vector");
+    let mp = r["mean_precisions"].as_f64().unwrap();
+    let rps = r["rps"].as_f64().unwrap();
+    let p50 = r["p50_time"].as_f64().unwrap();
+    let p95 = r["p95_time"].as_f64().unwrap();
+    let p99 = r["p99_time"].as_f64().unwrap();
+    let requested = r["requested_queries"].as_u64().unwrap();
+    let succeeded = r["succeeded_queries"].as_u64().unwrap();
+    let failed = r["failed_queries"].as_u64().unwrap();
+    println!(
+        "mongodb filter-only: mean_precisions={mp} rps={rps:.1} p50={p50} p95={p95} p99={p99} \
+         requested={requested} succeeded={succeeded} failed={failed}"
+    );
+    assert_eq!(mp, -1.0, "filter-only sentinel lost");
+    assert_eq!(requested, 1000, "requested_queries");
+    assert_eq!(failed, 0, "healthy run must have no failed queries");
+    assert_eq!(succeeded, 1000, "all queries should succeed");
+    assert!(rps > 0.0, "rps should be positive");
+    assert!(
+        p50 <= p95 && p95 <= p99,
+        "percentiles must be monotone: p50={p50} p95={p95} p99={p99}"
+    );
+    drop_test_collection();
+    fs::remove_dir_all(&proj.root).ok();
 }
 
 /// End-to-end `match_any`: filter a keyword field to an OR-set and assert the

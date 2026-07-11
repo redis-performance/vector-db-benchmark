@@ -362,4 +362,21 @@ mod stats_tests {
         assert!(p99 > 99.0, "p99={} should be above sorted[98]", p99);
         assert!((p99 - 99.01).abs() < 1e-9, "p99={}", p99);
     }
+
+    #[test]
+    fn filter_mixed_stats_use_linear_percentiles() {
+        // The filter-only and mixed harnesses now route their latency samples
+        // through compute_search_stats (linear interpolation) instead of the
+        // old hand-rolled nearest-rank indexing `(len*q) as usize`, which
+        // returned the single max as p99 for N<=100. Feeding a known sample set
+        // (1..=100) through the shared path must yield the numpy-linear
+        // percentiles, proving the biased method is gone for these harnesses.
+        let times: Vec<f64> = (1..=100).map(|i| i as f64).collect();
+        let r = compute_search_stats(&times, &[], &[], &[], &[], 10.0, 0, 4, 100).unwrap();
+        // Nearest-rank would have produced p99 == 100 (the max); linear gives 99.01.
+        assert!((r.p99_time - 99.01).abs() < 1e-9, "p99={}", r.p99_time);
+        assert!((r.p95_time - 95.05).abs() < 1e-9, "p95={}", r.p95_time);
+        assert!((r.p50_time - 50.5).abs() < 1e-9, "p50={}", r.p50_time);
+        assert!(r.p99_time < 100.0, "p99={} must be below max", r.p99_time);
+    }
 }

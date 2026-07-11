@@ -186,3 +186,71 @@ fn test_binary_vectorsets_bool_filter() {
         recall
     );
 }
+
+/// End-to-end MIXED harness (`--update-search-ratio`) at `parallel: 4`: drives
+/// the VectorSets mixed path (VSIM search + VADD update) with a real multi-worker
+/// join-merge of the thread-local sample buffers. Cosine ground truth (VectorSets
+/// ranks by cosine). Asserts search recall/precision are intact, updates ran
+/// (`update_count > 0`, `update_rps > 0`), and search percentiles are monotone.
+#[test]
+fn test_binary_vectorsets_mixed_benchmark() {
+    wait_for_vectorsets();
+
+    let name = "vsets-mx";
+    let configs = serde_json::json!([{
+        "name": name,
+        "engine": "vectorsets",
+        "search_params": [{"parallel": 4, "search_params": {"ef": 400}}],
+        "upload_params": {
+            "hnsw_config": {"quant": "NOQUANT", "M": 16, "EF_CONSTRUCTION": 200},
+            "CAS": true,
+            "parallel": 1,
+            "batch_size": 100
+        }
+    }]);
+    // 2000 queries so that at parallel: 4 the mixed loop reliably completes many
+    // full search phases (and thus updates), and merges a large per-worker sample
+    // set across threads.
+    let proj = common::write_match_any_cosine_project_n(
+        "vs-mx",
+        &serde_json::to_string(&configs).unwrap(),
+        8,
+        2000,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary_extra(
+            &proj.root,
+            name,
+            "vs-mx",
+            TEST_HOST,
+            &[("REDIS_PORT", port.as_str())],
+            &["--update-search-ratio", "1:5", "--repetitions", "1"],
+        ),
+        "vectorsets mixed run failed"
+    );
+
+    let r = common::read_results_obj(&proj.root, name);
+    let recall = r["mean_recall"].as_f64().unwrap();
+    let precision = r["mean_precisions"].as_f64().unwrap();
+    let update_count = r["update_count"].as_u64().unwrap();
+    let update_rps = r["update_rps"].as_f64().unwrap();
+    let p50 = r["p50_time"].as_f64().unwrap();
+    let p95 = r["p95_time"].as_f64().unwrap();
+    let p99 = r["p99_time"].as_f64().unwrap();
+    println!(
+        "vectorsets mixed: recall={recall:.3} precision={precision:.3} update_count={update_count} \
+         update_rps={update_rps:.1} p50={p50} p95={p95} p99={p99}"
+    );
+    assert!(precision >= 0.8, "mixed precision {precision} < 0.8");
+    assert!(recall >= 0.9, "mixed recall {recall} < 0.9");
+    assert!(update_count > 0, "mixed run performed no updates");
+    assert!(update_rps > 0.0, "update_rps should be positive");
+    assert!(
+        p50 <= p95 && p95 <= p99,
+        "percentiles must be monotone: p50={p50} p95={p95} p99={p99}"
+    );
+    std::fs::remove_dir_all(&proj.root).ok();
+}
