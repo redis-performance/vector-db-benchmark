@@ -72,6 +72,23 @@ pub fn check_commandstats(
     };
 
     let current = parse_failed_calls(&info);
+    evaluate(&current, commands, context, baseline)
+}
+
+/// Pure decision logic behind [`check_commandstats`]: given the parsed
+/// `current` failed_calls map, decide whether any of `commands` accrued NEW
+/// failures since `baseline` (or any failures at all when `baseline` is `None`).
+///
+/// Returns `Err` listing each offending command and its NEW failure count, or
+/// `Ok(())` when every command is clean. Command names are matched
+/// case-insensitively (the map is keyed by uppercase); the error text preserves
+/// the caller's original spelling.
+fn evaluate(
+    current: &HashMap<String, u64>,
+    commands: &[&str],
+    context: &str,
+    baseline: Option<&CommandStatsBaseline>,
+) -> Result<(), String> {
     let mut failures = Vec::new();
 
     for cmd in commands {
@@ -100,7 +117,64 @@ pub fn check_commandstats(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_failed_calls;
+    use super::{evaluate, parse_failed_calls, CommandStatsBaseline};
+    use std::collections::HashMap;
+
+    fn map(pairs: &[(&str, u64)]) -> HashMap<String, u64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn evaluate_flags_failures_when_no_baseline() {
+        // failed_calls > 0 with no baseline → Err listing the command + count.
+        let current = map(&[("VADD", 3)]);
+        let err = evaluate(&current, &["VADD"], "upload", None).unwrap_err();
+        assert!(err.contains("VADD: 3 failed_calls"), "got {err}");
+        assert!(
+            err.contains("Command failures detected after upload"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn evaluate_ok_when_current_equals_baseline() {
+        // No NEW failures since the baseline snapshot → clean run.
+        let current = map(&[("VADD", 5)]);
+        let baseline: CommandStatsBaseline = map(&[("VADD", 5)]);
+        assert_eq!(
+            evaluate(&current, &["VADD"], "upload", Some(&baseline)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn evaluate_reports_delta_over_baseline() {
+        // 7 current vs 5 baseline → only the 2 NEW failures are reported.
+        let current = map(&[("VADD", 7)]);
+        let baseline: CommandStatsBaseline = map(&[("VADD", 5)]);
+        let err = evaluate(&current, &["VADD"], "search", Some(&baseline)).unwrap_err();
+        assert!(err.contains("VADD: 2 failed_calls"), "got {err}");
+    }
+
+    #[test]
+    fn evaluate_matches_command_case_insensitively() {
+        // Map is keyed by uppercase (from parse_failed_calls); a lowercase
+        // command spelling still matches, and the error preserves that spelling.
+        let current = map(&[("VADD", 4)]);
+        let err = evaluate(&current, &["vadd"], "upload", None).unwrap_err();
+        assert!(err.contains("vadd: 4 failed_calls"), "got {err}");
+    }
+
+    #[test]
+    fn evaluate_ok_when_command_absent_or_zero() {
+        // A command with no entry (or zero failures) is clean; unrelated
+        // failing commands are ignored when not in the checked list.
+        let current = map(&[("FT.SEARCH", 9)]);
+        assert_eq!(
+            evaluate(&current, &["VADD", "VSIM"], "search", None),
+            Ok(())
+        );
+    }
 
     #[test]
     fn parses_failed_calls_and_uppercases_command() {

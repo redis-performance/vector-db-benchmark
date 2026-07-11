@@ -804,3 +804,60 @@ fn save_upload_results(
     println!("Results saved to: {:?}", path);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_update_search_ratio;
+    use crate::engine::UpdateSearchRatio;
+
+    #[test]
+    fn parses_valid_ratio() {
+        assert_eq!(
+            parse_update_search_ratio("1:10"),
+            Ok(UpdateSearchRatio {
+                updates: 1,
+                searches: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn allows_zero_updates() {
+        // Zero updates is valid (search-heavy phase); only searches must be > 0.
+        assert_eq!(
+            parse_update_search_ratio("0:5"),
+            Ok(UpdateSearchRatio {
+                updates: 0,
+                searches: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_arity() {
+        let err = parse_update_search_ratio("1:2:3").unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid update-search-ratio format: '1:2:3'. Expected 'U:S' (e.g., '1:10')"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_update_count() {
+        let err = parse_update_search_ratio("x:2").unwrap_err();
+        assert_eq!(err, "Invalid update count: 'x'");
+    }
+
+    #[test]
+    fn rejects_invalid_search_count() {
+        let err = parse_update_search_ratio("1:y").unwrap_err();
+        assert_eq!(err, "Invalid search count: 'y'");
+    }
+
+    #[test]
+    fn rejects_zero_searches() {
+        // searches == 0 would divide-by-zero later, so it is rejected up front.
+        let err = parse_update_search_ratio("1:0").unwrap_err();
+        assert_eq!(err, "Search count must be > 0");
+    }
+}
