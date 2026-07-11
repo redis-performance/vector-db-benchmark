@@ -33,8 +33,13 @@ pub struct TurbopufferEngine {
     distance_metric: String,
     /// Tokio runtime for async operations
     rt: tokio::runtime::Runtime,
-    /// Shared client (wrapped in Arc for thread-safe sharing)
+    /// Shared client used by the non-search paths (configure/upload/delete),
+    /// which all run on `rt`. The parallel search path deliberately does NOT
+    /// use this client: it builds an independent client per worker so each
+    /// worker's tokio runtime owns its own reqwest connection pool.
     client: Arc<Client>,
+    /// API key kept so each search worker can construct its own client.
+    api_key: String,
 }
 
 impl TurbopufferEngine {
@@ -75,6 +80,7 @@ impl TurbopufferEngine {
             distance_metric: "cosine_distance".to_string(),
             rt,
             client,
+            api_key,
         })
     }
 
@@ -479,7 +485,11 @@ impl Engine for TurbopufferEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
-        let parallel = params.parallel.unwrap_or(1) as usize;
+        // Clamp to >=1: `parallel` is Option<i64> from config, so 0 would spawn
+        // no workers (AtomicUsize never drained → spurious "no searches" error)
+        // and a negative value would wrap to usize::MAX via `as usize` and spawn
+        // unbounded threads. Both degrade to a single worker.
+        let parallel = params.parallel.unwrap_or(1).max(1) as usize;
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
@@ -506,121 +516,151 @@ impl Engine for TurbopufferEngine {
             parallel
         );
 
-        // Push-based collection: only successful queries contribute latency +
-        // quality samples, so a failure is never scored as a 0-recall / 0-latency
-        // sample. Order is completion order (fine for aggregates).
-        let latencies = Arc::new(Mutex::new(Vec::<f64>::new()));
-        let precisions = Arc::new(Mutex::new(Vec::<f64>::new()));
-        let recalls = Arc::new(Mutex::new(Vec::<f64>::new()));
-        let mrrs = Arc::new(Mutex::new(Vec::<f64>::new()));
-        let ndcgs = Arc::new(Mutex::new(Vec::<f64>::new()));
+        // Workers index `neighbors[idx]` / `parsed_filters[idx]` for every idx in
+        // `0..num_to_run`. Guard the invariant up front (returning Err) rather than
+        // letting an out-of-bounds panic inside a worker unwind thread::scope and
+        // discard every other worker's collected samples via join().unwrap().
+        if neighbors.len() < num_to_run {
+            return Err(format!(
+                "dataset misaligned: {} neighbor lists for {} queries to run",
+                neighbors.len(),
+                num_to_run
+            ));
+        }
+        if parsed_filters.len() < num_to_run {
+            return Err(format!(
+                "dataset misaligned: {} parsed filters for {} queries to run",
+                parsed_filters.len(),
+                num_to_run
+            ));
+        }
+
+        // Persistent-worker harness (mirrors qdrant/elasticsearch search()):
+        // `workers` persistent workers, each building ONE tokio runtime and its
+        // OWN client, pulling query indices from a shared AtomicUsize. This
+        // replaces the old O(num_to_run) per-query runtime construction and the
+        // per-query global Mutex<Vec> locking. Each worker accumulates thread-local
+        // sample buffers (only successful queries contribute, so a failure is never
+        // scored as a 0-recall / 0-latency sample) which are merged after join — no
+        // per-query mutex in the timed loop. Order is completion order across
+        // workers, which is fine for aggregates.
+        //
+        // Cap the worker count at num_to_run so a `parallel >> num_to_run` misconfig
+        // does not build idle runtimes (runtime creation inside the timed window).
+        let workers = parallel.min(num_to_run.max(1));
+        let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
         let total_start = Instant::now();
 
-        if parallel <= 1 {
-            for i in 0..num_to_run {
-                let query = &queries[i];
-                let filter = parsed_filters[i].as_ref();
-                let start = Instant::now();
-                let results = single_query(
-                    &self.client,
-                    &self.namespace,
-                    query,
-                    top,
-                    &self.distance_metric,
-                    filter,
-                    &self.rt,
-                );
-                let elapsed = start.elapsed().as_secs_f64();
+        let api_key = self.api_key.as_str();
+        let namespace = self.namespace.as_str();
+        let distance_metric = self.distance_metric.as_str();
+        let queries = &queries;
+        let neighbors = &neighbors;
+        let parsed_filters = &parsed_filters;
 
-                match results {
-                    Ok(result_ids) => {
-                        let m = crate::metrics::compute_metrics(&result_ids, &neighbors[i], top);
-                        latencies.lock().unwrap().push(elapsed);
-                        precisions.lock().unwrap().push(m.precision);
-                        recalls.lock().unwrap().push(m.recall);
-                        mrrs.lock().unwrap().push(m.mrr);
-                        ndcgs.lock().unwrap().push(m.ndcg);
-                    }
-                    Err(e) => {
-                        eprintln!("Search query {} failed: {}", i, e);
-                    }
-                }
-                pb.inc(1);
-            }
-        } else {
-            let client = Arc::clone(&self.client);
-            let namespace = self.namespace.clone();
-            let distance_metric = self.distance_metric.clone();
+        let mut latencies: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut precisions: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut recalls: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut mrrs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut ndcgs: Vec<f64> = Vec::with_capacity(num_to_run);
 
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(parallel)
-                .build()
-                .map_err(|e| format!("Failed to create search thread pool: {}", e))?;
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(workers);
+            for _ in 0..workers {
+                let query_idx = Arc::clone(&query_idx);
+                let pb = &pb;
 
-            pool.scope(|s| {
-                for i in 0..num_to_run {
-                    let client = Arc::clone(&client);
-                    let namespace = namespace.clone();
-                    let distance_metric = distance_metric.clone();
-                    let query = queries[i].clone();
-                    let filter = parsed_filters[i].clone();
-                    let neighbor = neighbors[i].clone();
-                    let latencies = Arc::clone(&latencies);
-                    let precisions = Arc::clone(&precisions);
-                    let recalls = Arc::clone(&recalls);
-                    let mrrs = Arc::clone(&mrrs);
-                    let ndcgs = Arc::clone(&ndcgs);
-                    let pb = &pb;
+                handles.push(s.spawn(move || {
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
 
-                    s.spawn(move |_| {
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .unwrap();
+                    // One runtime per persistent worker, reused across its queries.
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            eprintln!("Turbopuffer worker runtime build failed: {}", e);
+                            return (t, p, r, mr, nd);
+                        }
+                    };
+
+                    // Independent client per worker: a shared (or cloned) reqwest
+                    // Client shares one connection pool, which would tie pooled
+                    // keep-alive connections to whichever runtime first dialed them
+                    // (cross-runtime scheduling jitter in the measured per-query
+                    // latency) and cause sporadic "connection closed" failures when
+                    // a finished worker drops its runtime mid-flight for another.
+                    // Constructing inside block_on binds the pool to this runtime.
+                    let client = rt.block_on(async { Client::new(api_key) });
+
+                    loop {
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
+                        if idx >= num_to_run {
+                            break;
+                        }
+
+                        let query = &queries[idx];
+                        let filter = parsed_filters[idx].as_ref();
                         let start = Instant::now();
                         let results = single_query(
                             &client,
-                            &namespace,
-                            &query,
+                            namespace,
+                            query,
                             top,
-                            &distance_metric,
-                            filter.as_ref(),
+                            distance_metric,
+                            filter,
                             &rt,
                         );
                         let elapsed = start.elapsed().as_secs_f64();
 
                         match results {
                             Ok(result_ids) => {
-                                let m =
-                                    crate::metrics::compute_metrics(&result_ids, &neighbor, top);
-                                latencies.lock().unwrap().push(elapsed);
-                                precisions.lock().unwrap().push(m.precision);
-                                recalls.lock().unwrap().push(m.recall);
-                                mrrs.lock().unwrap().push(m.mrr);
-                                ndcgs.lock().unwrap().push(m.ndcg);
+                                let m = crate::metrics::compute_metrics(
+                                    &result_ids,
+                                    &neighbors[idx],
+                                    top,
+                                );
+                                t.push(elapsed);
+                                p.push(m.precision);
+                                r.push(m.recall);
+                                mr.push(m.mrr);
+                                nd.push(m.ndcg);
                             }
                             Err(e) => {
-                                eprintln!("Search query {} failed: {}", i, e);
+                                eprintln!("Search query {} failed: {}", idx, e);
                             }
                         }
                         pb.inc(1);
-                    });
-                }
-            });
-        }
+                    }
+                    (t, p, r, mr, nd)
+                }));
+            }
+
+            for h in handles {
+                let (t, p, r, mr, nd) = h.join().unwrap();
+                latencies.extend(t);
+                precisions.extend(p);
+                recalls.extend(r);
+                mrrs.extend(mr);
+                ndcgs.extend(nd);
+            }
+        });
 
         pb.finish_and_clear();
         let total_time = total_start.elapsed().as_secs_f64();
 
-        let latencies = latencies.lock().unwrap().clone();
-        let precisions = precisions.lock().unwrap().clone();
-        let recalls = recalls.lock().unwrap().clone();
-        let mrrs = mrrs.lock().unwrap().clone();
-        let ndcgs = ndcgs.lock().unwrap().clone();
-
-        // Aggregate over successful queries only.
+        // Aggregate over successful queries only. Route through the canonical
+        // compute_search_stats so turbopuffer uses the SAME percentile_linear +
+        // population-std + rps definition (successes / wall-clock) as every other
+        // engine, instead of a hand-rolled copy that could silently diverge if the
+        // canonical path ever changes.
         let succeeded = latencies.len();
         if succeeded == 0 {
             return Err("No searches completed (all queries failed)".to_string());
@@ -630,61 +670,17 @@ impl Engine for TurbopufferEngine {
             eprintln!("WARNING: {} of {} queries failed", failed, num_to_run);
         }
 
-        let mean_time = latencies.iter().sum::<f64>() / succeeded as f64;
-        let mean_precision = precisions.iter().sum::<f64>() / succeeded as f64;
-        let mean_recall = recalls.iter().sum::<f64>() / succeeded as f64;
-        let mean_mrr = mrrs.iter().sum::<f64>() / succeeded as f64;
-        let mean_ndcg = ndcgs.iter().sum::<f64>() / succeeded as f64;
-
-        let variance = latencies
-            .iter()
-            .map(|t| (t - mean_time).powi(2))
-            .sum::<f64>()
-            / succeeded as f64;
-        let std_time = variance.sqrt();
-
-        let min_time = latencies.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_time = latencies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-        let mut sorted_latencies = latencies.clone();
-        sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        // numpy-linear percentiles, consistent with compute_search_stats / v0.
-        let pct = |q: f64| crate::engine::percentile_linear(&sorted_latencies, q);
-        let p50_time = pct(0.50);
-        let p95_time = pct(0.95);
-        let p99_time = pct(0.99);
-
-        let rps = succeeded as f64 / total_time;
-
-        Ok(SearchResults {
+        crate::engine::compute_search_stats(
+            &latencies,
+            &precisions,
+            &recalls,
+            &mrrs,
+            &ndcgs,
             total_time,
-            mean_time,
-            mean_precision,
-            mean_recall,
-            mean_mrr,
-            mean_ndcg,
-            std_time,
-            min_time,
-            max_time,
-            rps,
-            p50_time,
-            p95_time,
-            p99_time,
-            precisions,
-            recalls,
-            mrrs,
-            ndcgs,
-            latencies,
             top,
-            // num_queries = successes folded into the stats (matches
-            // compute_search_stats); requested/failed track the full workload.
-            num_queries: succeeded,
-            requested_queries: num_to_run,
-            failed_queries: failed,
             parallel,
-            ..Default::default()
-        })
+            num_to_run,
+        )
     }
 
     fn delete(&mut self) -> Result<(), String> {
