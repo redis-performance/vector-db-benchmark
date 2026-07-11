@@ -263,40 +263,7 @@ impl QdrantEngine {
         }
 
         if let Some(q) = self.collection_params_extra.get("quantization_config") {
-            let quantization = if let Some(s) = q.get("scalar") {
-                let qtype = match s.get("type").and_then(|v| v.as_str()) {
-                    Some("int8") | None => QuantizationType::Int8,
-                    Some(other) => {
-                        return Err(format!("Unsupported scalar quantization type: {}", other))
-                    }
-                };
-                Some(Quantization::Scalar(ScalarQuantization {
-                    r#type: qtype.into(),
-                    quantile: s.get("quantile").and_then(|v| v.as_f64()).map(|v| v as f32),
-                    always_ram: s.get("always_ram").and_then(|v| v.as_bool()),
-                }))
-            } else if let Some(p) = q.get("product") {
-                let compression = match p.get("compression").and_then(|v| v.as_str()) {
-                    Some(s) => parse_compression_ratio(s)?,
-                    None => {
-                        return Err(
-                            "Product quantization requires a `compression` value".to_string()
-                        )
-                    }
-                };
-                Some(Quantization::Product(ProductQuantization {
-                    compression: compression.into(),
-                    always_ram: p.get("always_ram").and_then(|v| v.as_bool()),
-                }))
-            } else {
-                q.get("binary").map(|b| {
-                    Quantization::Binary(BinaryQuantization {
-                        always_ram: b.get("always_ram").and_then(|v| v.as_bool()),
-                        ..Default::default()
-                    })
-                })
-            };
-            if let Some(quantization) = quantization {
+            if let Some(quantization) = build_quantization(q)? {
                 create_builder = create_builder.quantization_config(quantization);
             }
         }
@@ -814,6 +781,41 @@ fn parse_compression_ratio(s: &str) -> Result<CompressionRatio, String> {
             "Unsupported product quantization compression: {} (expected one of x4, x8, x16, x32, x64)",
             other
         )),
+    }
+}
+
+/// Translate a `quantization_config` JSON object into a Qdrant `Quantization`.
+/// Recognizes `scalar` (int8 default, rejects other types), `product` (requires
+/// a valid `compression`), and `binary`. Returns `Ok(None)` when none of those
+/// keys are present. Extracted verbatim from `apply_optimizers_and_quantization`
+/// so the branch logic is unit-testable without a live Qdrant.
+fn build_quantization(q: &serde_json::Value) -> Result<Option<Quantization>, String> {
+    if let Some(s) = q.get("scalar") {
+        let qtype = match s.get("type").and_then(|v| v.as_str()) {
+            Some("int8") | None => QuantizationType::Int8,
+            Some(other) => return Err(format!("Unsupported scalar quantization type: {}", other)),
+        };
+        Ok(Some(Quantization::Scalar(ScalarQuantization {
+            r#type: qtype.into(),
+            quantile: s.get("quantile").and_then(|v| v.as_f64()).map(|v| v as f32),
+            always_ram: s.get("always_ram").and_then(|v| v.as_bool()),
+        })))
+    } else if let Some(p) = q.get("product") {
+        let compression = match p.get("compression").and_then(|v| v.as_str()) {
+            Some(s) => parse_compression_ratio(s)?,
+            None => return Err("Product quantization requires a `compression` value".to_string()),
+        };
+        Ok(Some(Quantization::Product(ProductQuantization {
+            compression: compression.into(),
+            always_ram: p.get("always_ram").and_then(|v| v.as_bool()),
+        })))
+    } else {
+        Ok(q.get("binary").map(|b| {
+            Quantization::Binary(BinaryQuantization {
+                always_ram: b.get("always_ram").and_then(|v| v.as_bool()),
+                ..Default::default()
+            })
+        }))
     }
 }
 
@@ -1651,5 +1653,109 @@ rest_responses_total{method=\"GET\"} 42
     #[test]
     fn exact_match_array_value_is_none() {
         assert!(build_qdrant_filter("n", "match", &json!({"value":[1,2]})).is_none());
+    }
+
+    // ── parse_qdrant_conditions edge cases + subfilter builder ──────────────
+    use super::build_qdrant_subfilters;
+
+    #[test]
+    fn empty_conditions_object_is_none() {
+        assert!(parse_qdrant_conditions(&json!({})).is_none());
+    }
+
+    #[test]
+    fn and_only_populates_must_not_should() {
+        let cond = json!({"and":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]});
+        let filter = parse_qdrant_conditions(&cond).unwrap();
+        assert_eq!(filter.must.len(), 2, "and → 2 must entries");
+        assert!(filter.should.is_empty(), "and-only leaves should empty");
+    }
+
+    #[test]
+    fn subfilters_build_match_any_keyword_list() {
+        // A keyword match_any list → one Condition carrying a keyword Match.
+        let entries = vec![json!({"cat":{"match":{"any":["a","b"]}}})];
+        let conds = build_qdrant_subfilters(&entries);
+        assert_eq!(conds.len(), 1);
+        let fc = field_condition(&conds[0]);
+        assert_eq!(fc.key, "cat");
+        assert!(
+            fc.r#match.is_some(),
+            "match_any keyword list should set a Match"
+        );
+    }
+
+    // ── Quantization config builder ─────────────────────────────────────────
+    use super::build_quantization;
+    use qdrant_client::qdrant::quantization_config::Quantization;
+    use qdrant_client::qdrant::QuantizationType;
+
+    #[test]
+    fn quantization_scalar_int8_happy_path() {
+        let q = build_quantization(
+            &json!({"scalar":{"type":"int8","quantile":0.99,"always_ram":true}}),
+        )
+        .unwrap()
+        .unwrap();
+        match q {
+            Quantization::Scalar(sq) => {
+                assert_eq!(sq.r#type, i32::from(QuantizationType::Int8));
+                assert_eq!(sq.quantile, Some(0.99));
+                assert_eq!(sq.always_ram, Some(true));
+            }
+            other => panic!("expected Scalar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn quantization_scalar_defaults_type_to_int8() {
+        // Missing `type` defaults to Int8 (not an error).
+        let q = build_quantization(&json!({"scalar":{}})).unwrap().unwrap();
+        assert!(
+            matches!(q, Quantization::Scalar(sq) if sq.r#type == i32::from(QuantizationType::Int8))
+        );
+    }
+
+    #[test]
+    fn quantization_scalar_bogus_type_errors() {
+        let err = build_quantization(&json!({"scalar":{"type":"int4"}})).unwrap_err();
+        assert_eq!(err, "Unsupported scalar quantization type: int4");
+    }
+
+    #[test]
+    fn quantization_product_happy_path() {
+        let q = build_quantization(&json!({"product":{"compression":"x8","always_ram":false}}))
+            .unwrap()
+            .unwrap();
+        match q {
+            Quantization::Product(pq) => {
+                assert_eq!(pq.compression, i32::from(CompressionRatio::X8));
+                assert_eq!(pq.always_ram, Some(false));
+            }
+            other => panic!("expected Product, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn quantization_product_without_compression_errors() {
+        let err = build_quantization(&json!({"product":{}})).unwrap_err();
+        assert_eq!(err, "Product quantization requires a `compression` value");
+    }
+
+    #[test]
+    fn quantization_binary_happy_path() {
+        let q = build_quantization(&json!({"binary":{"always_ram":true}}))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(q, Quantization::Binary(bq) if bq.always_ram == Some(true)));
+    }
+
+    #[test]
+    fn quantization_none_when_no_known_key() {
+        assert!(build_quantization(&json!({})).unwrap().is_none());
+        assert!(build_quantization(&json!({"unknown":1})).unwrap().is_none());
     }
 }
