@@ -2150,8 +2150,8 @@ mod tests {
     }
 
     // ── New filter datatypes: bool / uuid / full-text / datetime ───────────
-    use super::{datetime_to_epoch_secs, encode_string_field, RedisEngineConfig};
-    use std::collections::HashSet;
+    use super::{datetime_to_epoch_secs, encode_string_field, ParsedFilter, RedisEngineConfig};
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     #[test]
@@ -2351,12 +2351,45 @@ mod tests {
     // what the old in-window code produced, so recall/precision cannot change.
 
     #[test]
-    fn encode_vector_is_deterministic_fp32_and_quantized() {
-        // Same input → identical bytes on every call (no hidden state), for both
-        // the default FLOAT32 path and a per-element-converting quantized path.
-        let v = vec![0.0f32, 1.4, -1.6, 42.0, -7.25];
-        assert_eq!(encode_vector("FLOAT32", &v), encode_vector("FLOAT32", &v));
-        assert_eq!(encode_vector("INT8", &v), encode_vector("INT8", &v));
+    fn encode_vector_pins_exact_bytes_fp32_and_quantized() {
+        // Pin the wire bytes against independently-computed expected vectors so a
+        // future change to encode_vector (the hoisted-out client work) that alters
+        // what actually reaches the server is caught. Determinism alone is not
+        // enough — these assert the CORRECT quantized bytes, not just stability.
+        let v = [1.0f32, -1.0, 0.5];
+
+        // FLOAT32: little-endian f32 per element.
+        let mut fp32_expected = Vec::new();
+        fp32_expected.extend_from_slice(&1.0f32.to_le_bytes());
+        fp32_expected.extend_from_slice(&(-1.0f32).to_le_bytes());
+        fp32_expected.extend_from_slice(&0.5f32.to_le_bytes());
+        assert_eq!(encode_vector("FLOAT32", &v), fp32_expected);
+
+        // INT8: f32::round (half AWAY from zero) then clamp to [-128,127], one
+        // signed byte each. 1.0→1, -1.0→-1 (0xFF), 0.5→1. Hard-coded.
+        assert_eq!(encode_vector("INT8", &v), vec![0x01u8, 0xFF, 0x01]);
+
+        // UINT8: round then clamp to [0,255], one byte each. 1.0→1, -1.0→0, 0.5→1.
+        assert_eq!(encode_vector("UINT8", &v), vec![0x01u8, 0x00, 0x01]);
+
+        // FLOAT16 (IEEE half): 1.0→0x3C00, -1.0→0xBC00, 0.5→0x3800, LE bytes.
+        assert_eq!(
+            encode_vector("FLOAT16", &v),
+            vec![0x00, 0x3C, 0x00, 0xBC, 0x00, 0x38]
+        );
+
+        // BFLOAT16: 1.0→0x3F80, -1.0→0xBF80, 0.5→0x3F00, LE bytes.
+        assert_eq!(
+            encode_vector("BFLOAT16", &v),
+            vec![0x80, 0x3F, 0x80, 0xBF, 0x00, 0x3F]
+        );
+
+        // FLOAT64: little-endian f64 per element.
+        let mut fp64_expected = Vec::new();
+        fp64_expected.extend_from_slice(&1.0f64.to_le_bytes());
+        fp64_expected.extend_from_slice(&(-1.0f64).to_le_bytes());
+        fp64_expected.extend_from_slice(&0.5f64.to_le_bytes());
+        assert_eq!(encode_vector("FLOAT64", &v), fp64_expected);
     }
 
     #[test]
@@ -2396,6 +2429,32 @@ mod tests {
         assert_eq!(
             build_knn_query_str("hnsw", "ADHOC_BF", None),
             "*=>[KNN $K @vector $vec_param  AS vector_score]=>{$HYBRID_POLICY: ADHOC_BF }"
+        );
+    }
+
+    #[test]
+    fn build_knn_query_str_filtered_matches_legacy_format() {
+        use super::build_knn_query_str;
+        // The whole point of hoisting query_str is that it varies per query ONLY
+        // through the filter prefilter. Pin the FILTERED path character-for-
+        // character against the legacy inline `format!` so the per-query-varying
+        // branch cannot silently diverge. Legacy (master) form for a non-empty
+        // prefilter, HNSW, empty hybrid_policy:
+        //   "{prefilter}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        let params: HashMap<String, FilterParamValue> =
+            [("brand_0".to_string(), FilterParamValue::Str("apple".into()))]
+                .into_iter()
+                .collect();
+        let filter: ParsedFilter = ("@brand:{apple}".to_string(), params);
+        assert_eq!(
+            build_knn_query_str("hnsw", "", Some(&filter)),
+            "@brand:{apple}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        );
+
+        // Filtered + ADHOC_BF: prefilter kept, EF_RUNTIME dropped, policy suffix.
+        assert_eq!(
+            build_knn_query_str("hnsw", "ADHOC_BF", Some(&filter)),
+            "@brand:{apple}=>[KNN $K @vector $vec_param  AS vector_score]=>{$HYBRID_POLICY: ADHOC_BF }"
         );
     }
 

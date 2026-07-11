@@ -1224,7 +1224,6 @@ fn ft_search_filter_only(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Build the Valkey FT.SEARCH KNN query string for the given filter.
 ///
 /// Pure client-side string formatting, kept OUT of the per-query timed window
@@ -2160,7 +2159,10 @@ impl Engine for ValkeyEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_knn_query_str, encode_query_vector, parse_conditions};
+    use super::{
+        build_knn_query_str, encode_query_vector, parse_conditions, FilterParamValue, ParsedFilter,
+    };
+    use std::collections::HashMap;
 
     // ── Timed-window hoisting fidelity ─────────────────────────────────────
     // The perf change moves the FLOAT32 encode + query-string build OUT of the
@@ -2189,6 +2191,22 @@ mod tests {
         assert_eq!(
             build_knn_query_str(None),
             "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        );
+    }
+
+    #[test]
+    fn build_knn_query_str_filtered_matches_legacy_format() {
+        // query_str varies per query ONLY through the filter prefilter — pin the
+        // FILTERED path against the legacy inline `format!` (master):
+        //   "{prefilter}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        let params: HashMap<String, FilterParamValue> =
+            [("brand_0".to_string(), FilterParamValue::Int(7))]
+                .into_iter()
+                .collect();
+        let filter: ParsedFilter = ("@brand:{apple}".to_string(), params);
+        assert_eq!(
+            build_knn_query_str(Some(&filter)),
+            "@brand:{apple}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
         );
     }
 

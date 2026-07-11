@@ -1175,8 +1175,9 @@ fn format_number(value: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod vsim_parse_tests {
-    use super::{encode_query_vector, parse_vsim_response};
+    use super::{build_filter_expression, encode_query_vector, parse_vsim_response};
     use redis::Value;
+    use serde_json::json;
 
     // ── Timed-window hoisting fidelity ─────────────────────────────────────
     // The perf change moves the FP32 encode OUT of the per-query timed window
@@ -1198,6 +1199,23 @@ mod vsim_parse_tests {
         for (i, q) in queries.iter().enumerate() {
             assert_eq!(precomputed[i], encode_query_vector(q), "q{i}");
         }
+    }
+
+    #[test]
+    fn build_filter_expression_filtered_matches_legacy_string() {
+        // VectorSets has no hoisted query_str — the per-query-varying request bit
+        // is the VSIM FILTER expression (prebuilt via build_filter_expression
+        // before the timed loop, then passed as `cmd.arg("FILTER").arg(expr)`).
+        // Pin a NON-trivial compound filter to its exact legacy FILTER string so
+        // the filter-string path cannot silently diverge.
+        let cond = json!({"and": [
+            {"brand": {"match": {"value": "apple"}}},
+            {"price": {"range": {"gte": 100}}},
+        ]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".brand == \"apple\" and .price >= 100".to_string())
+        );
     }
 
     #[test]
