@@ -709,6 +709,22 @@ impl ValkeyEngine {
 /// blocking writes while still amortising round-trip overhead.
 const MAX_PIPE_BYTES: usize = 4_096;
 
+/// Env override for [`MAX_PIPE_BYTES`]. A managed endpoint reached over a proxy
+/// hop (e.g. GCP Memorystore-for-Valkey via Private Service Connect) can stall
+/// even the 4 KB default: the write-then-read pipeline blocks on the socket when
+/// HNSW indexing is slow to drain it over the extra hop. Set
+/// `VALKEY_MAX_PIPE_BYTES=512` there to flush after ~every HSET (synchronous
+/// request/reply, like redis-benchmark, which never stalls) — parallelism across
+/// the worker connections keeps aggregate upload fast. Defaults to 4 KB so every
+/// other engine/deploy is unchanged.
+fn max_pipe_bytes() -> usize {
+    std::env::var("VALKEY_MAX_PIPE_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(MAX_PIPE_BYTES)
+}
+
 /// Internal batch upload function.
 ///
 /// Sends HSET commands in sub-batched pipelines whose total serialised size
@@ -724,6 +740,7 @@ fn upload_batch_internal(
 ) -> Result<(), String> {
     let mut pipe = redis::pipe();
     let mut pipe_bytes: usize = 0;
+    let max_pipe = max_pipe_bytes();
 
     for i in 0..ids.len() {
         let key = ids[i].to_string();
@@ -780,7 +797,7 @@ fn upload_batch_internal(
         }
 
         // Flush the current pipeline if adding this command would exceed the limit
-        if pipe_bytes > 0 && pipe_bytes + cmd_bytes > MAX_PIPE_BYTES {
+        if pipe_bytes > 0 && pipe_bytes + cmd_bytes > max_pipe {
             pipe.query::<()>(conn).map_err(|e| e.to_string())?;
             pipe = redis::pipe();
             pipe_bytes = 0;
