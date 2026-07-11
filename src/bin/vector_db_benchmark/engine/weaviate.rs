@@ -16,7 +16,7 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use uuid::Uuid;
 
 use super::weaviate_grpc::weaviate_v1::{
-    weaviate_client::WeaviateClient, MetadataRequest, NearVector, SearchRequest,
+    weaviate_client::WeaviateClient, MetadataRequest, NearVector, SearchReply, SearchRequest,
 };
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
@@ -620,15 +620,19 @@ fn build_graphql_body(
     serde_json::to_vec(&body).expect("serialize GraphQL search body")
 }
 
-/// Send a pre-serialized GraphQL request and return the raw response text. Only
-/// the network send + wire read live here (the caller wraps this in the timed
-/// window); the response is parsed by `parse_graphql_response` AFTER `elapsed`.
+/// Send a pre-serialized GraphQL request and return the DECODED response. The
+/// consistent timed boundary (see qdrant/pgvector/redis) is: request body
+/// pre-serialized OUTSIDE the window; RPC send + receive + decode-to-structured-
+/// response INSIDE the window (this fn: post + HTTP-status check + wire read +
+/// `from_str`); GraphQL-error check + id/score extraction OUTSIDE
+/// (`extract_graphql_hits`). So the JSON decode is billed as latency exactly
+/// like qdrant's protobuf decode.
 fn send_graphql(
     client: &reqwest::blocking::Client,
     base_url: &str,
     api_key: Option<&str>,
     body: &[u8],
-) -> Result<String, String> {
+) -> Result<serde_json::Value, String> {
     let url = format!("{}/v1/graphql", base_url);
     let mut req = client
         .post(&url)
@@ -651,16 +655,19 @@ fn send_graphql(
         ));
     }
 
-    resp.text()
-        .map_err(|e| format!("Failed to read GraphQL response: {}", e))
+    let text = resp
+        .text()
+        .map_err(|e| format!("Failed to read GraphQL response: {}", e))?;
+    serde_json::from_str(&text).map_err(|e| format!("Failed to parse GraphQL response: {}", e))
 }
 
-/// Parse a GraphQL search response body (done AFTER the timed window — DOM
-/// deserialization is client work, mirroring pgvector/qdrant).
-fn parse_graphql_response(text: &str, class_name: &str) -> Result<Vec<(i64, f64)>, String> {
-    let resp_body: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| format!("Failed to parse GraphQL response: {}", e))?;
-
+/// Extract the id/score list from an already-decoded GraphQL response (done
+/// AFTER the timed window — the GraphQL-error check and id extraction pull the
+/// final ids out of the decoded struct for recall, mirroring pgvector/qdrant).
+fn extract_graphql_hits(
+    resp_body: &serde_json::Value,
+    class_name: &str,
+) -> Result<Vec<(i64, f64)>, String> {
     // Check for errors
     if let Some(errors) = resp_body.get("errors").and_then(|e| e.as_array()) {
         if !errors.is_empty() {
@@ -693,26 +700,21 @@ fn parse_graphql_response(text: &str, class_name: &str) -> Result<Vec<(i64, f64)
     Ok(hits)
 }
 
-/// Search Weaviate over gRPC (near_vector). Sends the query vector as packed
-/// little-endian f32 bytes (`vector_bytes`) and requests uuid + distance metadata.
-/// This is the high-throughput query path; the class-level `ef` set via the REST
-/// schema update still governs recall. Returns (int-id, distance) pairs, mapping
-/// the object UUID back through `uuid_to_int` (inverse of the upload id_to_uuid).
+/// Build the gRPC `SearchRequest` for one query — packs the query vector as
+/// little-endian f32 bytes (`vector_bytes`) and requests uuid + distance
+/// metadata. This is the request-build step and is hoisted OUTSIDE the timed
+/// window (precomputed before the parallel region, mirroring `graphql_bodies`
+/// and qdrant, which builds its request before `query_start`). The class-level
+/// `ef` set via the REST schema update still governs recall.
 ///
 /// `NearVector::vector_bytes` is marked deprecated in the newer weaviate protos
 /// (superseded by a multi-vector `vectors` field) but remains the accepted
 /// packed-vector input on the 1.29–1.38 servers this targets, so we allow it.
 #[allow(deprecated)]
-async fn near_vector_search_grpc(
-    client: &mut WeaviateClient<tonic::transport::Channel>,
-    class_name: &str,
-    api_key: Option<&str>,
-    query_vector: &[f32],
-    top: usize,
-) -> Result<Vec<(i64, f64)>, String> {
+fn build_grpc_request(class_name: &str, query_vector: &[f32], top: usize) -> SearchRequest {
     let vector_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-    let search = SearchRequest {
+    SearchRequest {
         collection: class_name.to_string(),
         limit: top as u32,
         near_vector: Some(NearVector {
@@ -725,8 +727,20 @@ async fn near_vector_search_grpc(
             ..Default::default()
         }),
         ..Default::default()
-    };
+    }
+}
 
+/// Issue a prebuilt gRPC search and return the DECODED reply. The consistent
+/// timed boundary (see qdrant/pgvector/redis) is: request build OUTSIDE the
+/// window (`build_grpc_request`); RPC send + receive + protobuf decode INSIDE
+/// the window (this fn: the awaited `client.search` decodes the reply);
+/// id/distance extraction OUTSIDE (`extract_grpc_hits`). So the protobuf decode
+/// is billed as latency, matching qdrant.
+async fn grpc_search(
+    client: &mut WeaviateClient<tonic::transport::Channel>,
+    search: SearchRequest,
+    api_key: Option<&str>,
+) -> Result<SearchReply, String> {
     let mut request = tonic::Request::new(search);
     if let Some(key) = api_key {
         let val = format!("Bearer {}", key)
@@ -735,15 +749,20 @@ async fn near_vector_search_grpc(
         request.metadata_mut().insert("authorization", val);
     }
 
-    let reply = client
+    Ok(client
         .search(request)
         .await
         .map_err(|e| format!("gRPC search failed: {}", e))?
-        .into_inner();
+        .into_inner())
+}
 
+/// Extract (int-id, distance) pairs from an already-decoded gRPC reply (done
+/// AFTER the timed window), mapping each object UUID back through `uuid_to_int`
+/// (inverse of the upload id_to_uuid), mirroring pgvector/qdrant.
+fn extract_grpc_hits(reply: &SearchReply) -> Result<Vec<(i64, f64)>, String> {
     let mut hits = Vec::with_capacity(reply.results.len());
-    for r in reply.results {
-        if let Some(m) = r.metadata {
+    for r in &reply.results {
+        if let Some(m) = &r.metadata {
             let id = uuid_to_int(&m.id)?;
             hits.push((id, m.distance as f64));
         }
@@ -1170,7 +1189,13 @@ impl Engine for WeaviateEngine {
                     }
                 }
             };
-        let num_filtered = parsed_filters.iter().filter(|f| f.is_some()).count();
+        // Count filters over the executed slice only (`--num-queries` may cap the
+        // run below the full query set), so the ratio printed below is never
+        // impossible.
+        let num_filtered = parsed_filters[..num_to_run]
+            .iter()
+            .filter(|f| f.is_some())
+            .count();
         let use_grpc = grpc_ep.is_some() && num_filtered == 0;
 
         // Measurement-fairness note: the query transport is recorded so a reviewer
@@ -1190,11 +1215,12 @@ impl Engine for WeaviateEngine {
             println!("\tWeaviate search transport: {}", transport);
         }
 
-        // Precompute the fully serialized GraphQL request bodies BEFORE the
-        // parallel region (only needed on the GraphQL path). See build_graphql_body:
-        // the GraphQL-string build + JSON-wrap is the heaviest client step and must
-        // not be billed as server latency. The gRPC path packs the vector to
-        // little-endian bytes inline (the actual wire format, cheap — like qdrant).
+        // Precompute the per-query request payloads BEFORE the parallel region so
+        // the timed window wraps only RPC send + receive + decode (request build is
+        // client CPU work, hoisted like qdrant builds its request before
+        // `query_start`). Only the payloads for the transport actually used are
+        // built. GraphQL: the GraphQL-string build + JSON-wrap (the heaviest client
+        // step). gRPC: the LE-byte vector packing + `SearchRequest`.
         let graphql_bodies: Vec<Vec<u8>> = if use_grpc {
             Vec::new()
         } else {
@@ -1209,11 +1235,18 @@ impl Engine for WeaviateEngine {
                 })
                 .collect()
         };
+        let grpc_requests: Vec<SearchRequest> = if use_grpc {
+            (0..num_to_run)
+                .map(|idx| build_grpc_request(&self.class_name, &queries[idx], tops[idx]))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
-        let queries = Arc::new(queries);
         let neighbors = Arc::new(neighbors);
         let tops = Arc::new(tops);
         let graphql_bodies = Arc::new(graphql_bodies);
+        let grpc_requests = Arc::new(grpc_requests);
 
         let start_time = Instant::now();
 
@@ -1242,9 +1275,8 @@ impl Engine for WeaviateEngine {
                 let mut tasks = Vec::with_capacity(parallel);
                 for _ in 0..parallel {
                     let endpoint = endpoint.clone();
-                    let class_name = self.class_name.clone();
                     let api_key = self.api_key.clone();
-                    let queries = Arc::clone(&queries);
+                    let grpc_requests = Arc::clone(&grpc_requests);
                     let neighbors = Arc::clone(&neighbors);
                     let tops = Arc::clone(&tops);
                     let query_idx = Arc::clone(&query_idx);
@@ -1270,17 +1302,15 @@ impl Engine for WeaviateEngine {
                                 break;
                             }
                             let top = tops[idx];
+                            // Owned request copy for the RPC, cloned OUT of the
+                            // window (memcpy of already-packed bytes, not a rebuild).
+                            let request = grpc_requests[idx].clone();
+                            // Timed window: send + receive + protobuf decode. Request
+                            // build is hoisted (out); id extraction after `elapsed` (out).
                             let query_start = Instant::now();
-                            let results = near_vector_search_grpc(
-                                &mut client,
-                                &class_name,
-                                api_key.as_deref(),
-                                &queries[idx],
-                                top,
-                            )
-                            .await;
+                            let reply = grpc_search(&mut client, request, api_key.as_deref()).await;
                             let query_time = query_start.elapsed().as_secs_f64();
-                            match results {
+                            match reply.and_then(|reply| extract_grpc_hits(&reply)) {
                                 Ok(result_ids) => {
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
@@ -1353,9 +1383,9 @@ impl Engine for WeaviateEngine {
                                 break;
                             }
                             let top = tops[idx];
-                            // Timed window: only the network send + wire read of
-                            // the raw response. Body is pre-serialized; response is
-                            // parsed after `elapsed`.
+                            // Timed window: network send + receive + decode of the
+                            // response into a structured value. Body is pre-serialized
+                            // (out); id/score extraction runs after `elapsed` (out).
                             let query_start = Instant::now();
                             let response = send_graphql(
                                 &client,
@@ -1365,7 +1395,7 @@ impl Engine for WeaviateEngine {
                             );
                             let query_time = query_start.elapsed().as_secs_f64();
                             match response
-                                .and_then(|text| parse_graphql_response(&text, &class_name))
+                                .and_then(|resp_body| extract_graphql_hits(&resp_body, &class_name))
                             {
                                 Ok(result_ids) => {
                                     let ordered_ids: Vec<i64> =
@@ -1418,6 +1448,49 @@ impl Engine for WeaviateEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Load-bearing: the hoisted GraphQL request body bytes must equal what the
+    /// old inline `.json(&{"query": graphql})` path put on the wire, and the
+    /// vector float formatting inside the pinned GraphQL string must not drift.
+    #[test]
+    fn build_graphql_body_bytes_match_json_serialization() {
+        let vec = vec![0.1f32, -0.2, 0.3];
+        let top = 2usize;
+
+        // Reconstruct the exact GraphQL string the old inline path built.
+        let vector_str = "0.1, -0.2, 0.3";
+        let where_clause = String::new();
+        let graphql = format!(
+            r#"{{
+            Get {{
+                {class_name}(
+                    nearVector: {{ vector: [{vector_str}] }},
+                    limit: {top}
+                    {where_clause}
+                ) {{
+                    _additional {{
+                        id
+                        distance
+                    }}
+                }}
+            }}
+        }}"#,
+            class_name = "Bench",
+            vector_str = vector_str,
+            top = top,
+            where_clause = where_clause,
+        );
+        let expected = serde_json::to_vec(&json!({ "query": graphql })).unwrap();
+
+        let body = build_graphql_body("Bench", &vec, top, None);
+        assert_eq!(body, expected);
+
+        // Pin the load-bearing float formatting and structure directly.
+        let decoded: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let q = decoded["query"].as_str().unwrap();
+        assert!(q.contains("vector: [0.1, -0.2, 0.3]"), "q={}", q);
+        assert!(q.contains("limit: 2"), "q={}", q);
+    }
 
     #[test]
     fn graphql_literal_uses_bare_keys_and_enum_operator() {
