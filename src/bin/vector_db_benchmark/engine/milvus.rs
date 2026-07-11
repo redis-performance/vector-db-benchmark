@@ -474,16 +474,20 @@ fn insert_batch(
 
 /// Search Milvus via REST API.
 #[allow(clippy::too_many_arguments)]
-fn search_vectors(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
+/// Build and serialize one search request body to JSON bytes. Done OUTSIDE the
+/// per-query timed window: serializing the query vector to JSON decimal text
+/// (ryu formatting over every dimension) is client CPU work, not server latency.
+/// Pre-serializing means the timed send only copies the finished bytes onto the
+/// socket, matching the reference engines (pgvector/qdrant). The bytes are
+/// identical to what `.json(&body)` would have sent inline.
+fn build_search_body(
     collection_name: &str,
     query_vector: &[f32],
     top: usize,
     metric_type: &str,
     ef: Option<i64>,
     filter: Option<&str>,
-) -> Result<Vec<(i64, f64)>, String> {
+) -> Vec<u8> {
     let mut body = serde_json::json!({
         "collectionName": collection_name,
         "data": [query_vector],
@@ -512,11 +516,22 @@ fn search_vectors(
         );
     }
 
+    serde_json::to_vec(&body).expect("serialize search body")
+}
+
+/// Send a pre-serialized search request and return the raw response text. Only
+/// the network send + wire read live here (the caller wraps this in the timed
+/// window); the response is parsed by `parse_search_response` AFTER `elapsed`.
+fn send_search(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    body: &[u8],
+) -> Result<String, String> {
     let url = format!("{}/v2/vectordb/entities/search", base_url);
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .json(&body)
+        .body(body.to_vec())
         .send()
         .map_err(|e| format!("Search failed: {}", e))?;
 
@@ -528,8 +543,14 @@ fn search_vectors(
         ));
     }
 
-    let resp_body: serde_json::Value = resp
-        .json()
+    resp.text()
+        .map_err(|e| format!("Failed to read search response: {}", e))
+}
+
+/// Parse a search response body (done AFTER the timed window — DOM
+/// deserialization is client work, mirroring pgvector/qdrant).
+fn parse_search_response(text: &str) -> Result<Vec<(i64, f64)>, String> {
+    let resp_body: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| format!("Failed to parse search response: {}", e))?;
 
     let code = resp_body.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
@@ -850,6 +871,36 @@ impl Engine for MilvusEngine {
             queries.len()
         };
 
+        // Precompute per-query `top` and the fully serialized request bodies
+        // BEFORE the parallel region so the timed window wraps only the RPC
+        // round-trip (see build_search_body). `tops[idx]` reproduces the same k
+        // the request embeds, so recall is computed against an identical result
+        // set.
+        let tops: Vec<usize> = (0..num_to_run)
+            .map(|idx| {
+                explicit_top.unwrap_or_else(|| {
+                    let n = neighbors[idx].len();
+                    if n > 0 {
+                        n
+                    } else {
+                        10
+                    }
+                })
+            })
+            .collect();
+        let bodies: Vec<Vec<u8>> = (0..num_to_run)
+            .map(|idx| {
+                build_search_body(
+                    &self.collection_name,
+                    &queries[idx],
+                    tops[idx],
+                    &self.metric_type,
+                    ef,
+                    parsed_filters[idx].as_deref(),
+                )
+            })
+            .collect();
+
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
         // order-independent so results are unchanged; work counter uses Relaxed.
@@ -868,12 +919,10 @@ impl Engine for MilvusEngine {
             let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let base_url = self.base_url.clone();
-                let collection_name = self.collection_name.clone();
-                let metric_type = self.metric_type.clone();
                 let timeout = self.timeout;
-                let queries = &queries;
                 let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
+                let tops = &tops;
+                let bodies = &bodies;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -898,29 +947,16 @@ impl Engine for MilvusEngine {
                             break;
                         }
 
-                        let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
-                            }
-                        });
+                        let top = tops[idx];
 
+                        // Timed window: only the network send + wire read of the
+                        // raw response. Body is pre-serialized; response is parsed
+                        // after `elapsed`.
                         let query_start = Instant::now();
-                        let results = search_vectors(
-                            &client,
-                            &base_url,
-                            &collection_name,
-                            &queries[idx],
-                            top,
-                            &metric_type,
-                            ef,
-                            parsed_filters[idx].as_deref(),
-                        );
+                        let response = send_search(&client, &base_url, &bodies[idx]);
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        match results {
+                        match response.and_then(|text| parse_search_response(&text)) {
                             Ok(result_ids) => {
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();

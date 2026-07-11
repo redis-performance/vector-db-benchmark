@@ -735,21 +735,23 @@ fn hit_id(hit: &serde_json::Value) -> Option<&str> {
         .or_else(|| hit.get("_id").and_then(|v| v.as_str()))
 }
 
-fn knn_search(
+/// Send a pre-serialized KNN search request and return the raw response text.
+/// Only the network send + wire read live here (the caller wraps this in the
+/// timed window). The request body is pre-serialized to a `RawValue` OUTSIDE the
+/// window (the vector-to-JSON ryu formatting is client CPU work, not server
+/// latency — see the search loop) and the response is parsed by
+/// `parse_knn_response` AFTER the window closes, mirroring pgvector/qdrant.
+fn knn_send(
     rt: &tokio::runtime::Runtime,
     client: &OpenSearch,
     index_name: &str,
-    query_vector: &[f32],
-    top: usize,
-    filter: Option<&serde_json::Value>,
-) -> Result<Vec<(i64, f64)>, String> {
-    let body = build_knn_body(query_vector, top, filter);
-
+    raw_body: &serde_json::value::RawValue,
+) -> Result<String, String> {
     let resp = rt
         .block_on(
             client
                 .search(SearchParts::Index(&[index_name]))
-                .body(body)
+                .body(raw_body)
                 .send(),
         )
         .map_err(|e| format!("KNN search failed: {}", e))?;
@@ -759,8 +761,14 @@ fn knn_search(
         return Err(format!("KNN search error: {}", text));
     }
 
-    let resp_body: serde_json::Value = rt
-        .block_on(resp.json())
+    rt.block_on(resp.text())
+        .map_err(|e| format!("Failed to read search response: {}", e))
+}
+
+/// Parse a KNN search response body (done AFTER the timed window — DOM
+/// deserialization is client work, mirroring pgvector/qdrant).
+fn parse_knn_response(text: &str) -> Result<Vec<(i64, f64)>, String> {
+    let resp_body: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| format!("Failed to parse search response: {}", e))?;
 
     let hits = resp_body
@@ -888,6 +896,31 @@ impl Engine for OpenSearchEngine {
             queries.len()
         };
 
+        // Precompute per-query `top` and the fully serialized request bodies
+        // BEFORE the parallel region so the timed window wraps only the RPC
+        // round-trip. `build_knn_body` builds the DOM and `to_raw_value`
+        // performs the vector-to-JSON ryu formatting (client CPU work) once here;
+        // the timed send only copies the already-formatted bytes. `tops[idx]`
+        // reproduces the same k the request embeds, so recall is unchanged.
+        let tops: Vec<usize> = (0..num_to_run)
+            .map(|idx| {
+                explicit_top.unwrap_or_else(|| {
+                    let n = neighbors[idx].len();
+                    if n > 0 {
+                        n
+                    } else {
+                        10
+                    }
+                })
+            })
+            .collect();
+        let raw_bodies: Vec<Box<serde_json::value::RawValue>> = (0..num_to_run)
+            .map(|idx| {
+                let body = build_knn_body(&queries[idx], tops[idx], parsed_filters[idx].as_ref());
+                serde_json::value::to_raw_value(&body).expect("serialize KNN search body")
+            })
+            .collect();
+
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
         // order-independent so results are unchanged; work counter uses Relaxed.
@@ -910,9 +943,9 @@ impl Engine for OpenSearchEngine {
             for _ in 0..parallel {
                 let base_url = base_url.clone();
                 let index_name = index_name.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
+                let tops = &tops;
+                let raw_bodies = &raw_bodies;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -941,27 +974,16 @@ impl Engine for OpenSearchEngine {
                             break;
                         }
 
-                        let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
-                            }
-                        });
+                        let top = tops[idx];
 
+                        // Timed window: only the network send + wire read of the
+                        // raw response. Body is pre-serialized; response is parsed
+                        // after `elapsed`.
                         let query_start = Instant::now();
-                        let results = knn_search(
-                            &rt,
-                            &client,
-                            &index_name,
-                            &queries[idx],
-                            top,
-                            parsed_filters[idx].as_ref(),
-                        );
+                        let response = knn_send(&rt, &client, &index_name, &raw_bodies[idx]);
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        match results {
+                        match response.and_then(|text| parse_knn_response(&text)) {
                             Ok(result_ids) => {
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();

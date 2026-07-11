@@ -570,16 +570,19 @@ fn upload_batch_objects(
 }
 
 /// Search Weaviate using GraphQL near_vector query.
-fn near_vector_search(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
+/// Build and serialize one GraphQL `nearVector` request body to JSON bytes.
+/// Done OUTSIDE the per-query timed window: this is the heaviest client-side
+/// step for Weaviate — a per-dimension `f32::to_string` + `format!` to assemble
+/// the GraphQL query string, then JSON-wrapping it. That is client CPU work, not
+/// server latency, so pre-building means the timed send only copies the finished
+/// bytes onto the socket (matching pgvector/qdrant). Bytes are identical to what
+/// `.json(&{"query": graphql})` would have sent inline.
+fn build_graphql_body(
     class_name: &str,
-    api_key: Option<&str>,
     query_vector: &[f32],
     top: usize,
     filter: Option<&serde_json::Value>,
-) -> Result<Vec<(i64, f64)>, String> {
-    // Build GraphQL query
+) -> Vec<u8> {
     let vector_str: String = query_vector
         .iter()
         .map(|v| v.to_string())
@@ -613,13 +616,24 @@ fn near_vector_search(
         where_clause = where_clause,
     );
 
-    let body = serde_json::json!({"query": graphql});
+    let body = serde_json::json!({ "query": graphql });
+    serde_json::to_vec(&body).expect("serialize GraphQL search body")
+}
 
+/// Send a pre-serialized GraphQL request and return the raw response text. Only
+/// the network send + wire read live here (the caller wraps this in the timed
+/// window); the response is parsed by `parse_graphql_response` AFTER `elapsed`.
+fn send_graphql(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    api_key: Option<&str>,
+    body: &[u8],
+) -> Result<String, String> {
     let url = format!("{}/v1/graphql", base_url);
     let mut req = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .json(&body);
+        .body(body.to_vec());
 
     if let Some(key) = api_key {
         req = req.header("Authorization", format!("Bearer {}", key));
@@ -637,8 +651,14 @@ fn near_vector_search(
         ));
     }
 
-    let resp_body: serde_json::Value = resp
-        .json()
+    resp.text()
+        .map_err(|e| format!("Failed to read GraphQL response: {}", e))
+}
+
+/// Parse a GraphQL search response body (done AFTER the timed window — DOM
+/// deserialization is client work, mirroring pgvector/qdrant).
+fn parse_graphql_response(text: &str, class_name: &str) -> Result<Vec<(i64, f64)>, String> {
+    let resp_body: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| format!("Failed to parse GraphQL response: {}", e))?;
 
     // Check for errors
@@ -1104,6 +1124,22 @@ impl Engine for WeaviateEngine {
             queries.len()
         };
 
+        // Precompute per-query `top` BEFORE the parallel region. `tops[idx]`
+        // reproduces the same k each request embeds, so recall is computed
+        // against an identical result set on both transports.
+        let tops: Vec<usize> = (0..num_to_run)
+            .map(|idx| {
+                explicit_top.unwrap_or_else(|| {
+                    let n = neighbors[idx].len();
+                    if n > 0 {
+                        n
+                    } else {
+                        10
+                    }
+                })
+            })
+            .collect();
+
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
         // order-independent so results are unchanged; work counter uses Relaxed.
@@ -1134,11 +1170,50 @@ impl Engine for WeaviateEngine {
                     }
                 }
             };
-        let use_grpc = grpc_ep.is_some() && parsed_filters.iter().all(|f| f.is_none());
+        let num_filtered = parsed_filters.iter().filter(|f| f.is_some()).count();
+        let use_grpc = grpc_ep.is_some() && num_filtered == 0;
+
+        // Measurement-fairness note: the query transport is recorded so a reviewer
+        // can see that filtered runs fall back to GraphQL while unfiltered runs use
+        // gRPC — i.e. filtered vs unfiltered Weaviate latencies are NOT measured on
+        // the same wire. gRPC filter translation is a documented follow-up; until
+        // then this log makes the asymmetry explicit rather than silent.
+        let transport = if use_grpc { "grpc" } else { "graphql" };
+        if grpc_ep.is_some() && num_filtered > 0 {
+            println!(
+                "\tWeaviate search transport: graphql (forced — {} of {} queries carry a \
+                 filter and gRPC filter translation is not implemented; unfiltered runs use gRPC, \
+                 so filtered vs unfiltered numbers are on different transports)",
+                num_filtered, num_to_run
+            );
+        } else {
+            println!("\tWeaviate search transport: {}", transport);
+        }
+
+        // Precompute the fully serialized GraphQL request bodies BEFORE the
+        // parallel region (only needed on the GraphQL path). See build_graphql_body:
+        // the GraphQL-string build + JSON-wrap is the heaviest client step and must
+        // not be billed as server latency. The gRPC path packs the vector to
+        // little-endian bytes inline (the actual wire format, cheap — like qdrant).
+        let graphql_bodies: Vec<Vec<u8>> = if use_grpc {
+            Vec::new()
+        } else {
+            (0..num_to_run)
+                .map(|idx| {
+                    build_graphql_body(
+                        &self.class_name,
+                        &queries[idx],
+                        tops[idx],
+                        parsed_filters[idx].as_ref(),
+                    )
+                })
+                .collect()
+        };
 
         let queries = Arc::new(queries);
         let neighbors = Arc::new(neighbors);
-        let parsed_filters = Arc::new(parsed_filters);
+        let tops = Arc::new(tops);
+        let graphql_bodies = Arc::new(graphql_bodies);
 
         let start_time = Instant::now();
 
@@ -1171,6 +1246,7 @@ impl Engine for WeaviateEngine {
                     let api_key = self.api_key.clone();
                     let queries = Arc::clone(&queries);
                     let neighbors = Arc::clone(&neighbors);
+                    let tops = Arc::clone(&tops);
                     let query_idx = Arc::clone(&query_idx);
                     let pb = pb.clone();
                     tasks.push(tokio::spawn(async move {
@@ -1193,14 +1269,7 @@ impl Engine for WeaviateEngine {
                             if idx >= num_to_run {
                                 break;
                             }
-                            let top = explicit_top.unwrap_or_else(|| {
-                                let n = neighbors[idx].len();
-                                if n > 0 {
-                                    n
-                                } else {
-                                    10
-                                }
-                            });
+                            let top = tops[idx];
                             let query_start = Instant::now();
                             let results = near_vector_search_grpc(
                                 &mut client,
@@ -1258,9 +1327,9 @@ impl Engine for WeaviateEngine {
                     let class_name = self.class_name.clone();
                     let api_key = self.api_key.clone();
                     let timeout = self.timeout;
-                    let queries = Arc::clone(&queries);
                     let neighbors = Arc::clone(&neighbors);
-                    let parsed_filters = Arc::clone(&parsed_filters);
+                    let tops = Arc::clone(&tops);
+                    let graphql_bodies = Arc::clone(&graphql_bodies);
                     let query_idx = Arc::clone(&query_idx);
                     let pb = &pb;
 
@@ -1283,26 +1352,21 @@ impl Engine for WeaviateEngine {
                             if idx >= num_to_run {
                                 break;
                             }
-                            let top = explicit_top.unwrap_or_else(|| {
-                                let n = neighbors[idx].len();
-                                if n > 0 {
-                                    n
-                                } else {
-                                    10
-                                }
-                            });
+                            let top = tops[idx];
+                            // Timed window: only the network send + wire read of
+                            // the raw response. Body is pre-serialized; response is
+                            // parsed after `elapsed`.
                             let query_start = Instant::now();
-                            let results = near_vector_search(
+                            let response = send_graphql(
                                 &client,
                                 &base_url,
-                                &class_name,
                                 api_key.as_deref(),
-                                &queries[idx],
-                                top,
-                                parsed_filters[idx].as_ref(),
+                                &graphql_bodies[idx],
                             );
                             let query_time = query_start.elapsed().as_secs_f64();
-                            match results {
+                            match response
+                                .and_then(|text| parse_graphql_response(&text, &class_name))
+                            {
                                 Ok(result_ids) => {
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
