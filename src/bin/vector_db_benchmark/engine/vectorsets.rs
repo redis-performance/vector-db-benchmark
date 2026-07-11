@@ -1143,16 +1143,19 @@ fn never_match_clause(field_name: &str) -> String {
 fn build_range_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
     let mut parts = Vec::new();
 
-    if let Some(gt) = criteria.get("gt") {
+    // Only numeric bounds constrain the range; a null/non-numeric bound carries no
+    // constraint and is skipped (matching redis/valkey/qdrant/es/os/weaviate/milvus/
+    // pgvector) — otherwise `format_number` would fall back to "0" and emit `.n > 0`.
+    if let Some(gt) = criteria.get("gt").filter(|v| v.is_number()) {
         parts.push(format!(".{} > {}", field_name, format_number(gt)));
     }
-    if let Some(gte) = criteria.get("gte") {
+    if let Some(gte) = criteria.get("gte").filter(|v| v.is_number()) {
         parts.push(format!(".{} >= {}", field_name, format_number(gte)));
     }
-    if let Some(lt) = criteria.get("lt") {
+    if let Some(lt) = criteria.get("lt").filter(|v| v.is_number()) {
         parts.push(format!(".{} < {}", field_name, format_number(lt)));
     }
-    if let Some(lte) = criteria.get("lte") {
+    if let Some(lte) = criteria.get("lte").filter(|v| v.is_number()) {
         parts.push(format!(".{} <= {}", field_name, format_number(lte)));
     }
 
@@ -1469,14 +1472,10 @@ mod filter_expr_tests {
     }
 
     #[test]
-    #[ignore = "BUG: a null range bound emits `.n > 0` (format_number fallback) \
-                instead of being skipped like every other engine; remove #[ignore] to reproduce"]
-    fn range_null_bound_should_be_skipped_bug() {
-        // CORRECT behavior: a null bound carries no constraint, so the clause must
-        // be skipped (→ None), matching redis/valkey/qdrant/es/os/weaviate/milvus/
-        // pgvector. ACTUAL: build_range_clause pushes `.n > 0` because
-        // format_number(Null) falls back to "0". This test asserts the CORRECT
-        // behavior and therefore FAILS, exposing the bug.
+    fn range_null_bound_is_skipped() {
+        // A null bound carries no constraint, so the clause is skipped (→ None),
+        // matching redis/valkey/qdrant/es/os/weaviate/milvus/pgvector. (Regression
+        // guard: build_range_clause used to emit `.n > 0` via format_number(Null).)
         let got = range_expr(json!({"gt": serde_json::Value::Null}));
         assert!(got.is_none(), "null bound should be skipped, got {:?}", got);
     }
