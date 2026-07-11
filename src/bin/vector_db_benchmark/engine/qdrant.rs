@@ -187,12 +187,7 @@ impl QdrantEngine {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
-        let qdrant_distance = match distance.to_lowercase().as_str() {
-            "l2" | "euclidean" => Distance::Euclid,
-            "cosine" | "angular" => Distance::Cosine,
-            "dot" | "ip" => Distance::Dot,
-            other => return Err(format!("Unsupported distance metric for Qdrant: {}", other)),
-        };
+        let qdrant_distance = map_qdrant_distance(distance)?;
 
         // HNSW params come from the TYPED collection_params.hnsw_config field
         // (serde captures "m"/"ef_construct" there via aliases; the flattened
@@ -376,12 +371,7 @@ impl QdrantEngine {
     fn create_hybrid_collection(&self, dataset: &Dataset) -> Result<(), String> {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
-        let qdrant_distance = match distance.to_lowercase().as_str() {
-            "l2" | "euclidean" => Distance::Euclid,
-            "cosine" | "angular" => Distance::Cosine,
-            "dot" | "ip" => Distance::Dot,
-            other => return Err(format!("Unsupported distance metric for Qdrant: {}", other)),
-        };
+        let qdrant_distance = map_qdrant_distance(distance)?;
 
         // Named dense vector "dense" (per-vector HNSW config if requested).
         let mut dense_params = VectorParamsBuilder::new(vector_size as u64, qdrant_distance);
@@ -741,6 +731,18 @@ impl QdrantEngine {
 }
 
 /// Parse conditions into Qdrant filter format.
+/// Map a dataset distance name to the Qdrant `Distance` enum. Unknown metrics
+/// return a clear `Err` (never silently default). A wrong arm here (e.g. IP→L2)
+/// would silently invert ranking, so every arm is unit-tested.
+fn map_qdrant_distance(distance: &str) -> Result<Distance, String> {
+    match distance.to_lowercase().as_str() {
+        "l2" | "euclidean" => Ok(Distance::Euclid),
+        "cosine" | "angular" => Ok(Distance::Cosine),
+        "dot" | "ip" => Ok(Distance::Dot),
+        other => Err(format!("Unsupported distance metric for Qdrant: {}", other)),
+    }
+}
+
 fn parse_qdrant_conditions(conditions: &serde_json::Value) -> Option<Filter> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
@@ -1507,5 +1509,147 @@ rest_responses_total{method=\"GET\"} 42
         assert!(m.get("cluster_enabled").is_none());
         // 5 curated gauges present in the sample.
         assert_eq!(m.len(), 5);
+    }
+
+    // ── OR-branch of the condition parser ──────────────────────────────────
+    use super::{map_qdrant_distance, parse_qdrant_conditions};
+    use qdrant_client::qdrant::Distance;
+
+    #[test]
+    fn or_only_populates_should_not_must() {
+        let cond = json!({"or":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]});
+        let filter = parse_qdrant_conditions(&cond).unwrap();
+        assert_eq!(filter.should.len(), 2, "or → 2 should entries");
+        assert!(filter.must.is_empty(), "or-only leaves must empty");
+    }
+
+    #[test]
+    fn and_plus_or_populates_both() {
+        let cond = json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}},{"c":{"match":{"value":"z"}}}],
+        });
+        let filter = parse_qdrant_conditions(&cond).unwrap();
+        assert_eq!(filter.must.len(), 1);
+        assert_eq!(filter.should.len(), 2);
+    }
+
+    // ── Range operators ────────────────────────────────────────────────────
+
+    fn numeric_range(criteria: serde_json::Value) -> qdrant_client::qdrant::Range {
+        let c = build_qdrant_filter("n", "range", &criteria).unwrap();
+        field_condition(&c).range.expect("numeric range")
+    }
+
+    #[test]
+    fn range_lt_sets_only_lt() {
+        let r = numeric_range(json!({"lt":5}));
+        assert_eq!(r.lt, Some(5.0));
+        assert!(r.gt.is_none() && r.lte.is_none() && r.gte.is_none());
+    }
+
+    #[test]
+    fn range_lte_sets_only_lte() {
+        let r = numeric_range(json!({"lte":5}));
+        assert_eq!(r.lte, Some(5.0));
+        assert!(r.lt.is_none() && r.gt.is_none() && r.gte.is_none());
+    }
+
+    #[test]
+    fn range_gt_sets_only_gt() {
+        let r = numeric_range(json!({"gt":5}));
+        assert_eq!(r.gt, Some(5.0));
+        assert!(r.lt.is_none() && r.lte.is_none() && r.gte.is_none());
+    }
+
+    #[test]
+    fn range_gte_sets_only_gte() {
+        let r = numeric_range(json!({"gte":5}));
+        assert_eq!(r.gte, Some(5.0));
+        assert!(r.lt.is_none() && r.gt.is_none() && r.lte.is_none());
+    }
+
+    #[test]
+    fn range_two_sided_gte_lt() {
+        let r = numeric_range(json!({"gte":10,"lt":20}));
+        assert_eq!(r.gte, Some(10.0));
+        assert_eq!(r.lt, Some(20.0));
+    }
+
+    #[test]
+    fn range_unknown_op_yields_empty_numeric_range() {
+        // Qdrant emits an (empty) numeric Range for an unrecognized key rather
+        // than None — the condition is present but constrains nothing.
+        let r = numeric_range(json!({"foo":5}));
+        assert!(r.lt.is_none() && r.gt.is_none() && r.lte.is_none() && r.gte.is_none());
+    }
+
+    #[test]
+    fn range_null_bound_yields_empty_numeric_range() {
+        let r = numeric_range(json!({"gte": serde_json::Value::Null}));
+        assert!(r.gte.is_none());
+    }
+
+    // ── Geo filter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn geo_with_radius_sets_center_and_radius() {
+        let c = build_qdrant_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0,"radius":500}))
+            .unwrap();
+        let gr = field_condition(&c).geo_radius.expect("geo_radius");
+        let center = gr.center.expect("center");
+        assert_eq!(center.lat, 20.0);
+        assert_eq!(center.lon, 10.0);
+        assert_eq!(gr.radius, 500.0);
+    }
+
+    #[test]
+    fn geo_without_radius_uses_default_1000() {
+        let c = build_qdrant_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0})).unwrap();
+        let gr = field_condition(&c).geo_radius.expect("geo_radius");
+        assert_eq!(gr.radius, 1000.0);
+    }
+
+    #[test]
+    fn geo_missing_lat_or_lon_is_none() {
+        assert!(build_qdrant_filter("loc", "geo", &json!({"lon":10.0,"radius":500})).is_none());
+        assert!(build_qdrant_filter("loc", "geo", &json!({"lat":20.0,"radius":500})).is_none());
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn distance_mapping_covers_all_arms() {
+        assert_eq!(map_qdrant_distance("cosine").unwrap(), Distance::Cosine);
+        assert_eq!(map_qdrant_distance("angular").unwrap(), Distance::Cosine);
+        assert_eq!(map_qdrant_distance("l2").unwrap(), Distance::Euclid);
+        assert_eq!(map_qdrant_distance("euclidean").unwrap(), Distance::Euclid);
+        assert_eq!(map_qdrant_distance("dot").unwrap(), Distance::Dot);
+        assert_eq!(map_qdrant_distance("ip").unwrap(), Distance::Dot);
+        assert_eq!(map_qdrant_distance("COSINE").unwrap(), Distance::Cosine);
+        assert!(map_qdrant_distance("nope").is_err());
+    }
+
+    // ── Exact-match numeric / non-scalar arms ──────────────────────────────
+
+    #[test]
+    fn exact_match_int_sets_match() {
+        let c = build_qdrant_filter("n", "match", &json!({"value":5})).unwrap();
+        assert!(field_condition(&c).r#match.is_some());
+    }
+
+    #[test]
+    fn exact_match_float_is_none() {
+        // Qdrant `Match` supports keyword/integer/bool only — a float exact value
+        // matches no arm and is dropped (float filtering uses range instead).
+        assert!(build_qdrant_filter("n", "match", &json!({"value":1.5})).is_none());
+    }
+
+    #[test]
+    fn exact_match_array_value_is_none() {
+        assert!(build_qdrant_filter("n", "match", &json!({"value":[1,2]})).is_none());
     }
 }

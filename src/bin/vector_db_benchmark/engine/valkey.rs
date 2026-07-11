@@ -171,12 +171,7 @@ impl ValkeyEngine {
         let _ = redis::cmd("FLUSHALL").query::<()>(conn);
 
         // Map distance metric
-        let distance_metric = match distance.to_lowercase().as_str() {
-            "cosine" | "angular" => "COSINE",
-            "euclidean" | "l2" => "L2",
-            "dot" | "ip" => "IP",
-            _ => "COSINE",
-        };
+        let distance_metric = map_distance_metric(distance);
 
         // Build FT.CREATE command
         let mut cmd = redis::cmd("FT.CREATE");
@@ -836,6 +831,18 @@ enum FilterParamValue {
 }
 
 type ParsedFilter = (String, HashMap<String, FilterParamValue>);
+
+/// Map a dataset distance name to the Valkey Search `DISTANCE_METRIC` value.
+/// Unknown metrics default to `COSINE` (matches the historical inline behavior).
+/// A typo here (e.g. IP→L2) would silently invert ranking, so it is unit-tested.
+fn map_distance_metric(distance: &str) -> &'static str {
+    match distance.to_lowercase().as_str() {
+        "cosine" | "angular" => "COSINE",
+        "euclidean" | "l2" => "L2",
+        "dot" | "ip" => "IP",
+        _ => "COSINE",
+    }
+}
 
 fn parse_conditions(conditions: &serde_json::Value) -> Option<ParsedFilter> {
     let obj = conditions.as_object()?;
@@ -2502,5 +2509,160 @@ mod tests {
             "Okay should map to a non-empty JSON string, got {:?}",
             okay
         );
+    }
+
+    // ── OR-branch of the condition parser ──────────────────────────────────
+    use super::{
+        build_exact_match_filter, build_geo_filter, build_range_filter, map_distance_metric,
+    };
+
+    fn q_of(cond: serde_json::Value) -> Option<String> {
+        parse_conditions(&cond).map(|(q, _)| q)
+    }
+
+    #[test]
+    fn or_only_emits_pipe_joined_group() {
+        let cond = serde_json::json!({"or":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]});
+        // Values inlined (no $param inside TAG braces on Valkey Search).
+        assert_eq!(q_of(cond).unwrap(), "(@a:{x} | @b:{y})");
+    }
+
+    #[test]
+    fn and_plus_or_keeps_both_groups() {
+        let cond = serde_json::json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}}],
+        });
+        assert_eq!(q_of(cond).unwrap(), "(@a:{x}) (@b:{y})");
+    }
+
+    // ── Range operators (inlined literals on Valkey Search) ────────────────
+    // Test the range arm directly (parse_conditions additionally wraps the whole
+    // AND group in `(...)`).
+
+    fn range_q(criteria: serde_json::Value) -> Option<String> {
+        let mut counter = 0;
+        build_range_filter("n", &criteria, &mut counter).map(|(q, _)| q)
+    }
+
+    #[test]
+    fn range_lt_is_exclusive() {
+        assert_eq!(
+            range_q(serde_json::json!({"lt":5})).unwrap(),
+            "@n:[-inf (5]"
+        );
+    }
+
+    #[test]
+    fn range_lte_is_inclusive() {
+        assert_eq!(
+            range_q(serde_json::json!({"lte":5})).unwrap(),
+            "@n:[-inf 5]"
+        );
+    }
+
+    #[test]
+    fn range_gt_is_exclusive() {
+        assert_eq!(
+            range_q(serde_json::json!({"gt":5})).unwrap(),
+            "@n:[(5 +inf]"
+        );
+    }
+
+    #[test]
+    fn range_gte_is_inclusive() {
+        assert_eq!(
+            range_q(serde_json::json!({"gte":5})).unwrap(),
+            "@n:[5 +inf]"
+        );
+    }
+
+    #[test]
+    fn range_two_sided_gte_lt() {
+        // Fixed order lt, gt, lte, gte (space-joined).
+        assert_eq!(
+            range_q(serde_json::json!({"gte":10,"lt":20})).unwrap(),
+            "@n:[-inf (20] @n:[10 +inf]"
+        );
+    }
+
+    #[test]
+    fn range_unknown_op_is_skipped() {
+        assert!(range_q(serde_json::json!({"foo":5})).is_none());
+    }
+
+    #[test]
+    fn range_null_bound_is_skipped() {
+        assert!(range_q(serde_json::json!({"gte":serde_json::Value::Null})).is_none());
+    }
+
+    // ── Geo filter (param-based, like redis) ───────────────────────────────
+
+    fn geo_q(criteria: serde_json::Value) -> Option<(String, HashMap<String, FilterParamValue>)> {
+        let mut counter = 0;
+        build_geo_filter("loc", &criteria, &mut counter)
+    }
+
+    #[test]
+    fn geo_with_radius_emits_lon_lat_radius() {
+        let (q, params) = geo_q(serde_json::json!({"lon":10.0,"lat":20.0,"radius":500})).unwrap();
+        assert_eq!(q, "@loc:[$loc_0_lon $loc_0_lat $loc_0_radius m]", "q={}", q);
+        assert!(matches!(
+            params.get("loc_0_radius"),
+            Some(FilterParamValue::Int(500))
+        ));
+    }
+
+    #[test]
+    fn geo_missing_radius_is_none() {
+        // Valkey Search geo has NO default radius; a missing radius drops the clause.
+        assert!(geo_q(serde_json::json!({"lon":10.0,"lat":20.0})).is_none());
+    }
+
+    #[test]
+    fn geo_missing_lat_or_lon_is_none() {
+        assert!(geo_q(serde_json::json!({"lon":10.0,"radius":500})).is_none());
+        assert!(geo_q(serde_json::json!({"lat":20.0,"radius":500})).is_none());
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn distance_metric_maps_all_arms() {
+        assert_eq!(map_distance_metric("cosine"), "COSINE");
+        assert_eq!(map_distance_metric("angular"), "COSINE");
+        assert_eq!(map_distance_metric("l2"), "L2");
+        assert_eq!(map_distance_metric("euclidean"), "L2");
+        assert_eq!(map_distance_metric("dot"), "IP");
+        assert_eq!(map_distance_metric("ip"), "IP");
+        assert_eq!(map_distance_metric("nope"), "COSINE");
+    }
+
+    // ── Exact-match numeric / non-scalar arms ──────────────────────────────
+
+    fn exact_q(criteria: serde_json::Value) -> Option<String> {
+        let mut counter = 0;
+        build_exact_match_filter("n", &criteria, &mut counter).map(|(q, _)| q)
+    }
+
+    #[test]
+    fn exact_match_int_emits_inlined_numeric_point() {
+        assert_eq!(exact_q(serde_json::json!({"value":5})).unwrap(), "@n:[5 5]");
+    }
+
+    #[test]
+    fn exact_match_float_emits_inlined_numeric_point() {
+        assert_eq!(
+            exact_q(serde_json::json!({"value":1.5})).unwrap(),
+            "@n:[1.5 1.5]"
+        );
+    }
+
+    #[test]
+    fn exact_match_array_value_is_none() {
+        assert!(exact_q(serde_json::json!({"value":[1,2]})).is_none());
     }
 }

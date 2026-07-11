@@ -170,17 +170,7 @@ impl WeaviateEngine {
     ) -> Result<(), String> {
         let distance = dataset.distance();
 
-        let weaviate_distance = match distance.to_lowercase().as_str() {
-            "l2" | "euclidean" => "l2-squared",
-            "cosine" | "angular" => "cosine",
-            "dot" | "ip" => "dot",
-            other => {
-                return Err(format!(
-                    "Unsupported distance metric for Weaviate: {}",
-                    other
-                ))
-            }
-        };
+        let weaviate_distance = map_weaviate_distance(distance)?;
 
         // Build properties from schema
         let mut properties = Vec::new();
@@ -771,6 +761,21 @@ fn extract_grpc_hits(reply: &SearchReply) -> Result<Vec<(i64, f64)>, String> {
 }
 
 /// Parse conditions into Weaviate where filter format.
+/// Map a dataset distance name to the Weaviate `vectorIndexConfig.distance`
+/// value. Unknown metrics error. A wrong arm here would silently change ranking,
+/// so every arm is unit-tested.
+fn map_weaviate_distance(distance: &str) -> Result<&'static str, String> {
+    match distance.to_lowercase().as_str() {
+        "l2" | "euclidean" => Ok("l2-squared"),
+        "cosine" | "angular" => Ok("cosine"),
+        "dot" | "ip" => Ok("dot"),
+        other => Err(format!(
+            "Unsupported distance metric for Weaviate: {}",
+            other
+        )),
+    }
+}
+
 fn parse_weaviate_conditions(conditions: &serde_json::Value) -> Option<serde_json::Value> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
@@ -1607,5 +1612,144 @@ mod tests {
         assert_eq!(coerce_metadata_value(Some("keyword"), &v), json!("red"));
         // Unknown/unmapped fields pass through unchanged.
         assert_eq!(coerce_metadata_value(None, &v), json!("red"));
+    }
+
+    // ── OR-branch of the condition parser ──────────────────────────────────
+
+    #[test]
+    fn or_only_emits_or_operator_with_two_operands() {
+        let cond = json!({"or":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]});
+        let f = parse_weaviate_conditions(&cond).unwrap();
+        assert_eq!(f["operator"], "Or");
+        assert_eq!(f["operands"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn and_plus_or_wraps_both_groups_in_and() {
+        let cond = json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}},{"c":{"match":{"value":"z"}}}],
+        });
+        let f = parse_weaviate_conditions(&cond).unwrap();
+        assert_eq!(f["operator"], "And");
+        let ops = f["operands"].as_array().unwrap();
+        assert_eq!(ops.len(), 2);
+        // One operand is the collapsed AND (a bare Equal), the other the OR group.
+        assert!(ops.iter().any(|o| o["operator"] == "Or"));
+        assert!(ops.iter().any(|o| o["operator"] == "Equal"));
+    }
+
+    // ── Range operators ────────────────────────────────────────────────────
+
+    #[test]
+    fn range_single_ops_map_to_weaviate_operators() {
+        for (op, wv) in [
+            ("lt", "LessThan"),
+            ("lte", "LessThanEqual"),
+            ("gt", "GreaterThan"),
+            ("gte", "GreaterThanEqual"),
+        ] {
+            let f = build_weaviate_filter("n", "range", &json!({ op: 5 })).unwrap();
+            assert_eq!(f["operator"], wv, "op={}", op);
+            assert_eq!(f["path"], json!(["n"]));
+            assert_eq!(f["valueInt"], 5); // i64 → valueInt
+        }
+    }
+
+    #[test]
+    fn range_float_bound_uses_value_number() {
+        let f = build_weaviate_filter("n", "range", &json!({"lt":1.5})).unwrap();
+        assert_eq!(f["operator"], "LessThan");
+        assert_eq!(f["valueNumber"], 1.5);
+    }
+
+    #[test]
+    fn range_two_sided_gte_lt_wraps_in_and() {
+        let f = build_weaviate_filter("n", "range", &json!({"gte":10,"lt":20})).unwrap();
+        assert_eq!(f["operator"], "And");
+        let ops = f["operands"].as_array().unwrap();
+        assert_eq!(ops.len(), 2);
+        // Emitted in fixed order lt, gt, lte, gte.
+        assert_eq!(ops[0]["operator"], "LessThan");
+        assert_eq!(ops[0]["valueInt"], 20);
+        assert_eq!(ops[1]["operator"], "GreaterThanEqual");
+        assert_eq!(ops[1]["valueInt"], 10);
+    }
+
+    #[test]
+    fn range_unknown_op_is_none() {
+        assert!(build_weaviate_filter("n", "range", &json!({"foo":5})).is_none());
+    }
+
+    #[test]
+    fn range_null_bound_is_none() {
+        assert!(
+            build_weaviate_filter("n", "range", &json!({"gte":serde_json::Value::Null})).is_none()
+        );
+    }
+
+    // ── Geo filter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn geo_with_radius_emits_within_geo_range() {
+        let f = build_weaviate_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0,"radius":500}))
+            .unwrap();
+        assert_eq!(f["operator"], "WithinGeoRange");
+        assert_eq!(f["valueGeoRange"]["geoCoordinates"]["latitude"], 20.0);
+        assert_eq!(f["valueGeoRange"]["geoCoordinates"]["longitude"], 10.0);
+        assert_eq!(f["valueGeoRange"]["distance"]["max"], 500.0);
+    }
+
+    #[test]
+    fn geo_without_radius_uses_default_1000() {
+        let f = build_weaviate_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0})).unwrap();
+        assert_eq!(f["valueGeoRange"]["distance"]["max"], 1000.0);
+    }
+
+    #[test]
+    fn geo_missing_lat_or_lon_is_none() {
+        assert!(build_weaviate_filter("loc", "geo", &json!({"lon":10.0,"radius":5})).is_none());
+        assert!(build_weaviate_filter("loc", "geo", &json!({"lat":20.0,"radius":5})).is_none());
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn distance_mapping_covers_all_arms() {
+        assert_eq!(map_weaviate_distance("l2").unwrap(), "l2-squared");
+        assert_eq!(map_weaviate_distance("euclidean").unwrap(), "l2-squared");
+        assert_eq!(map_weaviate_distance("cosine").unwrap(), "cosine");
+        assert_eq!(map_weaviate_distance("angular").unwrap(), "cosine");
+        assert_eq!(map_weaviate_distance("dot").unwrap(), "dot");
+        assert_eq!(map_weaviate_distance("ip").unwrap(), "dot");
+        assert_eq!(map_weaviate_distance("COSINE").unwrap(), "cosine");
+        assert!(map_weaviate_distance("nope").is_err());
+    }
+
+    // ── Exact-match numeric / bool / non-scalar arms ───────────────────────
+
+    #[test]
+    fn exact_match_int_float_bool_use_correct_value_key() {
+        let i = build_weaviate_filter("n", "match", &json!({"value":5})).unwrap();
+        assert_eq!(i["operator"], "Equal");
+        assert_eq!(i["valueInt"], 5);
+
+        let fl = build_weaviate_filter("n", "match", &json!({"value":1.5})).unwrap();
+        assert_eq!(fl["valueNumber"], 1.5);
+
+        let b = build_weaviate_filter("flag", "match", &json!({"value":true})).unwrap();
+        assert_eq!(b["valueBoolean"], true);
+    }
+
+    #[test]
+    fn exact_match_array_value_falls_back_to_value_text() {
+        // No scalar guard: a non-scalar value falls through value_key's default
+        // (valueText) with the array as the value (documents behavior).
+        let f = build_weaviate_filter("n", "match", &json!({"value":[1,2]})).unwrap();
+        assert_eq!(f["operator"], "Equal");
+        assert_eq!(f["valueText"], json!([1, 2]));
     }
 }

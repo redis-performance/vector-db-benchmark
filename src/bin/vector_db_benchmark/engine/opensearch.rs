@@ -148,17 +148,10 @@ impl OpenSearchEngine {
             ));
         }
 
-        // Map distance metric (OpenSearch uses different names than ES)
-        let space_type = match dist_lower.as_str() {
-            "l2" | "euclidean" => "l2",
-            "cosine" | "angular" => "cosinesimil",
-            other => {
-                return Err(format!(
-                    "Unsupported distance metric for OpenSearch: {}",
-                    other
-                ))
-            }
-        };
+        // Map distance metric (OpenSearch uses different names than ES).
+        // dot/ip already rejected above; os_space_type is only reached for the
+        // supported/unknown arms here (its dot arm exists for direct unit-testing).
+        let space_type = os_space_type(&dist_lower)?;
 
         // Build properties with knn_vector type
         let mut properties = serde_json::json!({
@@ -488,6 +481,21 @@ fn id_to_uuid_hex(id: i64) -> String {
 fn uuid_hex_to_int(hex: &str) -> Result<i64, String> {
     let uuid = Uuid::parse_str(hex).map_err(|e| format!("Invalid UUID hex '{}': {}", hex, e))?;
     Ok(uuid.as_u128() as i64)
+}
+
+/// Map a dataset distance name to the OpenSearch knn `space_type`. `dot`/`ip`
+/// is unsupported and unknown metrics error. A wrong arm here would silently
+/// change ranking, so every arm is unit-tested.
+fn os_space_type(distance: &str) -> Result<&'static str, String> {
+    match distance.to_lowercase().as_str() {
+        "l2" | "euclidean" => Ok("l2"),
+        "cosine" | "angular" => Ok("cosinesimil"),
+        "dot" | "ip" => Err("OpenSearch does not support DOT product distance".to_string()),
+        other => Err(format!(
+            "Unsupported distance metric for OpenSearch: {}",
+            other
+        )),
+    }
 }
 
 /// Parse conditions into OpenSearch bool query (same DSL as Elasticsearch).
@@ -1161,5 +1169,128 @@ mod tests {
         assert!(parse_os_conditions(&json!({})).is_none());
         // Present-but-empty sub-arrays should not produce a filter either.
         assert!(parse_os_conditions(&json!({"and": [], "or": []})).is_none());
+    }
+
+    #[test]
+    fn and_or_combined_keeps_both_and_min_should() {
+        let conditions = json!({
+            "and": [{"a": {"match": {"value": 1}}}],
+            "or": [{"b": {"match": {"value": 2}}}],
+        });
+        let parsed = parse_os_conditions(&conditions).expect("should parse");
+        let bool_query = &parsed["bool"];
+        assert_eq!(bool_query["must"].as_array().unwrap().len(), 1);
+        assert_eq!(bool_query["should"].as_array().unwrap().len(), 1);
+        assert_eq!(bool_query["minimum_should_match"], 1);
+    }
+
+    // ── Range operators ────────────────────────────────────────────────────
+
+    #[test]
+    fn range_lt_lte_gt_gte_map_to_os_range() {
+        assert_eq!(
+            build_filter("n", "range", &json!({"lt":5})).unwrap(),
+            json!({"range":{"n":{"lt":5}}})
+        );
+        assert_eq!(
+            build_filter("n", "range", &json!({"lte":5})).unwrap(),
+            json!({"range":{"n":{"lte":5}}})
+        );
+        assert_eq!(
+            build_filter("n", "range", &json!({"gt":5})).unwrap(),
+            json!({"range":{"n":{"gt":5}}})
+        );
+        assert_eq!(
+            build_filter("n", "range", &json!({"gte":5})).unwrap(),
+            json!({"range":{"n":{"gte":5}}})
+        );
+    }
+
+    #[test]
+    fn range_two_sided_keeps_both_bounds() {
+        assert_eq!(
+            build_filter("n", "range", &json!({"gte":10,"lt":20})).unwrap(),
+            json!({"range":{"n":{"gte":10,"lt":20}}})
+        );
+    }
+
+    #[test]
+    fn range_unknown_op_yields_empty_range_object() {
+        assert_eq!(
+            build_filter("n", "range", &json!({"foo":5})).unwrap(),
+            json!({"range":{"n":{}}})
+        );
+    }
+
+    #[test]
+    fn range_null_bound_is_skipped() {
+        assert_eq!(
+            build_filter("n", "range", &json!({"gte":serde_json::Value::Null})).unwrap(),
+            json!({"range":{"n":{}}})
+        );
+    }
+
+    // ── Geo filter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn geo_with_radius_emits_geo_distance() {
+        assert_eq!(
+            build_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0,"radius":500})).unwrap(),
+            json!({"geo_distance":{"distance":"500m","loc":{"lat":20.0,"lon":10.0}}})
+        );
+    }
+
+    #[test]
+    fn geo_without_radius_uses_default_1000m() {
+        assert_eq!(
+            build_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0})).unwrap(),
+            json!({"geo_distance":{"distance":"1000m","loc":{"lat":20.0,"lon":10.0}}})
+        );
+    }
+
+    #[test]
+    fn geo_missing_lat_or_lon_is_none() {
+        assert!(build_filter("loc", "geo", &json!({"lon":10.0,"radius":5})).is_none());
+        assert!(build_filter("loc", "geo", &json!({"lat":20.0,"radius":5})).is_none());
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn os_space_type_covers_all_arms() {
+        assert_eq!(os_space_type("l2").unwrap(), "l2");
+        assert_eq!(os_space_type("euclidean").unwrap(), "l2");
+        assert_eq!(os_space_type("cosine").unwrap(), "cosinesimil");
+        assert_eq!(os_space_type("angular").unwrap(), "cosinesimil");
+        assert_eq!(os_space_type("COSINE").unwrap(), "cosinesimil");
+        assert!(os_space_type("dot").is_err());
+        assert!(os_space_type("ip").is_err());
+        assert!(os_space_type("nope").is_err());
+    }
+
+    // ── Exact-match numeric / bool / non-scalar arms ───────────────────────
+
+    #[test]
+    fn exact_match_int_float_bool_pass_through_match() {
+        assert_eq!(
+            build_filter("n", "match", &json!({"value":5})).unwrap(),
+            json!({"match":{"n":5}})
+        );
+        assert_eq!(
+            build_filter("n", "match", &json!({"value":1.5})).unwrap(),
+            json!({"match":{"n":1.5}})
+        );
+        assert_eq!(
+            build_filter("flag", "match", &json!({"value":true})).unwrap(),
+            json!({"match":{"flag":true}})
+        );
+    }
+
+    #[test]
+    fn exact_match_array_value_passes_through_unguarded() {
+        assert_eq!(
+            build_filter("n", "match", &json!({"value":[1,2]})).unwrap(),
+            json!({"match":{"n":[1,2]}})
+        );
     }
 }

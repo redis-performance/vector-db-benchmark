@@ -160,22 +160,9 @@ impl Engine for PgVectorEngine {
         let dist_lower = distance.to_lowercase();
 
         // Set distance operator and HNSW ops class
-        match dist_lower.as_str() {
-            "l2" | "euclidean" => {
-                self.distance_op = "<->".to_string();
-                self.hnsw_ops_class = "vector_l2_ops".to_string();
-            }
-            "cosine" | "angular" => {
-                self.distance_op = "<=>".to_string();
-                self.hnsw_ops_class = "vector_cosine_ops".to_string();
-            }
-            other => {
-                return Err(format!(
-                    "PgVector does not support distance metric: {}",
-                    other
-                ))
-            }
-        }
+        let (distance_op, hnsw_ops_class) = map_pg_distance_ops(&dist_lower)?;
+        self.distance_op = distance_op.to_string();
+        self.hnsw_ops_class = hnsw_ops_class.to_string();
 
         let mut conn = self.connect()?;
 
@@ -558,6 +545,21 @@ impl Engine for PgVectorEngine {
 
 // ── PgVector condition parser ─────────────────────────────────────
 
+/// Map a dataset distance name to the pgvector `(operator, hnsw_ops_class)` pair.
+/// `dot`/`ip` is unsupported and unknown metrics error. A wrong arm here (e.g.
+/// L2 op with a cosine ops class) would silently change ranking, so every arm is
+/// unit-tested.
+fn map_pg_distance_ops(distance: &str) -> Result<(&'static str, &'static str), String> {
+    match distance.to_lowercase().as_str() {
+        "l2" | "euclidean" => Ok(("<->", "vector_l2_ops")),
+        "cosine" | "angular" => Ok(("<=>", "vector_cosine_ops")),
+        other => Err(format!(
+            "PgVector does not support distance metric: {}",
+            other
+        )),
+    }
+}
+
 fn parse_pg_conditions(conditions: &serde_json::Value) -> Option<String> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
@@ -761,5 +763,128 @@ mod tests {
         let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
         let sql = parse_pg_conditions(&cond).unwrap();
         assert!(sql.contains("false"), "sql={}", sql);
+    }
+
+    // ── OR-branch of the condition parser ──────────────────────────────────
+
+    #[test]
+    fn or_only_emits_or_joined_group() {
+        let cond = json!({"or":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]});
+        assert_eq!(
+            parse_pg_conditions(&cond).unwrap(),
+            "(\"a\" = 'x' OR \"b\" = 'y')"
+        );
+    }
+
+    #[test]
+    fn and_plus_or_keeps_both_groups() {
+        let cond = json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}}],
+        });
+        assert_eq!(
+            parse_pg_conditions(&cond).unwrap(),
+            "(\"a\" = 'x') AND (\"b\" = 'y')"
+        );
+    }
+
+    // ── Range operators ────────────────────────────────────────────────────
+
+    fn range_sql(criteria: serde_json::Value) -> Option<String> {
+        parse_pg_conditions(&json!({"and":[{"n":{"range":criteria}}]}))
+    }
+
+    #[test]
+    fn range_lt_lte_gt_gte() {
+        assert_eq!(range_sql(json!({"lt":5})).unwrap(), "(\"n\" < 5)");
+        assert_eq!(range_sql(json!({"lte":5})).unwrap(), "(\"n\" <= 5)");
+        assert_eq!(range_sql(json!({"gt":5})).unwrap(), "(\"n\" > 5)");
+        assert_eq!(range_sql(json!({"gte":5})).unwrap(), "(\"n\" >= 5)");
+    }
+
+    #[test]
+    fn range_two_sided_gte_lt() {
+        // Criteria object keys iterate in sorted order (BTreeMap): gte, then lt.
+        assert_eq!(
+            range_sql(json!({"gte":10,"lt":20})).unwrap(),
+            "(\"n\" >= 10 AND \"n\" < 20)"
+        );
+    }
+
+    #[test]
+    fn range_unknown_op_is_none() {
+        assert!(range_sql(json!({"foo":5})).is_none());
+    }
+
+    #[test]
+    fn range_null_bound_is_none() {
+        assert!(range_sql(json!({"gte":serde_json::Value::Null})).is_none());
+    }
+
+    // ── Geo filter (unsupported → None) ────────────────────────────────────
+
+    #[test]
+    fn geo_is_unsupported_returns_none() {
+        // pgvector filters on scalar columns only; geo has no clause arm, so the
+        // filter is dropped. Assert None so an accidental future change is caught.
+        let cond = json!({"and":[{"loc":{"geo":{"lat":20.0,"lon":10.0,"radius":5}}}]});
+        assert!(parse_pg_conditions(&cond).is_none());
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn distance_ops_mapping_covers_all_arms() {
+        assert_eq!(map_pg_distance_ops("l2").unwrap(), ("<->", "vector_l2_ops"));
+        assert_eq!(
+            map_pg_distance_ops("euclidean").unwrap(),
+            ("<->", "vector_l2_ops")
+        );
+        assert_eq!(
+            map_pg_distance_ops("cosine").unwrap(),
+            ("<=>", "vector_cosine_ops")
+        );
+        assert_eq!(
+            map_pg_distance_ops("angular").unwrap(),
+            ("<=>", "vector_cosine_ops")
+        );
+        assert_eq!(
+            map_pg_distance_ops("COSINE").unwrap(),
+            ("<=>", "vector_cosine_ops")
+        );
+        // dot/ip unsupported; unknown errors too.
+        assert!(map_pg_distance_ops("dot").is_err());
+        assert!(map_pg_distance_ops("ip").is_err());
+        assert!(map_pg_distance_ops("nope").is_err());
+    }
+
+    // ── Exact-match numeric / bool / non-scalar arms ───────────────────────
+
+    #[test]
+    fn exact_match_int_float_bool() {
+        assert_eq!(
+            parse_pg_conditions(&json!({"and":[{"n":{"match":{"value":5}}}]})).unwrap(),
+            "(\"n\" = 5)"
+        );
+        assert_eq!(
+            parse_pg_conditions(&json!({"and":[{"n":{"match":{"value":1.5}}}]})).unwrap(),
+            "(\"n\" = 1.5)"
+        );
+        assert_eq!(
+            parse_pg_conditions(&json!({"and":[{"flag":{"match":{"value":true}}}]})).unwrap(),
+            "(\"flag\" = true)"
+        );
+    }
+
+    #[test]
+    fn exact_match_array_value_inlines_json_array() {
+        // No scalar guard: a non-scalar value is Display-formatted verbatim.
+        assert_eq!(
+            parse_pg_conditions(&json!({"and":[{"n":{"match":{"value":[1,2]}}}]})).unwrap(),
+            "(\"n\" = [1,2])"
+        );
     }
 }

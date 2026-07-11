@@ -152,16 +152,9 @@ impl ElasticsearchEngine {
             ));
         }
 
-        let similarity = match dist_lower.as_str() {
-            "l2" | "euclidean" => "l2_norm",
-            "cosine" | "angular" => "cosine",
-            other => {
-                return Err(format!(
-                    "Unsupported distance metric for Elasticsearch: {}",
-                    other
-                ))
-            }
-        };
+        // dot/ip already rejected above; es_similarity is only reached for the
+        // supported/unknown arms here (its dot arm exists for direct unit-testing).
+        let similarity = es_similarity(&dist_lower)?;
 
         let mut properties = serde_json::json!({
             "vector": {
@@ -431,6 +424,24 @@ fn id_to_uuid_hex(id: i64) -> String {
 fn uuid_hex_to_int(hex: &str) -> Result<i64, String> {
     let uuid = Uuid::parse_str(hex).map_err(|e| format!("Invalid UUID hex '{}': {}", hex, e))?;
     Ok(uuid.as_u128() as i64)
+}
+
+/// Map a dataset distance name to the Elasticsearch `dense_vector` similarity.
+/// `dot`/`ip` is unsupported (ES has no raw dot-product similarity) and unknown
+/// metrics error. A wrong arm here would silently change ranking, so every arm
+/// is unit-tested.
+fn es_similarity(distance: &str) -> Result<&'static str, String> {
+    match distance.to_lowercase().as_str() {
+        "l2" | "euclidean" => Ok("l2_norm"),
+        "cosine" | "angular" => Ok("cosine"),
+        "dot" | "ip" => {
+            Err("Elasticsearch does not support DOT product distance for benchmarking".to_string())
+        }
+        other => Err(format!(
+            "Unsupported distance metric for Elasticsearch: {}",
+            other
+        )),
+    }
 }
 
 // ── Elasticsearch condition parser ─────────────────────────────────────
@@ -1199,5 +1210,128 @@ mod tests {
         assert!(parse_es_conditions(&serde_json::json!({})).is_none());
         // Present-but-empty sub-arrays should not produce a filter either.
         assert!(parse_es_conditions(&serde_json::json!({"and": [], "or": []})).is_none());
+    }
+
+    // ── Range operators ────────────────────────────────────────────────────
+
+    #[test]
+    fn range_lt_lte_gt_gte_map_to_es_range() {
+        assert_eq!(
+            build_filter("n", "range", &serde_json::json!({"lt":5})).unwrap(),
+            serde_json::json!({"range":{"n":{"lt":5}}})
+        );
+        assert_eq!(
+            build_filter("n", "range", &serde_json::json!({"lte":5})).unwrap(),
+            serde_json::json!({"range":{"n":{"lte":5}}})
+        );
+        assert_eq!(
+            build_filter("n", "range", &serde_json::json!({"gt":5})).unwrap(),
+            serde_json::json!({"range":{"n":{"gt":5}}})
+        );
+        assert_eq!(
+            build_filter("n", "range", &serde_json::json!({"gte":5})).unwrap(),
+            serde_json::json!({"range":{"n":{"gte":5}}})
+        );
+    }
+
+    #[test]
+    fn range_two_sided_keeps_both_bounds() {
+        assert_eq!(
+            build_filter("n", "range", &serde_json::json!({"gte":10,"lt":20})).unwrap(),
+            serde_json::json!({"range":{"n":{"gte":10,"lt":20}}})
+        );
+    }
+
+    #[test]
+    fn range_unknown_op_yields_empty_range_object() {
+        assert_eq!(
+            build_filter("n", "range", &serde_json::json!({"foo":5})).unwrap(),
+            serde_json::json!({"range":{"n":{}}})
+        );
+    }
+
+    #[test]
+    fn range_null_bound_is_skipped() {
+        assert_eq!(
+            build_filter(
+                "n",
+                "range",
+                &serde_json::json!({"gte":serde_json::Value::Null})
+            )
+            .unwrap(),
+            serde_json::json!({"range":{"n":{}}})
+        );
+    }
+
+    // ── Geo filter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn geo_with_radius_emits_geo_distance() {
+        assert_eq!(
+            build_filter(
+                "loc",
+                "geo",
+                &serde_json::json!({"lat":20.0,"lon":10.0,"radius":500})
+            )
+            .unwrap(),
+            serde_json::json!({"geo_distance":{"distance":"500m","loc":{"lat":20.0,"lon":10.0}}})
+        );
+    }
+
+    #[test]
+    fn geo_without_radius_uses_default_1000m() {
+        assert_eq!(
+            build_filter("loc", "geo", &serde_json::json!({"lat":20.0,"lon":10.0})).unwrap(),
+            serde_json::json!({"geo_distance":{"distance":"1000m","loc":{"lat":20.0,"lon":10.0}}})
+        );
+    }
+
+    #[test]
+    fn geo_missing_lat_or_lon_is_none() {
+        assert!(build_filter("loc", "geo", &serde_json::json!({"lon":10.0,"radius":5})).is_none());
+        assert!(build_filter("loc", "geo", &serde_json::json!({"lat":20.0,"radius":5})).is_none());
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn es_similarity_covers_all_arms() {
+        assert_eq!(es_similarity("l2").unwrap(), "l2_norm");
+        assert_eq!(es_similarity("euclidean").unwrap(), "l2_norm");
+        assert_eq!(es_similarity("cosine").unwrap(), "cosine");
+        assert_eq!(es_similarity("angular").unwrap(), "cosine");
+        assert_eq!(es_similarity("COSINE").unwrap(), "cosine");
+        // dot/ip unsupported by ES; unknown errors too.
+        assert!(es_similarity("dot").is_err());
+        assert!(es_similarity("ip").is_err());
+        assert!(es_similarity("nope").is_err());
+    }
+
+    // ── Exact-match numeric / bool / non-scalar arms ───────────────────────
+
+    #[test]
+    fn exact_match_int_float_bool_pass_through_match() {
+        assert_eq!(
+            build_filter("n", "match", &serde_json::json!({"value":5})).unwrap(),
+            serde_json::json!({"match":{"n":5}})
+        );
+        assert_eq!(
+            build_filter("n", "match", &serde_json::json!({"value":1.5})).unwrap(),
+            serde_json::json!({"match":{"n":1.5}})
+        );
+        assert_eq!(
+            build_filter("flag", "match", &serde_json::json!({"value":true})).unwrap(),
+            serde_json::json!({"match":{"flag":true}})
+        );
+    }
+
+    #[test]
+    fn exact_match_array_value_passes_through_unguarded() {
+        // ES build_filter has no scalar guard: a non-scalar value is forwarded as
+        // the match value (documents behavior; differs from qdrant's None).
+        assert_eq!(
+            build_filter("n", "match", &serde_json::json!({"value":[1,2]})).unwrap(),
+            serde_json::json!({"match":{"n":[1,2]}})
+        );
     }
 }
