@@ -162,11 +162,15 @@ impl ValkeyEngine {
         // later attempt instead of failing together. On a healthy endpoint attempt 0
         // succeeds instantly => identical behaviour for every other engine/deploy.
         let connect_timeout = std::time::Duration::from_secs(15);
-        // 45s (not 300s): long enough for any single HSET/FT.SEARCH reply even under
-        // 100-client load, short enough that a stalled read surfaces fast instead of
-        // hanging the run for minutes. A fired SO_RCVTIMEO shows up as EAGAIN
-        // ("Resource temporarily unavailable", os error 11).
-        let io_timeout = std::time::Duration::from_secs(45);
+        // 90s: MUST stay above the server-side FT.SEARCH TIMEOUT (60s) so the server
+        // always replies (result or its own timeout error) before this client-side
+        // SO_RCVTIMEO can fire. If the client timed out first (e.g. 45s < 60s) the
+        // late server reply would land in the socket and the NEXT query on the reused
+        // connection would parse those stale bytes -> silently wrong recall. Still
+        // bounded so a genuine stall surfaces (as EAGAIN / os error 11) instead of
+        // hanging forever; the synchronous upload (VALKEY_MAX_PIPE_BYTES) already
+        // prevents the write-side pipeline stall this used to guard against.
+        let io_timeout = std::time::Duration::from_secs(90);
         let mut last_err = String::new();
         for attempt in 0..6u32 {
             match client.get_connection_with_timeout(connect_timeout) {
