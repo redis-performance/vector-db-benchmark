@@ -33,8 +33,13 @@ pub struct TurbopufferEngine {
     distance_metric: String,
     /// Tokio runtime for async operations
     rt: tokio::runtime::Runtime,
-    /// Shared client (wrapped in Arc for thread-safe sharing)
+    /// Shared client used by the non-search paths (configure/upload/delete),
+    /// which all run on `rt`. The parallel search path deliberately does NOT
+    /// use this client: it builds an independent client per worker so each
+    /// worker's tokio runtime owns its own reqwest connection pool.
     client: Arc<Client>,
+    /// API key kept so each search worker can construct its own client.
+    api_key: String,
 }
 
 impl TurbopufferEngine {
@@ -75,6 +80,7 @@ impl TurbopufferEngine {
             distance_metric: "cosine_distance".to_string(),
             rt,
             client,
+            api_key,
         })
     }
 
@@ -479,7 +485,11 @@ impl Engine for TurbopufferEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
-        let parallel = params.parallel.unwrap_or(1) as usize;
+        // Clamp to >=1: `parallel` is Option<i64> from config, so 0 would spawn
+        // no workers (AtomicUsize never drained → spurious "no searches" error)
+        // and a negative value would wrap to usize::MAX via `as usize` and spawn
+        // unbounded threads. Both degrade to a single worker.
+        let parallel = params.parallel.unwrap_or(1).max(1) as usize;
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
@@ -506,21 +516,44 @@ impl Engine for TurbopufferEngine {
             parallel
         );
 
+        // Workers index `neighbors[idx]` / `parsed_filters[idx]` for every idx in
+        // `0..num_to_run`. Guard the invariant up front (returning Err) rather than
+        // letting an out-of-bounds panic inside a worker unwind thread::scope and
+        // discard every other worker's collected samples via join().unwrap().
+        if neighbors.len() < num_to_run {
+            return Err(format!(
+                "dataset misaligned: {} neighbor lists for {} queries to run",
+                neighbors.len(),
+                num_to_run
+            ));
+        }
+        if parsed_filters.len() < num_to_run {
+            return Err(format!(
+                "dataset misaligned: {} parsed filters for {} queries to run",
+                parsed_filters.len(),
+                num_to_run
+            ));
+        }
+
         // Persistent-worker harness (mirrors qdrant/elasticsearch search()):
-        // exactly `parallel` workers, each building ONE tokio runtime and reusing
-        // the shared Arc<Client>, pulling query indices from a shared AtomicUsize.
-        // This replaces the old O(num_to_run) per-query runtime construction and
-        // the per-query global Mutex<Vec> locking. Each worker accumulates
-        // thread-local sample buffers (only successful queries contribute, so a
-        // failure is never scored as a 0-recall / 0-latency sample) which are
-        // merged after join — no per-query mutex in the timed loop. Order is
-        // completion order across workers, which is fine for aggregates.
+        // `workers` persistent workers, each building ONE tokio runtime and its
+        // OWN client, pulling query indices from a shared AtomicUsize. This
+        // replaces the old O(num_to_run) per-query runtime construction and the
+        // per-query global Mutex<Vec> locking. Each worker accumulates thread-local
+        // sample buffers (only successful queries contribute, so a failure is never
+        // scored as a 0-recall / 0-latency sample) which are merged after join — no
+        // per-query mutex in the timed loop. Order is completion order across
+        // workers, which is fine for aggregates.
+        //
+        // Cap the worker count at num_to_run so a `parallel >> num_to_run` misconfig
+        // does not build idle runtimes (runtime creation inside the timed window).
+        let workers = parallel.min(num_to_run.max(1));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
         let total_start = Instant::now();
 
-        let client = &self.client;
+        let api_key = self.api_key.as_str();
         let namespace = self.namespace.as_str();
         let distance_metric = self.distance_metric.as_str();
         let queries = &queries;
@@ -534,9 +567,8 @@ impl Engine for TurbopufferEngine {
         let mut ndcgs: Vec<f64> = Vec::with_capacity(num_to_run);
 
         std::thread::scope(|s| {
-            let mut handles = Vec::with_capacity(parallel);
-            for _ in 0..parallel {
-                let client = Arc::clone(client);
+            let mut handles = Vec::with_capacity(workers);
+            for _ in 0..workers {
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -558,6 +590,15 @@ impl Engine for TurbopufferEngine {
                             return (t, p, r, mr, nd);
                         }
                     };
+
+                    // Independent client per worker: a shared (or cloned) reqwest
+                    // Client shares one connection pool, which would tie pooled
+                    // keep-alive connections to whichever runtime first dialed them
+                    // (cross-runtime scheduling jitter in the measured per-query
+                    // latency) and cause sporadic "connection closed" failures when
+                    // a finished worker drops its runtime mid-flight for another.
+                    // Constructing inside block_on binds the pool to this runtime.
+                    let client = rt.block_on(async { Client::new(api_key) });
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
