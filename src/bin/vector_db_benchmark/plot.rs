@@ -368,4 +368,57 @@ mod tests {
         let svg = render_svg("empty", &[]);
         assert!(svg.contains("</svg>"));
     }
+
+    #[test]
+    fn human_qps_k_suffix_and_plain() {
+        // >= 1000 → one-decimal "k"; < 1000 → integer, no suffix.
+        assert_eq!(human_qps(0.0), "0");
+        assert_eq!(human_qps(500.0), "500");
+        assert_eq!(human_qps(999.0), "999");
+        assert_eq!(human_qps(999.4), "999"); // rounds down to integer
+        assert_eq!(human_qps(1000.0), "1.0k");
+        assert_eq!(human_qps(1500.0), "1.5k");
+        assert_eq!(human_qps(12_345.0), "12.3k");
+    }
+
+    #[test]
+    fn parse_points_filters_non_finite_precision_keys() {
+        // Precision keys "NaN"/"inf" parse to non-finite f64 and must be dropped
+        // by the `is_finite()` retain, leaving only the real 0.90 point.
+        let json = serde_json::json!({
+            "precision_summary": {
+                "0.90": {"QPS": 5000.0},
+                "NaN":  {"QPS": 100.0},
+                "inf":  {"QPS": 200.0}
+            }
+        });
+        let pts = parse_points(&json);
+        assert_eq!(pts.len(), 1);
+        assert!((pts[0].precision - 0.90).abs() < 1e-9);
+        assert!(pts
+            .iter()
+            .all(|p| p.precision.is_finite() && p.qps.is_finite()));
+    }
+
+    #[test]
+    fn parse_points_skips_entries_missing_qps() {
+        // A precision_summary entry without a QPS field is dropped by filter_map;
+        // if that empties the map, parse falls back to search_results.
+        let json = serde_json::json!({
+            "precision_summary": {
+                "0.90": {"P50 (ms)": 1.0}
+            },
+            "search_results": [
+                {"mean_precisions": 0.8, "rps": 100.0}
+            ]
+        });
+        let pts = parse_points(&json);
+        assert_eq!(pts.len(), 1);
+        assert!((pts[0].precision - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_points_empty_when_no_usable_data() {
+        assert!(parse_points(&serde_json::json!({})).is_empty());
+    }
 }

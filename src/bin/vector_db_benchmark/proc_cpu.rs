@@ -58,6 +58,11 @@ pub fn sample() -> Option<CpuSample> {
 /// fields, where index 0 is field 3 (`state`).
 fn read_proc_self_ticks() -> Option<u64> {
     let stat = fs::read_to_string("/proc/self/stat").ok()?;
+    parse_proc_self_ticks(&stat)
+}
+
+/// Pure parser for a `/proc/self/stat` line (extracted for testability).
+fn parse_proc_self_ticks(stat: &str) -> Option<u64> {
     let after = stat.rsplit_once(')')?.1;
     let fields: Vec<&str> = after.split_whitespace().collect();
     // After the last ')', fields[0] = state (field 3). utime = field 14, stime =
@@ -70,6 +75,12 @@ fn read_proc_self_ticks() -> Option<u64> {
 /// Parse the aggregate `cpu` line of /proc/stat → (total_jiffies, idle_jiffies).
 fn read_proc_stat_totals() -> Option<(u64, u64)> {
     let stat = fs::read_to_string("/proc/stat").ok()?;
+    parse_proc_stat_totals(&stat)
+}
+
+/// Pure parser for `/proc/stat` content (extracted for testability). Reads the
+/// first line, which must be the aggregate `cpu` line.
+fn parse_proc_stat_totals(stat: &str) -> Option<(u64, u64)> {
     let line = stat.lines().next()?; // first line is the "cpu " aggregate
     let mut it = line.split_whitespace();
     if it.next()? != "cpu" {
@@ -231,5 +242,90 @@ mod tests {
         // On Linux CI this should read real /proc; elsewhere it's None. Either
         // way it must not panic.
         let _ = sample();
+    }
+
+    #[test]
+    fn parse_self_ticks_handles_comm_with_spaces_and_parens() {
+        // comm = "(evil ) name)" contains both a space and an interior ')'. The
+        // parser splits after the LAST ')', so the numeric fields start at the
+        // real `state` field. After that ')': index 0=state(R), then 10 more
+        // fields, index 11=utime(100), index 12=stime(50) → 150.
+        let line = "1234 (evil ) name) R 1 1 1 0 -1 0 0 0 0 0 100 50 3 4 20 0 1 0 999";
+        assert_eq!(parse_proc_self_ticks(line), Some(150));
+    }
+
+    #[test]
+    fn parse_self_ticks_simple_comm() {
+        // Plain comm with no tricks: utime=7, stime=8 → 15.
+        let line = "42 (cat) R 1 1 1 0 -1 0 0 0 0 0 7 8 0 0";
+        assert_eq!(parse_proc_self_ticks(line), Some(15));
+    }
+
+    #[test]
+    fn parse_self_ticks_none_when_truncated() {
+        // Too few numeric fields after ')': utime/stime indices missing → None.
+        let line = "42 (cat) R 1 1 1";
+        assert_eq!(parse_proc_self_ticks(line), None);
+        // No ')' at all → rsplit_once fails → None.
+        assert_eq!(parse_proc_self_ticks("no parens here"), None);
+    }
+
+    #[test]
+    fn parse_stat_totals_basic() {
+        // cpu user nice system idle iowait ... → total = sum(all) = 870,
+        // idle = idle(700) + iowait(20) = 720.
+        assert_eq!(
+            parse_proc_stat_totals("cpu 100 0 50 700 20 0 0 0\ncpu0 1 2 3 4 5\n"),
+            Some((870, 720))
+        );
+    }
+
+    #[test]
+    fn parse_stat_totals_rejects_non_cpu_first_line() {
+        // First token isn't exactly "cpu" (it's "cpu0") → None.
+        assert_eq!(parse_proc_stat_totals("cpu0 1 2 3 4 5 6"), None);
+    }
+
+    #[test]
+    fn parse_stat_totals_rejects_truncated_line() {
+        // Fewer than 5 numeric fields → None (can't compute idle+iowait).
+        assert_eq!(parse_proc_stat_totals("cpu 1 2 3"), None);
+        // Empty content → no first line → None.
+        assert_eq!(parse_proc_stat_totals(""), None);
+    }
+
+    #[test]
+    fn compute_before_equals_after_is_none() {
+        // Identical snapshots → d_total == 0 → cpu-derived fields degrade to None.
+        let same = s(500, 4000, 3000);
+        let sat = compute(Some(same), Some(same), 4, 8);
+        assert!(sat.client_cpu_cores_used.is_none());
+        assert!(sat.system_cpu_pct.is_none());
+        assert!(!sat.client_saturated); // not oversubscribed either (4 <= 8)
+    }
+
+    #[test]
+    fn compute_flags_system_cpu_from_other_processes() {
+        // The box is busy from OTHER processes: over the window the aggregate
+        // advanced 1000 jiffies with only 50 idle → system CPU 95% (> 90%), but
+        // our process burned only 10 ticks → 10*8/1000 = 0.08 cores, well under
+        // the 0.85 client threshold. Saturation must be flagged, and the reason
+        // must cite SYSTEM CPU (not client CPU).
+        let sat = compute(Some(s(0, 0, 0)), Some(s(10, 1000, 50)), 4, 8);
+        let cores = sat.client_cpu_cores_used.unwrap();
+        assert!((cores - 0.08).abs() < 1e-9, "cores={}", cores);
+        assert!((sat.system_cpu_pct.unwrap() - 0.95).abs() < 1e-9);
+        assert!(sat.client_saturated);
+        assert!(
+            sat.saturation_reason.contains("system CPU"),
+            "reason={}",
+            sat.saturation_reason
+        );
+        assert!(
+            !sat.saturation_reason.contains("client CPU"),
+            "reason={}",
+            sat.saturation_reason
+        );
+        assert_eq!(sat.saturation_reason, "system CPU 95%");
     }
 }

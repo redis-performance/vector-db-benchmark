@@ -567,6 +567,79 @@ mod tests {
         assert!(read_neighbours_strict(&p).is_err());
     }
 
+    /// Build a `Dataset` with just the accessor-relevant fields set. `path` is a
+    /// dummy string (these tests never touch the filesystem).
+    fn accessor_dataset(
+        dataset_type: Option<&str>,
+        distance: Option<&str>,
+        vector_size: Option<i64>,
+    ) -> Dataset {
+        Dataset::new(DatasetConfig {
+            name: "acc".to_string(),
+            dataset_type: dataset_type.map(String::from),
+            path: serde_json::Value::String("dummy".to_string()),
+            distance: distance.map(String::from),
+            vector_size,
+            vector_count: None,
+            link: None,
+            schema: None,
+            description: None,
+        })
+    }
+
+    #[test]
+    fn distance_defaults_to_cosine() {
+        assert_eq!(accessor_dataset(None, None, None).distance(), "cosine");
+        assert_eq!(accessor_dataset(None, Some("l2"), None).distance(), "l2");
+    }
+
+    #[test]
+    fn vector_size_defaults_to_128() {
+        assert_eq!(accessor_dataset(None, None, None).vector_size(), 128);
+        assert_eq!(accessor_dataset(None, None, Some(768)).vector_size(), 768);
+    }
+
+    #[test]
+    fn needs_normalization_true_for_cosine_and_angular_case_insensitive() {
+        for d in [
+            "cosine", "COSINE", "Cosine", "angular", "ANGULAR", "Angular",
+        ] {
+            assert!(
+                accessor_dataset(None, Some(d), None).needs_normalization(),
+                "distance={d}"
+            );
+        }
+        // Default (None) resolves to "cosine" → needs normalization.
+        assert!(accessor_dataset(None, None, None).needs_normalization());
+    }
+
+    #[test]
+    fn needs_normalization_false_for_l2_and_dot() {
+        for d in ["l2", "L2", "dot", "Dot", "euclidean", "ip"] {
+            assert!(
+                !accessor_dataset(None, Some(d), None).needs_normalization(),
+                "distance={d}"
+            );
+        }
+    }
+
+    #[test]
+    fn type_detection_is_sparse_and_is_hybrid() {
+        assert!(accessor_dataset(Some("sparse"), None, None).is_sparse());
+        assert!(!accessor_dataset(Some("sparse"), None, None).is_hybrid());
+
+        assert!(accessor_dataset(Some("hybrid"), None, None).is_hybrid());
+        assert!(!accessor_dataset(Some("hybrid"), None, None).is_sparse());
+
+        // Neither for other / missing types.
+        let tar = accessor_dataset(Some("tar"), None, None);
+        assert!(!tar.is_sparse());
+        assert!(!tar.is_hybrid());
+        let none = accessor_dataset(None, None, None);
+        assert!(!none.is_sparse());
+        assert!(!none.is_hybrid());
+    }
+
     #[test]
     fn read_hybrid_data_rejects_row_mismatch() {
         let dir = tempfile::tempdir().unwrap();
