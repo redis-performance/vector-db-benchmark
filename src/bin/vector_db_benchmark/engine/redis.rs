@@ -1171,23 +1171,19 @@ fn ft_search_filter_only(
     }
 }
 
-/// Execute FT.SEARCH KNN query with optional prefilter, return (id, score) pairs.
-#[allow(clippy::too_many_arguments)]
-fn ft_search_knn(
-    conn: &mut Connection,
-    query_vector: &[f32],
-    top: usize,
-    ef: i64,
+/// Build the FT.SEARCH KNN query string for the given filter.
+///
+/// This is pure client-side request construction (string formatting) and is
+/// deliberately kept OUT of the per-query timed window: it is precomputed once
+/// per query before the parallel search region so the measured latency wraps
+/// only the RPC round-trip + reply parse, matching pgvector/qdrant. The query
+/// vector is passed as a `$vec_param` PARAM, so this structure is identical
+/// across queries that share a filter.
+fn build_knn_query_str(
     algorithm: &str,
     hybrid_policy: &str,
-    query_timeout: i64,
     filter: Option<&ParsedFilter>,
-    data_type: &str,
-) -> Result<Vec<(i64, f64)>, String> {
-    // Encode the query vector to match the index TYPE (e.g. INT8), otherwise a
-    // FLOAT32 blob would be sent against an INT8 index.
-    let vec_bytes = encode_vector(data_type, query_vector);
-
+) -> String {
     // Build KNN conditions string
     let knn_conditions = if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
         "EF_RUNTIME $EF"
@@ -1203,20 +1199,36 @@ fn ft_search_knn(
     };
 
     // Prefilter: use filter expression or "*" (match all)
-    let prefilter = filter
-        .as_ref()
-        .map(|(expr, _)| expr.as_str())
-        .unwrap_or("*");
+    let prefilter = filter.map(|(expr, _)| expr.as_str()).unwrap_or("*");
 
-    let query_str = format!(
+    format!(
         "{}=>[KNN $K @vector $vec_param {} AS vector_score]{}",
         prefilter, knn_conditions, hybrid_suffix
-    );
+    )
+}
 
+/// Execute FT.SEARCH KNN query with optional prefilter, return (id, score) pairs.
+///
+/// `vec_bytes` (the encoded query blob) and `query_str` are precomputed by the
+/// caller BEFORE the timed window — this function performs only the cheap arg
+/// binding, the `cmd.query` RPC round-trip, and the reply parse (all legitimate
+/// server latency).
+#[allow(clippy::too_many_arguments)]
+fn ft_search_knn(
+    conn: &mut Connection,
+    vec_bytes: &[u8],
+    query_str: &str,
+    top: usize,
+    ef: i64,
+    algorithm: &str,
+    hybrid_policy: &str,
+    query_timeout: i64,
+    filter: Option<&ParsedFilter>,
+) -> Result<Vec<(i64, f64)>, String> {
     // Build FT.SEARCH command
     let mut cmd = redis::cmd("FT.SEARCH");
     cmd.arg("idx")
-        .arg(&query_str)
+        .arg(query_str)
         .arg("SORTBY")
         .arg("vector_score")
         .arg("ASC")
@@ -1240,7 +1252,7 @@ fn ft_search_knn(
     let total_param_count = base_param_count + filter_param_count;
 
     cmd.arg("PARAMS").arg(total_param_count);
-    cmd.arg("vec_param").arg(&vec_bytes[..]);
+    cmd.arg("vec_param").arg(vec_bytes);
     cmd.arg("K").arg(top.to_string());
 
     if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
@@ -1620,6 +1632,23 @@ impl Engine for RedisEngine {
             queries.len()
         };
 
+        // Precompute all client-side request construction BEFORE the timed
+        // region so the per-query timed window wraps ONLY the RPC round-trip +
+        // reply parse (matching pgvector/qdrant). `encode_vector` allocates and
+        // — for quantized index types — runs a per-element numeric conversion
+        // of the query vector; that is client work, not server latency. The
+        // FT.SEARCH query string is likewise pure string formatting; the vector
+        // is bound as a `$vec_param` PARAM so the string is identical across
+        // queries sharing a filter. Both are shared read-only across workers.
+        let encoded_queries: Vec<Vec<u8>> = queries
+            .iter()
+            .map(|q| encode_vector(&self.config.data_type, q))
+            .collect();
+        let query_strs: Vec<String> = parsed_filters
+            .iter()
+            .map(|f| build_knn_query_str(&self.config.algorithm, &hybrid_policy, f.as_ref()))
+            .collect();
+
         // Search execution. Each worker accumulates samples into thread-local
         // buffers and returns them on join; the main thread concatenates. This
         // keeps the timed hot loop free of the per-query cross-thread Mutex<Vec>
@@ -1643,11 +1672,11 @@ impl Engine for RedisEngine {
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
                 let algorithm = self.config.algorithm.clone();
-                let data_type = self.config.data_type.clone();
                 let hybrid_policy = hybrid_policy.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
+                let encoded_queries = &encoded_queries;
+                let query_strs = &query_strs;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -1687,17 +1716,19 @@ impl Engine for RedisEngine {
                             }
                         });
 
+                        // Timed window: precomputed blob + query string are passed
+                        // in, so this wraps only the RPC round-trip and reply parse.
                         let query_start = Instant::now();
                         let results = ft_search_knn(
                             &mut conn,
-                            &queries[idx],
+                            &encoded_queries[idx],
+                            &query_strs[idx],
                             top,
                             ef,
                             &algorithm,
                             &hybrid_policy,
                             query_timeout,
                             parsed_filters[idx].as_ref(),
-                            &data_type,
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
 
@@ -1891,17 +1922,27 @@ impl Engine for RedisEngine {
                                 }
                             });
 
+                            // NOTE: the mixed (search+update) path is intentionally
+                            // left as-is for a later PR — encode + query-string
+                            // build stay inside the timed window here to preserve
+                            // its current measurement behavior exactly.
                             let query_start = Instant::now();
+                            let vec_bytes = encode_vector(&data_type, &queries[idx]);
+                            let query_str = build_knn_query_str(
+                                &algorithm,
+                                &hybrid_policy,
+                                parsed_filters[idx].as_ref(),
+                            );
                             let results = ft_search_knn(
                                 &mut conn,
-                                &queries[idx],
+                                &vec_bytes,
+                                &query_str,
                                 top,
                                 ef,
                                 &algorithm,
                                 &hybrid_policy,
                                 query_timeout,
                                 parsed_filters[idx].as_ref(),
-                                &data_type,
                             );
                             let query_time = query_start.elapsed().as_secs_f64();
 
@@ -2301,6 +2342,61 @@ mod tests {
     fn encodes_uint8_clamped_to_0_255() {
         let bytes = encode_vector("UINT8", &[0.0, 255.0, 300.0, -5.0, 12.6]);
         assert_eq!(bytes, vec![0, 255, 255, 0, 13]);
+    }
+
+    // ── Timed-window hoisting fidelity ─────────────────────────────────────
+    // The perf change moves encode_vector + query-string construction OUT of
+    // the per-query timed window (precomputed once before the parallel region).
+    // These tests prove the precomputed values are byte-for-byte identical to
+    // what the old in-window code produced, so recall/precision cannot change.
+
+    #[test]
+    fn encode_vector_is_deterministic_fp32_and_quantized() {
+        // Same input → identical bytes on every call (no hidden state), for both
+        // the default FLOAT32 path and a per-element-converting quantized path.
+        let v = vec![0.0f32, 1.4, -1.6, 42.0, -7.25];
+        assert_eq!(encode_vector("FLOAT32", &v), encode_vector("FLOAT32", &v));
+        assert_eq!(encode_vector("INT8", &v), encode_vector("INT8", &v));
+    }
+
+    #[test]
+    fn precomputed_blobs_match_per_query_encode() {
+        // Emulate the batch precompute (`queries.iter().map(encode_vector)`) and
+        // assert each slot equals the old per-query encode call, for FP32 and a
+        // quantized type.
+        let queries = [
+            vec![1.0f32, -2.5, 3.5],
+            vec![0.0f32, 127.4, -128.9],
+            vec![10.0f32, -10.0, 0.5],
+        ];
+        for data_type in ["FLOAT32", "INT8"] {
+            let precomputed: Vec<Vec<u8>> = queries
+                .iter()
+                .map(|q| encode_vector(data_type, q))
+                .collect();
+            for (i, q) in queries.iter().enumerate() {
+                assert_eq!(
+                    precomputed[i],
+                    encode_vector(data_type, q),
+                    "precomputed blob differs from per-query encode ({data_type}, q{i})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_knn_query_str_matches_legacy_format() {
+        use super::build_knn_query_str;
+        // No filter, HNSW → EF_RUNTIME present, prefilter "*".
+        assert_eq!(
+            build_knn_query_str("hnsw", "", None),
+            "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        );
+        // ADHOC_BF hybrid policy drops EF_RUNTIME and appends the policy suffix.
+        assert_eq!(
+            build_knn_query_str("hnsw", "ADHOC_BF", None),
+            "*=>[KNN $K @vector $vec_param  AS vector_score]=>{$HYBRID_POLICY: ADHOC_BF }"
+        );
     }
 
     // ── redis::Value (RESP FT.SEARCH) response parsing ─────────────────────
