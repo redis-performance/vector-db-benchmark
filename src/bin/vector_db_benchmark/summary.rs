@@ -497,6 +497,97 @@ mod tests {
         assert_eq!(format_precision_key(0.98), "0.9800");
     }
 
+    /// Build a `SearchEntry` for saturation tests. `sat_reason` empty means the
+    /// run was not flagged client-saturated.
+    fn entry(ef: &str, parallel: i64, rps: f64, p95: f64, sat_reason: &str) -> SearchEntry {
+        SearchEntry {
+            search_id: 0,
+            ef: ef.to_string(),
+            parallel,
+            results: SearchResults {
+                rps,
+                p95_time: p95,
+                client_saturated: !sat_reason.is_empty(),
+                saturation_reason: sat_reason.to_string(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn saturation_warns_when_throughput_stops_scaling() {
+        // Same ef, parallel 8→16: QPS rises only ~5% (< 10%) while p95 rises →
+        // higher concurrency is not paying off, so a throughput warning fires.
+        let entries = vec![
+            entry("64", 8, 1000.0, 0.02, ""),
+            entry("64", 16, 1050.0, 0.03, ""),
+        ];
+        let w = saturation_warnings(&entries);
+        assert_eq!(w.len(), 1, "got {w:?}");
+        assert!(
+            w[0].starts_with("throughput saturated: ef=64 parallel 8→16"),
+            "got {}",
+            w[0]
+        );
+        // gain 50/1000 = 5%; p95 rose (0.03/0.02 - 1) = 50%.
+        assert!(w[0].contains("gained only 5% QPS"), "got {}", w[0]);
+        assert!(w[0].contains("p95 rose 50%"), "got {}", w[0]);
+        assert!(
+            w[0].ends_with("higher concurrency is not paying off"),
+            "got {}",
+            w[0]
+        );
+    }
+
+    #[test]
+    fn saturation_silent_when_throughput_scales_well() {
+        // QPS doubles (1000→2000, gain 100% ≥ 10%) → clean scaling, no warning
+        // even though p95 rose.
+        let entries = vec![
+            entry("64", 8, 1000.0, 0.02, ""),
+            entry("64", 16, 2000.0, 0.03, ""),
+        ];
+        assert!(saturation_warnings(&entries).is_empty());
+    }
+
+    #[test]
+    fn saturation_no_warn_when_p95_falls() {
+        // Gain < 10% but p95 FALLS (0.03→0.02): the `p95_cur > p95_prev` guard is
+        // not met, so no throughput warning is emitted.
+        let entries = vec![
+            entry("64", 8, 1000.0, 0.03, ""),
+            entry("64", 16, 1050.0, 0.02, ""),
+        ];
+        assert!(saturation_warnings(&entries).is_empty());
+    }
+
+    #[test]
+    fn saturation_warns_on_client_saturated_flag() {
+        // A single client-saturated run emits a client-saturation warning
+        // (and the throughput loop is skipped with < 2 points).
+        let entries = vec![entry("128", 32, 5000.0, 0.05, "client CPU >90%")];
+        let w = saturation_warnings(&entries);
+        assert_eq!(w.len(), 1, "got {w:?}");
+        assert_eq!(
+            w[0],
+            "client-saturated: ef=128 parallel=32 (client CPU >90%) — QPS/latency reflect the client, not the DB"
+        );
+    }
+
+    #[test]
+    fn saturation_client_warnings_ordered_by_parallel() {
+        // Two client-saturated points at parallel 16 and 8 → sorted ascending by
+        // parallel, so the parallel=8 warning is emitted first.
+        let entries = vec![
+            entry("64", 16, 4000.0, 0.04, "oversubscribed"),
+            entry("64", 8, 3000.0, 0.03, "cpu"),
+        ];
+        let w = saturation_warnings(&entries);
+        assert_eq!(w.len(), 2, "got {w:?}");
+        assert!(w[0].contains("parallel=8"), "first: {}", w[0]);
+        assert!(w[1].contains("parallel=16"), "second: {}", w[1]);
+    }
+
     #[test]
     fn test_analyze_precision_performance_picks_best_qps() {
         let entries = vec![
