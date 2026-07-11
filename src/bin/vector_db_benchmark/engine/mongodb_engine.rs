@@ -491,12 +491,36 @@ impl MongoDBEngine {
     ///
     /// Polls `listSearchIndexes` until the index reports `queryable=true` and
     /// `status` is READY or ACTIVE, then verifies with a probe search using
-    /// the first uploaded vector to confirm the index has actually ingested docs.
+    /// the first uploaded vector.
+    ///
+    /// Atlas Vector Search is EVENTUALLY CONSISTENT: the index flips to
+    /// `queryable=true` (and `$vectorSearch` starts returning PARTIAL results)
+    /// while it is still ingesting the just-uploaded documents. A probe that
+    /// stops at the first non-empty result therefore lets the benchmark search
+    /// run against a half-built index, which understates recall (the observed
+    /// `recall 0.27` flake). To close that race we run the probe as a
+    /// full-precision search (`numCandidates >= expected`) and wait until it
+    /// surfaces EVERY uploaded document — i.e. the index has fully caught up —
+    /// before returning. The required count is bounded by `PROBE_CAP` so a huge
+    /// production dataset doesn't wait on an impractically large single query.
     fn wait_for_index_catchup(
         &self,
         expected_count: usize,
         probe_vector: &[f32],
     ) -> Result<(), String> {
+        // Upper bound on how many docs we require the probe to surface. Atlas
+        // caps both `limit` and `numCandidates` at 10_000, and for large corpora
+        // "index reports ready AND has surfaced this many docs" is a sufficient
+        // catch-up signal.
+        const PROBE_CAP: usize = 10_000;
+        let want = expected_count.min(PROBE_CAP);
+        // Request all wanted docs, scanning a candidate pool that covers the
+        // whole (bounded) corpus so the search is effectively exact — an indexed
+        // doc is guaranteed to be surfaced, so `results.len() < want` means the
+        // index has not finished ingesting yet.
+        let probe_top = want.max(1);
+        let probe_candidates = expected_count.saturating_mul(2).clamp(probe_top, PROBE_CAP) as i64;
+
         println!(
             "Waiting for vector search index to index all {} documents...",
             expected_count
@@ -540,21 +564,41 @@ impl MongoDBEngine {
                 }
             }
 
-            // Once the index reports ready, do a probe search to verify ingestion
+            // Once the index reports ready, probe with a full-precision search and
+            // wait until it has surfaced EVERY uploaded document — only then has the
+            // eventually-consistent index finished ingesting (partial ingestion
+            // returns fewer than `want` and understates recall).
             if index_ready {
-                match vector_search(&coll, &self.index_name, probe_vector, 1, 10, None) {
-                    Ok(results) if !results.is_empty() => {
+                match vector_search(
+                    &coll,
+                    &self.index_name,
+                    probe_vector,
+                    probe_top,
+                    probe_candidates,
+                    None,
+                ) {
+                    Ok(results) if results.len() >= want => {
                         println!(
-                            "Index ready (probe search returned results) after {:.1}s.",
+                            "Index caught up ({} / {} docs searchable) after {:.1}s.",
+                            results.len(),
+                            expected_count,
                             start.elapsed().as_secs_f64()
                         );
                         return Ok(());
                     }
-                    _ => {
+                    Ok(results) => {
                         if last_print.elapsed().as_secs() >= 10 {
                             println!(
-                                "  index ready but probe search returned no results, waiting..."
+                                "  index ready but still ingesting: {} / {} docs searchable, waiting...",
+                                results.len(),
+                                want
                             );
+                            last_print = Instant::now();
+                        }
+                    }
+                    Err(_) => {
+                        if last_print.elapsed().as_secs() >= 10 {
+                            println!("  index ready but probe search errored, waiting...");
                             last_print = Instant::now();
                         }
                     }
