@@ -162,17 +162,31 @@ impl ValkeyEngine {
         // later attempt instead of failing together. On a healthy endpoint attempt 0
         // succeeds instantly => identical behaviour for every other engine/deploy.
         let connect_timeout = std::time::Duration::from_secs(15);
-        let io_timeout = std::time::Duration::from_secs(300);
+        // 45s (not 300s): long enough for any single HSET/FT.SEARCH reply even under
+        // 100-client load, short enough that a stalled read surfaces fast instead of
+        // hanging the run for minutes. A fired SO_RCVTIMEO shows up as EAGAIN
+        // ("Resource temporarily unavailable", os error 11).
+        let io_timeout = std::time::Duration::from_secs(45);
         let mut last_err = String::new();
         for attempt in 0..6u32 {
             match client.get_connection_with_timeout(connect_timeout) {
                 Ok(conn) => {
                     conn.set_read_timeout(Some(io_timeout)).ok();
                     conn.set_write_timeout(Some(io_timeout)).ok();
+                    if attempt > 0 {
+                        eprintln!(
+                            "[valkey] connect to {}:{} recovered on attempt {}",
+                            host, port, attempt
+                        );
+                    }
                     return Ok(conn);
                 }
                 Err(e) => {
                     last_err = e.to_string();
+                    eprintln!(
+                        "[valkey] connect attempt {} to {}:{} failed: {}",
+                        attempt, host, port, last_err
+                    );
                     let base = 100u64 * (1u64 << attempt.min(4)); // 100..1600ms
                     let jitter = rand::random::<u64>() % 250;
                     std::thread::sleep(std::time::Duration::from_millis(base + jitter));
