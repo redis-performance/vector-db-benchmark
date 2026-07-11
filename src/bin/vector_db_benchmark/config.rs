@@ -344,3 +344,95 @@ pub fn describe_engines(verbose: bool) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn matches_pattern_exact_and_star() {
+        assert!(matches_pattern("redis", "redis"));
+        assert!(matches_pattern("anything-at-all", "*"));
+        assert!(!matches_pattern("redis", "qdrant"));
+    }
+
+    #[test]
+    fn matches_pattern_glob_positions() {
+        // prefix* / *suffix / mid*dle
+        assert!(matches_pattern("redis-hnsw-m16", "redis*"));
+        assert!(matches_pattern("redis-hnsw", "*hnsw"));
+        assert!(matches_pattern("redis-m16-hnsw", "redis*hnsw"));
+        // no-match cases
+        assert!(!matches_pattern("qdrant-hnsw", "redis*"));
+        assert!(!matches_pattern("redis-flat", "*hnsw"));
+    }
+
+    #[test]
+    fn matches_pattern_invalid_pattern_is_false() {
+        // An invalid glob (unclosed char class) → Pattern::new errors →
+        // unwrap_or(false). Never panics, never matches.
+        assert!(!matches_pattern("redis", "redis["));
+    }
+
+    #[test]
+    fn format_count_magnitude_branches() {
+        // < 1000 → raw integer string.
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        // >= 1000 → K.
+        assert_eq!(format_count(1000), "1.0K");
+        assert_eq!(format_count(1500), "1.5K");
+        assert_eq!(format_count(999_999), "1000.0K");
+        // >= 1_000_000 → M.
+        assert_eq!(format_count(1_000_000), "1.0M");
+        assert_eq!(format_count(2_500_000), "2.5M");
+        // >= 1_000_000_000 → B.
+        assert_eq!(format_count(1_000_000_000), "1.0B");
+        assert_eq!(format_count(3_200_000_000), "3.2B");
+        // Negative is < 1000 → raw string.
+        assert_eq!(format_count(-42), "-42");
+    }
+
+    #[test]
+    fn format_schema_non_object_uses_to_string() {
+        assert_eq!(format_schema(&json!("hello"), 100), "\"hello\"");
+        assert_eq!(format_schema(&json!(42), 100), "42");
+    }
+
+    #[test]
+    fn format_schema_empty_object() {
+        assert_eq!(format_schema(&json!({}), 100), "0 fields");
+    }
+
+    #[test]
+    fn format_schema_one_and_two_fields_list_names() {
+        // 1 field: singular "field" + name.
+        assert_eq!(
+            format_schema(&json!({"category": "keyword"}), 100),
+            "1 field: category"
+        );
+        // 2 fields: names joined in the object's key order (serde_json's Map
+        // preserves insertion order here, so "b" then "a" stays "b, a").
+        assert_eq!(
+            format_schema(&json!({"b": "int", "a": "keyword"}), 100),
+            "2 fields: b, a"
+        );
+    }
+
+    #[test]
+    fn format_schema_three_plus_fields_lists_sorted_deduped_types() {
+        // 3+ fields → "(types)" where the string-valued types are sorted+deduped.
+        assert_eq!(
+            format_schema(&json!({"a": "keyword", "b": "int", "c": "keyword"}), 100),
+            "3 fields (int, keyword)"
+        );
+    }
+
+    #[test]
+    fn format_schema_falls_back_to_base_when_detail_too_long() {
+        // detail "1 field: category" is 17 chars; with max_len 5 it exceeds the
+        // budget → returns the bare base "1 field".
+        assert_eq!(format_schema(&json!({"category": "keyword"}), 5), "1 field");
+    }
+}
