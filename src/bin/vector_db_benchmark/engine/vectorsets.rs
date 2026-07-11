@@ -1143,16 +1143,19 @@ fn never_match_clause(field_name: &str) -> String {
 fn build_range_clause(field_name: &str, criteria: &serde_json::Value) -> Option<String> {
     let mut parts = Vec::new();
 
-    if let Some(gt) = criteria.get("gt") {
+    // Only numeric bounds constrain the range; a null/non-numeric bound carries no
+    // constraint and is skipped (matching redis/valkey/qdrant/es/os/weaviate/milvus/
+    // pgvector) — otherwise `format_number` would fall back to "0" and emit `.n > 0`.
+    if let Some(gt) = criteria.get("gt").filter(|v| v.is_number()) {
         parts.push(format!(".{} > {}", field_name, format_number(gt)));
     }
-    if let Some(gte) = criteria.get("gte") {
+    if let Some(gte) = criteria.get("gte").filter(|v| v.is_number()) {
         parts.push(format!(".{} >= {}", field_name, format_number(gte)));
     }
-    if let Some(lt) = criteria.get("lt") {
+    if let Some(lt) = criteria.get("lt").filter(|v| v.is_number()) {
         parts.push(format!(".{} < {}", field_name, format_number(lt)));
     }
-    if let Some(lte) = criteria.get("lte") {
+    if let Some(lte) = criteria.get("lte").filter(|v| v.is_number()) {
         parts.push(format!(".{} <= {}", field_name, format_number(lte)));
     }
 
@@ -1410,5 +1413,88 @@ mod filter_expr_tests {
     fn empty_conditions_none() {
         assert!(build_filter_expression(&json!({})).is_none());
         assert!(build_filter_expression(&json!({"and": [], "or": []})).is_none());
+    }
+
+    // ── OR-branch: combined AND + OR ───────────────────────────────────────
+
+    #[test]
+    fn and_plus_or_joins_and_group_with_parenthesized_or_group() {
+        let cond = json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}}],
+        });
+        // AND clause (no parens for a single clause) joined with the parenthesized
+        // OR group by ` and `.
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".a == \"x\" and (.b == \"y\")".to_string())
+        );
+    }
+
+    // ── Range operators (individual arms) ──────────────────────────────────
+
+    fn range_expr(criteria: serde_json::Value) -> Option<String> {
+        build_filter_expression(&json!({"and":[{"n":{"range":criteria}}]}))
+    }
+
+    #[test]
+    fn range_lt_is_exclusive() {
+        assert_eq!(range_expr(json!({"lt":5})).unwrap(), ".n < 5");
+    }
+
+    #[test]
+    fn range_lte_is_inclusive() {
+        assert_eq!(range_expr(json!({"lte":5})).unwrap(), ".n <= 5");
+    }
+
+    #[test]
+    fn range_gt_is_exclusive() {
+        assert_eq!(range_expr(json!({"gt":5})).unwrap(), ".n > 5");
+    }
+
+    #[test]
+    fn range_gte_is_inclusive() {
+        assert_eq!(range_expr(json!({"gte":5})).unwrap(), ".n >= 5");
+    }
+
+    #[test]
+    fn range_two_sided_gte_lt() {
+        // Fixed order gt, gte, lt, lte joined by ` and `.
+        assert_eq!(
+            range_expr(json!({"gte":10,"lt":20})).unwrap(),
+            ".n >= 10 and .n < 20"
+        );
+    }
+
+    #[test]
+    fn range_unknown_op_is_none() {
+        assert!(range_expr(json!({"foo":5})).is_none());
+    }
+
+    #[test]
+    fn range_null_bound_is_skipped() {
+        // A null bound carries no constraint, so the clause is skipped (→ None),
+        // matching redis/valkey/qdrant/es/os/weaviate/milvus/pgvector. (Regression
+        // guard: build_range_clause used to emit `.n > 0` via format_number(Null).)
+        let got = range_expr(json!({"gt": serde_json::Value::Null}));
+        assert!(got.is_none(), "null bound should be skipped, got {:?}", got);
+    }
+
+    // ── Exact-match float / non-scalar arms ────────────────────────────────
+
+    #[test]
+    fn exact_match_float_emits_equality() {
+        assert_eq!(
+            build_filter_expression(&json!({"and":[{"score":{"match":{"value":1.5}}}]})),
+            Some(".score == 1.5".to_string())
+        );
+    }
+
+    #[test]
+    fn exact_match_array_value_is_none() {
+        // A non-scalar (array) value matches no scalar arm → clause dropped → None.
+        assert!(
+            build_filter_expression(&json!({"and":[{"n":{"match":{"value":[1,2]}}}]})).is_none()
+        );
     }
 }

@@ -585,6 +585,19 @@ fn extract_search_hits(resp_body: &serde_json::Value) -> Result<Vec<(i64, f64)>,
 }
 
 /// Parse conditions into Milvus filter expression.
+/// Map a dataset distance name to the Milvus `metric_type`. Cosine deliberately
+/// maps to `IP` (Milvus scores cosine via inner-product over normalized vectors).
+/// Unknown metrics error. A wrong arm here would silently change ranking, so
+/// every arm is unit-tested.
+fn map_milvus_metric_type(distance: &str) -> Result<&'static str, String> {
+    match distance.to_lowercase().as_str() {
+        "l2" | "euclidean" => Ok("L2"),
+        "dot" | "ip" => Ok("IP"),
+        "cosine" | "angular" => Ok("IP"), // Milvus uses IP for cosine (normalized vectors)
+        other => Err(format!("Unsupported distance metric for Milvus: {}", other)),
+    }
+}
+
 /// Milvus uses string-based filter expressions like "field == value && field > 10"
 fn parse_milvus_conditions(conditions: &serde_json::Value) -> Option<String> {
     let obj = conditions.as_object()?;
@@ -758,12 +771,7 @@ impl Engine for MilvusEngine {
         let dist_lower = distance.to_lowercase();
 
         // Map distance metric
-        self.metric_type = match dist_lower.as_str() {
-            "l2" | "euclidean" => "L2".to_string(),
-            "dot" | "ip" => "IP".to_string(),
-            "cosine" | "angular" => "IP".to_string(), // Milvus uses IP for cosine (normalized vectors)
-            other => return Err(format!("Unsupported distance metric for Milvus: {}", other)),
-        };
+        self.metric_type = map_milvus_metric_type(&dist_lower)?.to_string();
 
         let client = self.create_client()?;
 
@@ -1105,5 +1113,117 @@ mod tests {
         let e = json!({"and": [{"color": {"match": {"any": [r#"a"b\c"#]}}}]});
         let expr = parse_milvus_conditions(&e).unwrap();
         assert_eq!(expr, r#"(color in ["a\"b\\c"])"#, "expr={}", expr);
+    }
+
+    // ── OR-branch of the condition parser ──────────────────────────────────
+
+    #[test]
+    fn or_only_emits_double_pipe_group() {
+        let cond = json!({"or":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]});
+        assert_eq!(
+            parse_milvus_conditions(&cond).unwrap(),
+            r#"(a == "x" || b == "y")"#
+        );
+    }
+
+    #[test]
+    fn and_plus_or_keeps_both_groups() {
+        let cond = json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}}],
+        });
+        assert_eq!(
+            parse_milvus_conditions(&cond).unwrap(),
+            r#"(a == "x") && (b == "y")"#
+        );
+    }
+
+    // ── Range operators ────────────────────────────────────────────────────
+
+    fn range_expr(criteria: serde_json::Value) -> Option<String> {
+        build_milvus_filter("age", "range", &criteria)
+    }
+
+    #[test]
+    fn range_lt_lte_gt_gte() {
+        assert_eq!(range_expr(json!({"lt":5})).unwrap(), "(age < 5)");
+        assert_eq!(range_expr(json!({"lte":5})).unwrap(), "(age <= 5)");
+        assert_eq!(range_expr(json!({"gt":5})).unwrap(), "(age > 5)");
+        assert_eq!(range_expr(json!({"gte":5})).unwrap(), "(age >= 5)");
+    }
+
+    #[test]
+    fn range_two_sided_gte_lt() {
+        // Fixed order lt, gt, lte, gte joined by &&.
+        assert_eq!(
+            range_expr(json!({"gte":10,"lt":20})).unwrap(),
+            "(age < 20 && age >= 10)"
+        );
+    }
+
+    #[test]
+    fn range_unknown_op_is_none() {
+        assert!(range_expr(json!({"foo":5})).is_none());
+    }
+
+    #[test]
+    fn range_null_bound_is_none() {
+        assert!(range_expr(json!({"gte":serde_json::Value::Null})).is_none());
+    }
+
+    // ── Geo filter (unsupported → None) ────────────────────────────────────
+
+    #[test]
+    fn geo_is_unsupported_returns_none() {
+        // Milvus has no native geo filter; the builder must return None so a
+        // future accidental change is caught.
+        assert!(
+            build_milvus_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0,"radius":5})).is_none()
+        );
+    }
+
+    // ── Distance-metric mapping ────────────────────────────────────────────
+
+    #[test]
+    fn metric_type_mapping_covers_all_arms() {
+        assert_eq!(map_milvus_metric_type("l2").unwrap(), "L2");
+        assert_eq!(map_milvus_metric_type("euclidean").unwrap(), "L2");
+        assert_eq!(map_milvus_metric_type("dot").unwrap(), "IP");
+        assert_eq!(map_milvus_metric_type("ip").unwrap(), "IP");
+        // Cosine deliberately maps to IP (inner-product over normalized vectors).
+        assert_eq!(map_milvus_metric_type("cosine").unwrap(), "IP");
+        assert_eq!(map_milvus_metric_type("angular").unwrap(), "IP");
+        assert!(map_milvus_metric_type("nope").is_err());
+    }
+
+    // ── Exact-match numeric / bool / non-scalar arms ───────────────────────
+
+    #[test]
+    fn exact_match_int_float_bool() {
+        assert_eq!(
+            build_milvus_filter("n", "match", &json!({"value":5})).unwrap(),
+            "n == 5"
+        );
+        assert_eq!(
+            build_milvus_filter("n", "match", &json!({"value":1.5})).unwrap(),
+            "n == 1.5"
+        );
+        assert_eq!(
+            build_milvus_filter("flag", "match", &json!({"value":true})).unwrap(),
+            "flag == true"
+        );
+    }
+
+    #[test]
+    fn exact_match_array_value_inlines_json_array() {
+        // No scalar guard: a non-scalar value is Display-formatted verbatim
+        // (documents behavior).
+        assert_eq!(
+            build_milvus_filter("n", "match", &json!({"value":[1,2]})).unwrap(),
+            "n == [1,2]"
+        );
     }
 }
