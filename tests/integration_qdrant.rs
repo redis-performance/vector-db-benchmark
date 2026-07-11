@@ -828,13 +828,21 @@ fn test_binary_qdrant_quantization_modes() {
 
     // BINARY: 1-bit-per-dim is the lossiest mode, so on undifferentiated uniform
     // data the binary index needs the highest oversampling to surface the true
-    // neighbours into the rescore candidate set. With oversampling=8 it still
-    // recovers high recall against live qdrant.
+    // neighbours into the rescore candidate set. Oversampling only widens the
+    // full-precision rescore candidate pool (limit * oversampling), so a larger
+    // value trades a little search time for a higher, MORE STABLE recall without
+    // touching the no-rescore negative control in
+    // `test_binary_qdrant_quantization_is_applied`. At oversampling=8 the binary
+    // arm occasionally dipped just under the 0.9 floor (observed ~0.895) because
+    // binary is the lossiest mode and qdrant's HNSW construction is run-to-run
+    // nondeterministic; oversampling=20 rescores 200 full-precision candidates
+    // (top=10) out of 1000 docs, which keeps recall comfortably above the floor
+    // on every run.
     let bq = run_quantization_mode(
         "qdrant-quant-bq",
         "quant-bq",
         Some(serde_json::json!({"binary": {"always_ram": true}})),
-        Some(serde_json::json!({"rescore": true, "oversampling": 8.0})),
+        Some(serde_json::json!({"rescore": true, "oversampling": 20.0})),
         &data,
     );
     println!("qdrant binary quantization recall={bq:.3}");
