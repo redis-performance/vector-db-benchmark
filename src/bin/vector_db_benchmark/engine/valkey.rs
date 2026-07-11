@@ -1224,10 +1224,41 @@ fn ft_search_filter_only(
     }
 }
 
+/// Build the Valkey FT.SEARCH KNN query string for the given filter.
+///
+/// Pure client-side string formatting, kept OUT of the per-query timed window
+/// (precomputed once per query before the parallel region). EF_RUNTIME is a
+/// supported per-query HNSW attribute (validated by valkey-search
+/// ft_search_parser.cc) — without it, every ef in the search sweep runs at the
+/// index default, collapsing the precision/recall curve to a single point.
+/// Passed as a `$EF` param. The query vector is bound as `$vec_param`, so this
+/// string is identical across queries sharing a filter.
+fn build_knn_query_str(filter: Option<&ParsedFilter>) -> String {
+    let prefilter = filter.map(|(expr, _)| expr.as_str()).unwrap_or("*");
+    format!(
+        "{}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]",
+        prefilter
+    )
+}
+
+/// Encode a query vector to the FLOAT32 little-endian blob Valkey expects.
+///
+/// Kept as a standalone fn so the caller can precompute all query blobs BEFORE
+/// the timed window (client work, not server latency).
+fn encode_query_vector(query_vector: &[f32]) -> Vec<u8> {
+    query_vector.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// Execute a Valkey FT.SEARCH KNN query, return (id, score) pairs.
+///
+/// `vec_bytes` and `query_str` are precomputed by the caller BEFORE the timed
+/// window; this performs only the arg binding, the `cmd.query` RPC round-trip,
+/// and the reply parse.
 #[allow(clippy::too_many_arguments)]
 fn ft_search_knn(
     conn: &mut Connection,
-    query_vector: &[f32],
+    vec_bytes: &[u8],
+    query_str: &str,
     top: usize,
     ef: i64,
     _algorithm: &str,
@@ -1235,26 +1266,10 @@ fn ft_search_knn(
     query_timeout: i64,
     filter: Option<&ParsedFilter>,
 ) -> Result<Vec<(i64, f64)>, String> {
-    let vec_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-
-    // Valkey Search KNN query syntax. EF_RUNTIME is a supported per-query HNSW
-    // attribute (validated by valkey-search ft_search_parser.cc) — without it,
-    // every ef in the search sweep runs at the index default, collapsing the
-    // precision/recall curve to a single point. Passed as a $EF param below.
-    let prefilter = filter
-        .as_ref()
-        .map(|(expr, _)| expr.as_str())
-        .unwrap_or("*");
-
-    let query_str = format!(
-        "{}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]",
-        prefilter
-    );
-
     // Valkey Search: DIALECT 2 only, no SORTBY on computed fields
     let mut cmd = redis::cmd("FT.SEARCH");
     cmd.arg("idx")
-        .arg(&query_str)
+        .arg(query_str)
         .arg("LIMIT")
         .arg(0)
         .arg(top)
@@ -1271,7 +1286,7 @@ fn ft_search_knn(
     let total_param_count = 6 + filter_param_count; // vec_param(2) + K(2) + EF(2) + filter params
 
     cmd.arg("PARAMS").arg(total_param_count);
-    cmd.arg("vec_param").arg(&vec_bytes[..]);
+    cmd.arg("vec_param").arg(vec_bytes);
     cmd.arg("K").arg(top.to_string());
     cmd.arg("EF").arg(ef.to_string());
 
@@ -1687,6 +1702,18 @@ impl Engine for ValkeyEngine {
             queries.len()
         };
 
+        // Precompute client-side request construction BEFORE the timed region so
+        // the per-query window wraps ONLY the RPC round-trip + reply parse
+        // (matching pgvector/qdrant). Encoding the FLOAT32 blob and formatting
+        // the query string are client work, not server latency. Shared read-only
+        // across workers.
+        let encoded_queries: Vec<Vec<u8>> =
+            queries.iter().map(|q| encode_query_vector(q)).collect();
+        let query_strs: Vec<String> = parsed_filters
+            .iter()
+            .map(|f| build_knn_query_str(f.as_ref()))
+            .collect();
+
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
         // order-independent so results are unchanged; work counter uses Relaxed.
@@ -1708,9 +1735,10 @@ impl Engine for ValkeyEngine {
                 let port = self.port;
                 let algorithm = self.config.algorithm.clone();
                 let hybrid_policy = hybrid_policy.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
+                let encoded_queries = &encoded_queries;
+                let query_strs = &query_strs;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -1760,10 +1788,13 @@ impl Engine for ValkeyEngine {
                             }
                         });
 
+                        // Timed window: precomputed blob + query string are passed
+                        // in, so this wraps only the RPC round-trip and reply parse.
                         let query_start = Instant::now();
                         let results = ft_search_knn(
                             &mut conn,
-                            &queries[idx],
+                            &encoded_queries[idx],
+                            &query_strs[idx],
                             top,
                             ef,
                             &algorithm,
@@ -1959,10 +1990,17 @@ impl Engine for ValkeyEngine {
                                 }
                             });
 
+                            // NOTE: the mixed (search+update) path is intentionally
+                            // left as-is for a later PR — encode + query-string
+                            // build stay inside the timed window here to preserve
+                            // its current measurement behavior exactly.
                             let query_start = Instant::now();
+                            let vec_bytes = encode_query_vector(&queries[idx]);
+                            let query_str = build_knn_query_str(parsed_filters[idx].as_ref());
                             let results = ft_search_knn(
                                 &mut conn,
-                                &queries[idx],
+                                &vec_bytes,
+                                &query_str,
                                 top,
                                 ef,
                                 &algorithm,
@@ -2121,7 +2159,56 @@ impl Engine for ValkeyEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_conditions;
+    use super::{
+        build_knn_query_str, encode_query_vector, parse_conditions, FilterParamValue, ParsedFilter,
+    };
+    use std::collections::HashMap;
+
+    // ── Timed-window hoisting fidelity ─────────────────────────────────────
+    // The perf change moves the FLOAT32 encode + query-string build OUT of the
+    // per-query timed window (precomputed once before the parallel region).
+    // Prove the precomputed values are byte-identical to the in-window originals.
+
+    #[test]
+    fn encode_query_vector_matches_legacy_fp32_le_bytes() {
+        let v = vec![1.0f32, -2.5, 3.25];
+        // Legacy in-window encode was `iter().flat_map(f.to_le_bytes()).collect()`.
+        let legacy: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
+        assert_eq!(encode_query_vector(&v), legacy);
+    }
+
+    #[test]
+    fn precomputed_blobs_match_per_query_encode() {
+        let queries = [vec![1.0f32, -2.5, 3.5], vec![0.0f32, 42.0, -7.25]];
+        let precomputed: Vec<Vec<u8>> = queries.iter().map(|q| encode_query_vector(q)).collect();
+        for (i, q) in queries.iter().enumerate() {
+            assert_eq!(precomputed[i], encode_query_vector(q), "q{i}");
+        }
+    }
+
+    #[test]
+    fn build_knn_query_str_matches_legacy_format() {
+        assert_eq!(
+            build_knn_query_str(None),
+            "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        );
+    }
+
+    #[test]
+    fn build_knn_query_str_filtered_matches_legacy_format() {
+        // query_str varies per query ONLY through the filter prefilter — pin the
+        // FILTERED path against the legacy inline `format!` (master):
+        //   "{prefilter}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        let params: HashMap<String, FilterParamValue> =
+            [("brand_0".to_string(), FilterParamValue::Int(7))]
+                .into_iter()
+                .collect();
+        let filter: ParsedFilter = ("@brand:{apple}".to_string(), params);
+        assert_eq!(
+            build_knn_query_str(Some(&filter)),
+            "@brand:{apple}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        );
+    }
 
     #[test]
     fn match_any_string_list_emits_inlined_tag_or() {

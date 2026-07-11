@@ -283,24 +283,34 @@ fn vadd_batch(
     Ok(())
 }
 
+/// Encode a query vector to the FP32 little-endian blob VSIM expects.
+///
+/// Kept as a standalone fn so the caller can precompute all query blobs BEFORE
+/// the per-query timed window (client work, not server latency).
+fn encode_query_vector(query_vector: &[f32]) -> Vec<u8> {
+    query_vector.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
 /// Execute VSIM query and return (id, score) pairs.
 /// VSIM idx FP32 <vec_bytes> WITHSCORES COUNT <top> EF <ef> [FILTER '<expr>' [FILTER-EF <n>]]
 /// Response: alternating [id, score, id, score, ...]
 /// Score conversion: 1.0 - score (VectorSets: 1=identical, 0=opposite)
+///
+/// `vec_bytes` is precomputed by the caller BEFORE the timed window; this
+/// performs only the arg binding, the `cmd.query` RPC round-trip, and the reply
+/// parse (all legitimate server latency).
 fn vsim_search(
     conn: &mut Connection,
-    query_vector: &[f32],
+    vec_bytes: &[u8],
     top: usize,
     ef: i64,
     filter: Option<&str>,
     filter_ef: Option<i64>,
 ) -> Result<Vec<(i64, f64)>, String> {
-    let vec_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
-
     let mut cmd = redis::cmd("VSIM");
     cmd.arg("idx")
         .arg("FP32")
-        .arg(&vec_bytes[..])
+        .arg(vec_bytes)
         .arg("WITHSCORES")
         .arg("COUNT")
         .arg(top)
@@ -526,6 +536,13 @@ impl Engine for VectorSetsEngine {
             .map(|c| c.as_ref().and_then(build_filter_expression))
             .collect();
 
+        // Precompute the encoded query blobs BEFORE the timed region so the
+        // per-query window wraps ONLY the RPC round-trip + reply parse (matching
+        // pgvector/qdrant). Encoding the FP32 blob is client work, not server
+        // latency. Shared read-only across workers.
+        let encoded_queries: Vec<Vec<u8>> =
+            queries.iter().map(|q| encode_query_vector(q)).collect();
+
         // When top is explicitly set, use it for all queries.
         // When not set, use per-query ground truth count (matches Python v0 behavior
         // where top defaults to len(query.expected_result) per query).
@@ -554,9 +571,9 @@ impl Engine for VectorSetsEngine {
             let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
                 let redis_url = self.redis_url.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
                 let filters = &filters;
+                let encoded_queries = &encoded_queries;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -595,9 +612,17 @@ impl Engine for VectorSetsEngine {
                         });
 
                         let filter_ref = filters[idx].as_deref();
+                        // Timed window: precomputed blob is passed in, so this wraps
+                        // only the RPC round-trip and reply parse.
                         let query_start = Instant::now();
-                        let results =
-                            vsim_search(&mut conn, &queries[idx], top, ef, filter_ref, filter_ef);
+                        let results = vsim_search(
+                            &mut conn,
+                            &encoded_queries[idx],
+                            top,
+                            ef,
+                            filter_ref,
+                            filter_ef,
+                        );
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         match results {
@@ -789,15 +814,14 @@ impl Engine for VectorSetsEngine {
                             });
 
                             let filter_ref = filters[idx].as_deref();
+                            // NOTE: the mixed (search+update) path is intentionally
+                            // left as-is for a later PR — the encode stays inside
+                            // the timed window here to preserve its current
+                            // measurement behavior exactly.
                             let query_start = Instant::now();
-                            let results = vsim_search(
-                                &mut conn,
-                                &queries[idx],
-                                top,
-                                ef,
-                                filter_ref,
-                                filter_ef,
-                            );
+                            let vec_bytes = encode_query_vector(&queries[idx]);
+                            let results =
+                                vsim_search(&mut conn, &vec_bytes, top, ef, filter_ref, filter_ef);
                             let query_time = query_start.elapsed().as_secs_f64();
 
                             match results {
@@ -1151,8 +1175,48 @@ fn format_number(value: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod vsim_parse_tests {
-    use super::parse_vsim_response;
+    use super::{build_filter_expression, encode_query_vector, parse_vsim_response};
     use redis::Value;
+    use serde_json::json;
+
+    // ── Timed-window hoisting fidelity ─────────────────────────────────────
+    // The perf change moves the FP32 encode OUT of the per-query timed window
+    // (precomputed once before the parallel region). Prove the precomputed
+    // blobs are byte-identical to the old in-window encode.
+
+    #[test]
+    fn encode_query_vector_matches_legacy_fp32_le_bytes() {
+        let v = vec![1.0f32, -2.5, 3.25];
+        // Legacy in-window encode was `iter().flat_map(f.to_le_bytes()).collect()`.
+        let legacy: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
+        assert_eq!(encode_query_vector(&v), legacy);
+    }
+
+    #[test]
+    fn precomputed_blobs_match_per_query_encode() {
+        let queries = [vec![1.0f32, -2.5, 3.5], vec![0.0f32, 42.0, -7.25]];
+        let precomputed: Vec<Vec<u8>> = queries.iter().map(|q| encode_query_vector(q)).collect();
+        for (i, q) in queries.iter().enumerate() {
+            assert_eq!(precomputed[i], encode_query_vector(q), "q{i}");
+        }
+    }
+
+    #[test]
+    fn build_filter_expression_filtered_matches_legacy_string() {
+        // VectorSets has no hoisted query_str — the per-query-varying request bit
+        // is the VSIM FILTER expression (prebuilt via build_filter_expression
+        // before the timed loop, then passed as `cmd.arg("FILTER").arg(expr)`).
+        // Pin a NON-trivial compound filter to its exact legacy FILTER string so
+        // the filter-string path cannot silently diverge.
+        let cond = json!({"and": [
+            {"brand": {"match": {"value": "apple"}}},
+            {"price": {"range": {"gte": 100}}},
+        ]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some(".brand == \"apple\" and .price >= 100".to_string())
+        );
+    }
 
     #[test]
     fn parses_resp2_bulk_id_and_score_as_distance() {
