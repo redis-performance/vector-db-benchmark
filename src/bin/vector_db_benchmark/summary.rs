@@ -621,4 +621,101 @@ mod tests {
         assert_eq!(buckets.len(), 2);
         assert!(buckets[0].precision > buckets[1].precision);
     }
+
+    /// Build a `SearchEntry` with an explicit precision + saturation flag for the
+    /// tie-break tests.
+    fn prec_entry(precision: f64, rps: f64, saturated: bool) -> SearchEntry {
+        SearchEntry {
+            search_id: 0,
+            ef: "64".to_string(),
+            parallel: 1,
+            results: SearchResults {
+                mean_precision: precision,
+                rps,
+                client_saturated: saturated,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn analyze_prefers_non_saturated_even_at_lower_qps() {
+        // Same precision bucket (both 0.90). The saturated point has the higher
+        // QPS, but the headline must NOT be a client-bound point: the
+        // non-saturated (lower-QPS) point wins.
+        for order in [false, true] {
+            // Test both insertion orders so the tie-break isn't order-dependent.
+            let entries = if order {
+                vec![
+                    prec_entry(0.90, 6000.0, true),
+                    prec_entry(0.90, 5000.0, false),
+                ]
+            } else {
+                vec![
+                    prec_entry(0.90, 5000.0, false),
+                    prec_entry(0.90, 6000.0, true),
+                ]
+            };
+            let buckets = analyze_precision_performance(&entries);
+            assert_eq!(buckets.len(), 1);
+            assert!(!buckets[0].saturated, "order={order}");
+            assert!(
+                (buckets[0].qps - 5000.0).abs() < 1e-9,
+                "order={order}, qps={}",
+                buckets[0].qps
+            );
+        }
+    }
+
+    #[test]
+    fn analyze_falls_back_to_saturated_when_sole_candidate() {
+        // Only saturated points in the bucket → the higher-QPS one is kept.
+        let entries = vec![
+            prec_entry(0.90, 4000.0, true),
+            prec_entry(0.90, 6000.0, true),
+        ];
+        let buckets = analyze_precision_performance(&entries);
+        assert_eq!(buckets.len(), 1);
+        assert!(buckets[0].saturated);
+        assert!((buckets[0].qps - 6000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn analyze_same_saturation_class_keeps_higher_qps() {
+        // Both non-saturated → higher QPS wins.
+        let entries = vec![
+            prec_entry(0.90, 3000.0, false),
+            prec_entry(0.90, 7000.0, false),
+        ];
+        let buckets = analyze_precision_performance(&entries);
+        assert_eq!(buckets.len(), 1);
+        assert!((buckets[0].qps - 7000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ratio_sort_key_branches() {
+        // "search" is the sentinel and sorts first (before any real ratio).
+        assert_eq!(ratio_sort_key("search"), -1.0);
+        // "U:S" → U/S.
+        assert_eq!(ratio_sort_key("2:1"), 2.0);
+        assert_eq!(ratio_sort_key("1:2"), 0.5);
+        // Denominator 0 → guarded, falls through to 0.0 (not inf/NaN).
+        assert_eq!(ratio_sort_key("1:0"), 0.0);
+        // Unparseable ratios → 0.0.
+        assert_eq!(ratio_sort_key("garbage"), 0.0);
+        assert_eq!(ratio_sort_key("a:b"), 0.0);
+        // Wrong arity (not exactly two parts) → 0.0.
+        assert_eq!(ratio_sort_key("1:2:3"), 0.0);
+        // Result is always finite (NaN/inf guard holds).
+        for k in ["search", "2:1", "1:0", "garbage", "a:b", "1:2:3"] {
+            assert!(ratio_sort_key(k).is_finite(), "key={k}");
+        }
+    }
+
+    #[test]
+    fn ratio_sort_key_orders_search_first() {
+        let mut keys = vec!["4:1", "search", "1:1"];
+        keys.sort_by(|a, b| ratio_sort_key(a).partial_cmp(&ratio_sort_key(b)).unwrap());
+        assert_eq!(keys, vec!["search", "1:1", "4:1"]);
+    }
 }
