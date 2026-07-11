@@ -846,15 +846,23 @@ fn filter_only_find(
     Ok(count)
 }
 
-/// Execute a vector search using $vectorSearch aggregation pipeline.
-fn vector_search(
-    coll: &mongodb::sync::Collection<Document>,
+/// Build the `$vectorSearch` aggregation pipeline for one query.
+///
+/// Done OUTSIDE the per-query timed window (see the search() precompute): turning
+/// the query vector into a full `Vec<Bson::Double>` and assembling the two
+/// pipeline docs (`$vectorSearch` + `$project`) is client-side CPU work, not
+/// server latency. Precomputing it means the timed window wraps only the
+/// aggregate RPC round-trip + cursor decode, matching the reference engines
+/// (pgvector/qdrant/redis) and the ES/OS/Milvus/Weaviate boundary from #113.
+///
+/// The returned pipeline is identical to what the previous inline build produced.
+fn build_search_pipeline(
     index_name: &str,
     query_vector: &[f32],
     top: usize,
     num_candidates: i64,
     filter: Option<&Document>,
-) -> Result<Vec<(i64, f64)>, String> {
+) -> Vec<Document> {
     let bson_vec: Vec<mongodb::bson::Bson> = query_vector
         .iter()
         .map(|&f| mongodb::bson::Bson::Double(f as f64))
@@ -872,7 +880,7 @@ fn vector_search(
         vs_stage.insert("filter", f.clone());
     }
 
-    let pipeline = vec![
+    vec![
         doc! { "$vectorSearch": vs_stage },
         doc! {
             "$project": {
@@ -880,22 +888,66 @@ fn vector_search(
                 "score": { "$meta": "vectorSearchScore" },
             }
         },
-    ];
+    ]
+}
 
+/// Send a precomputed aggregation pipeline and return the DECODED documents.
+///
+/// The consistent timed boundary (see qdrant/pgvector/redis and #113) is:
+/// pipeline built OUTSIDE the window; aggregate RPC send + cursor read +
+/// decode-to-`Document` INSIDE the window (this fn); id/score extraction OUTSIDE
+/// (`extract_search_hits`). So the BSON cursor decode is billed as latency
+/// exactly like qdrant's protobuf decode and pgvector's row decode.
+fn send_search(
+    coll: &mongodb::sync::Collection<Document>,
+    pipeline: &[Document],
+) -> Result<Vec<Document>, String> {
     let cursor = coll
-        .aggregate(pipeline)
+        .aggregate(pipeline.to_vec())
         .run()
         .map_err(|e| format!("Vector search failed: {}", e))?;
 
-    let mut results = Vec::with_capacity(top);
+    let mut docs = Vec::new();
     for result in cursor {
         let doc = result.map_err(|e| format!("Failed to read result: {}", e))?;
-        let id = doc.get_i64("_id").unwrap_or(0);
-        let score = doc.get_f64("score").unwrap_or(0.0);
-        results.push((id, score));
+        docs.push(doc);
     }
+    Ok(docs)
+}
 
-    Ok(results)
+/// Extract the id/score list from already-decoded documents.
+///
+/// Done AFTER the timed window (`elapsed`), mirroring pgvector/qdrant pulling the
+/// final ids out of the decoded response for recall. This is pure struct field
+/// access — no I/O — so it must not be billed as query latency.
+fn extract_search_hits(docs: &[Document]) -> Vec<(i64, f64)> {
+    docs.iter()
+        .map(|doc| {
+            let id = doc.get_i64("_id").unwrap_or(0);
+            let score = doc.get_f64("score").unwrap_or(0.0);
+            (id, score)
+        })
+        .collect()
+}
+
+/// Execute a vector search end-to-end (build + send + extract).
+///
+/// Convenience wrapper used by the untimed index-catchup probe
+/// (`wait_for_index_catchup`), where the split boundary is irrelevant. The timed
+/// search()/search_mixed() paths deliberately do NOT use this: they precompute
+/// pipelines out of the window and call `send_search`/`extract_search_hits`
+/// directly so only the RPC + decode is timed.
+fn vector_search(
+    coll: &mongodb::sync::Collection<Document>,
+    index_name: &str,
+    query_vector: &[f32],
+    top: usize,
+    num_candidates: i64,
+    filter: Option<&Document>,
+) -> Result<Vec<(i64, f64)>, String> {
+    let pipeline = build_search_pipeline(index_name, query_vector, top, num_candidates, filter);
+    let docs = send_search(coll, &pipeline)?;
+    Ok(extract_search_hits(&docs))
 }
 
 /// Parse filter conditions into MongoDB query document.
@@ -1177,6 +1229,36 @@ impl Engine for MongoDBEngine {
             queries.len()
         };
 
+        // Precompute per-query `top` and the fully built `$vectorSearch`
+        // aggregation pipelines BEFORE the parallel region so the timed window
+        // wraps only the aggregate RPC round-trip + cursor decode (see
+        // build_search_pipeline / send_search). `tops[idx]` reproduces the same k
+        // the pipeline embeds, so recall is computed against an identical result
+        // set — this is measurement-only, unchanged recall/precision.
+        let tops: Vec<usize> = (0..num_to_run)
+            .map(|idx| {
+                explicit_top.unwrap_or_else(|| {
+                    let n = neighbors[idx].len();
+                    if n > 0 {
+                        n
+                    } else {
+                        10
+                    }
+                })
+            })
+            .collect();
+        let pipelines: Vec<Vec<Document>> = (0..num_to_run)
+            .map(|idx| {
+                build_search_pipeline(
+                    &self.index_name,
+                    &queries[idx],
+                    tops[idx],
+                    (tops[idx] as i64) * num_candidates_factor,
+                    parsed_filters[idx].as_ref(),
+                )
+            })
+            .collect();
+
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
         // order-independent so results are unchanged; work counter uses Relaxed.
@@ -1188,7 +1270,6 @@ impl Engine for MongoDBEngine {
         let uri = self.uri.clone();
         let db_name = self.db_name.clone();
         let collection_name = self.collection_name.clone();
-        let index_name = self.index_name.clone();
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
@@ -1202,10 +1283,9 @@ impl Engine for MongoDBEngine {
                 let uri = uri.clone();
                 let db_name = db_name.clone();
                 let collection_name = collection_name.clone();
-                let index_name = index_name.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
+                let tops = &tops;
+                let pipelines = &pipelines;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -1231,30 +1311,18 @@ impl Engine for MongoDBEngine {
                             break;
                         }
 
-                        let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
-                            }
-                        });
+                        let top = tops[idx];
 
-                        let num_candidates = (top as i64) * num_candidates_factor;
-
+                        // Timed window: aggregate RPC send + cursor read + decode
+                        // to Documents. Pipeline is prebuilt (out); id/score
+                        // extraction runs after `elapsed` (out).
                         let query_start = Instant::now();
-                        let results = vector_search(
-                            &coll,
-                            &index_name,
-                            &queries[idx],
-                            top,
-                            num_candidates,
-                            parsed_filters[idx].as_ref(),
-                        );
+                        let response = send_search(&coll, &pipelines[idx]);
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        match results {
-                            Ok(result_ids) => {
+                        match response {
+                            Ok(docs) => {
+                                let result_ids = extract_search_hits(&docs);
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
                                 let m = crate::metrics::compute_metrics(
@@ -1347,6 +1415,34 @@ impl Engine for MongoDBEngine {
             queries.len()
         };
 
+        // Precompute per-query `top` and `$vectorSearch` pipelines BEFORE the
+        // parallel region so the timed search window wraps only the aggregate RPC
+        // + cursor decode (matching the main search() path). Measurement-only:
+        // recall/precision unchanged.
+        let tops: Vec<usize> = (0..num_to_run)
+            .map(|idx| {
+                explicit_top.unwrap_or_else(|| {
+                    let n = neighbors[idx].len();
+                    if n > 0 {
+                        n
+                    } else {
+                        10
+                    }
+                })
+            })
+            .collect();
+        let pipelines: Vec<Vec<Document>> = (0..num_to_run)
+            .map(|idx| {
+                build_search_pipeline(
+                    &self.index_name,
+                    &queries[idx],
+                    tops[idx],
+                    (tops[idx] as i64) * num_candidates_factor,
+                    parsed_filters[idx].as_ref(),
+                )
+            })
+            .collect();
+
         let search_idx = Arc::new(AtomicUsize::new(0));
         let update_idx = Arc::new(AtomicUsize::new(0));
 
@@ -1360,7 +1456,6 @@ impl Engine for MongoDBEngine {
         let uri = self.uri.clone();
         let db_name = self.db_name.clone();
         let collection_name = self.collection_name.clone();
-        let index_name = self.index_name.clone();
         let schema_types = &self.schema_types;
 
         // Each worker accumulates search + update samples into thread-local
@@ -1382,10 +1477,9 @@ impl Engine for MongoDBEngine {
                 let uri = uri.clone();
                 let db_name = db_name.clone();
                 let collection_name = collection_name.clone();
-                let index_name = index_name.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
+                let tops = &tops;
+                let pipelines = &pipelines;
                 let upd_ids = &upd_ids;
                 let upd_vectors = &upd_vectors;
                 let upd_metadata = &upd_metadata;
@@ -1420,30 +1514,17 @@ impl Engine for MongoDBEngine {
                                 break 'outer;
                             }
 
-                            let top = explicit_top.unwrap_or_else(|| {
-                                let n = neighbors[idx].len();
-                                if n > 0 {
-                                    n
-                                } else {
-                                    10
-                                }
-                            });
+                            let top = tops[idx];
 
-                            let num_candidates = (top as i64) * num_candidates_factor;
-
+                            // Timed window: aggregate RPC + cursor decode only.
+                            // Pipeline prebuilt (out); id extraction after elapsed.
                             let query_start = Instant::now();
-                            let results = vector_search(
-                                &coll,
-                                &index_name,
-                                &queries[idx],
-                                top,
-                                num_candidates,
-                                parsed_filters[idx].as_ref(),
-                            );
+                            let response = send_search(&coll, &pipelines[idx]);
                             let query_time = query_start.elapsed().as_secs_f64();
 
-                            match results {
-                                Ok(result_ids) => {
+                            match response {
+                                Ok(docs) => {
+                                    let result_ids = extract_search_hits(&docs);
                                     let ordered_ids: Vec<i64> =
                                         result_ids.iter().map(|(id, _)| *id).collect();
                                     let m = crate::metrics::compute_metrics(
@@ -1556,6 +1637,70 @@ impl Engine for MongoDBEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Load-bearing: the hoisted (out-of-timed-window) pipeline builder must
+    // produce a pipeline byte-identical to the one the previous inline build
+    // embedded in the aggregate request. If this drifts, the timed window would
+    // send a different request than the recall computation assumes.
+    #[test]
+    fn build_search_pipeline_matches_inline_build() {
+        let query: Vec<f32> = vec![0.1, -0.2, 0.3];
+        let top = 2usize;
+        let num_candidates = 20i64;
+        let filter = doc! { "color": { "$in": ["red", "blue"] } };
+
+        // Reconstruct the exact vector-to-BSON conversion + doc order the old
+        // inline path used (f32 -> f64 Double, insertion order preserved).
+        let bson_vec: Vec<mongodb::bson::Bson> = query
+            .iter()
+            .map(|&f| mongodb::bson::Bson::Double(f as f64))
+            .collect();
+        let expected = vec![
+            doc! { "$vectorSearch": {
+                "index": "vidx",
+                "path": "vector",
+                "queryVector": bson_vec.clone(),
+                "numCandidates": num_candidates,
+                "limit": top as i64,
+                "filter": filter.clone(),
+            } },
+            doc! { "$project": {
+                "_id": 1,
+                "score": { "$meta": "vectorSearchScore" },
+            } },
+        ];
+
+        let got = build_search_pipeline("vidx", &query, top, num_candidates, Some(&filter));
+        assert_eq!(got, expected, "filtered pipeline must be byte-identical");
+
+        // Unfiltered variant: no `filter` key at all (not an empty/null filter).
+        let expected_nf = vec![
+            doc! { "$vectorSearch": {
+                "index": "vidx",
+                "path": "vector",
+                "queryVector": bson_vec,
+                "numCandidates": num_candidates,
+                "limit": top as i64,
+            } },
+            doc! { "$project": {
+                "_id": 1,
+                "score": { "$meta": "vectorSearchScore" },
+            } },
+        ];
+        let got_nf = build_search_pipeline("vidx", &query, top, num_candidates, None);
+        assert_eq!(got_nf, expected_nf, "unfiltered pipeline must omit filter");
+    }
+
+    // extract_search_hits pulls (id, score) pairs out of decoded docs, in order.
+    #[test]
+    fn extract_search_hits_reads_id_and_score() {
+        let docs = vec![
+            doc! { "_id": 7i64, "score": 0.9f64 },
+            doc! { "_id": 3i64, "score": 0.5f64 },
+        ];
+        let hits = extract_search_hits(&docs);
+        assert_eq!(hits, vec![(7i64, 0.9f64), (3i64, 0.5f64)]);
+    }
 
     // A single AND clause is returned unwrapped: {"color": {"$in": [...]}}.
     #[test]
