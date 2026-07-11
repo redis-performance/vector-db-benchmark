@@ -97,12 +97,23 @@ impl ValkeyEngine {
             .unwrap_or("FLOAT32")
             .to_string();
 
-        let parallel = engine_config
+        let cfg_parallel = engine_config
             .upload_params
             .as_ref()
             .and_then(|p| p.get("parallel"))
             .and_then(|v| v.as_i64())
             .unwrap_or(100) as usize;
+        // VALKEY_UPLOAD_PARALLEL overrides the config's upload parallelism.
+        // Managed endpoints reached over a proxy hop (GCP Memorystore via PSC)
+        // stall under a 100-connection upload burst against Valkey Search HNSW
+        // indexing on a shared-core node: a reply that lands past the socket
+        // io_timeout surfaces as EAGAIN (os error 11) and aborts the whole
+        // experiment. Cap the connection count lower there. Unset/<=0 => config.
+        let parallel = std::env::var("VALKEY_UPLOAD_PARALLEL")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(cfg_parallel);
 
         let batch_size = engine_config
             .upload_params
@@ -326,6 +337,18 @@ impl ValkeyEngine {
         let batch_idx = Arc::new(AtomicUsize::new(0));
         let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
+        // Upload wall-clock deadline. Per-batch reconnect-retry keeps a degraded
+        // endpoint "making progress" (fail-then-succeed) without ever tripping the
+        // per-batch abort, so a limping run could otherwise crawl past the cell's
+        // job/watchdog timeout — burning a full 6h window (and $) on a doomed cell
+        // that the outer teardown might then skip. Bound it here so the cell fails
+        // fast and loud. VALKEY_UPLOAD_DEADLINE_SECS overrides; 0 disables.
+        let upload_deadline_secs = std::env::var("VALKEY_UPLOAD_DEADLINE_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(10800); // 3h default — well inside a 6h cell window
+        let upload_start = Instant::now();
+
         std::thread::scope(|s| {
             for _ in 0..num_threads {
                 let host = self.host.clone();
@@ -346,20 +369,72 @@ impl ValkeyEngine {
                     };
 
                     loop {
+                        // Stop pulling work if a sibling worker already failed.
+                        if error.lock().unwrap().is_some() {
+                            break;
+                        }
+                        // Bound total upload wall-clock so a limping (retry-heavy)
+                        // run can't silently exceed the cell window.
+                        if upload_deadline_secs > 0
+                            && upload_start.elapsed().as_secs() > upload_deadline_secs
+                        {
+                            *error.lock().unwrap() = Some(format!(
+                                "upload exceeded deadline of {}s (completed {}/{} batches) — \
+                                 aborting degraded run",
+                                upload_deadline_secs,
+                                batch_idx.load(Ordering::SeqCst).min(total_batches),
+                                total_batches
+                            ));
+                            break;
+                        }
                         let idx = batch_idx.fetch_add(1, Ordering::SeqCst);
                         if idx >= total_batches {
                             break;
                         }
                         let (batch_start, batch_end) = batches[idx];
-                        if let Err(e) = upload_batch_internal(
-                            &mut conn,
-                            &config,
-                            &ids[batch_start..batch_end],
-                            &vectors[batch_start..batch_end],
-                            &metadata[batch_start..batch_end],
-                        ) {
-                            *error.lock().unwrap() = Some(e);
-                            break;
+                        // Reconnect-and-retry: over a proxy hop (Memorystore/PSC)
+                        // a batch can stall past io_timeout and surface EAGAIN
+                        // (os error 11) on an otherwise-healthy run. HSET upload
+                        // is idempotent (same key/fields), so re-sending the whole
+                        // batch on a fresh connection is safe. Only give up — and
+                        // fail the experiment — after MAX_UPLOAD_RETRIES.
+                        const MAX_UPLOAD_RETRIES: usize = 6;
+                        let mut attempt = 0usize;
+                        loop {
+                            match upload_batch_internal(
+                                &mut conn,
+                                &config,
+                                &ids[batch_start..batch_end],
+                                &vectors[batch_start..batch_end],
+                                &metadata[batch_start..batch_end],
+                            ) {
+                                Ok(()) => break,
+                                Err(e) => {
+                                    attempt += 1;
+                                    if attempt >= MAX_UPLOAD_RETRIES {
+                                        *error.lock().unwrap() = Some(format!(
+                                            "upload batch {} failed after {} attempts: {}",
+                                            idx, attempt, e
+                                        ));
+                                        return;
+                                    }
+                                    eprintln!(
+                                        "upload batch {} attempt {} failed ({}); reconnecting...",
+                                        idx, attempt, e
+                                    );
+                                    // Jittered backoff, then reconnect. connect()
+                                    // already retries internally; if it still fails
+                                    // we loop and count another attempt.
+                                    let backoff = 200 * attempt as u64
+                                        + (idx as u64 % 97) * 7;
+                                    std::thread::sleep(
+                                        std::time::Duration::from_millis(backoff),
+                                    );
+                                    if let Ok(c) = ValkeyEngine::connect(&host, port) {
+                                        conn = c;
+                                    }
+                                }
+                            }
                         }
                         pb.inc((batch_end - batch_start) as u64);
                     }
@@ -391,7 +466,9 @@ impl ValkeyEngine {
     /// `backfill_in_progress` / `state` fields so this works with either engine.
     fn wait_for_indexing(&self, expected: usize) -> Result<(), String> {
         let mut conn = self.get_connection()?;
-        let max_wait = 600; // seconds – large HNSW indices can take minutes
+        // Large HNSW indices (deep-image-96 = 10M vectors) can take many minutes
+        // to drain the indexing tail; give them room before the completeness gate.
+        let max_wait = 1800; // seconds
         let start = Instant::now();
 
         loop {
@@ -498,8 +575,21 @@ impl ValkeyEngine {
             }
 
             if start.elapsed().as_secs() > max_wait {
+                // Completeness gate: an index that never reached `expected` docs is
+                // genuinely under-populated — proceeding would compute recall/rps
+                // against a partial graph and silently publish wrong numbers. Fail
+                // the cell instead. If all docs ARE present and only a background
+                // optimization pass is still flagged, proceeding is safe (warn).
+                if num_docs < expected {
+                    return Err(format!(
+                        "indexing incomplete after {}s: num_docs={}/{} (indexing={}) — \
+                         refusing to search a partial index",
+                        max_wait, num_docs, expected, indexing
+                    ));
+                }
                 println!(
-                    "Warning: indexing timeout after {}s (num_docs={}/{}, indexing={})",
+                    "Warning: indexing tail still flagged after {}s but all docs present \
+                     (num_docs={}/{}, indexing={}) — proceeding",
                     max_wait, num_docs, expected, indexing
                 );
                 return Ok(());
