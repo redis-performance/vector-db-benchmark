@@ -140,21 +140,7 @@ impl ElasticsearchEngine {
         let vector_size = dataset.vector_size();
 
         let dist_lower = distance.to_lowercase();
-        if dist_lower == "dot" || dist_lower == "ip" {
-            return Err(
-                "Elasticsearch does not support DOT product distance for benchmarking".to_string(),
-            );
-        }
-        if vector_size > 2048 {
-            return Err(format!(
-                "Elasticsearch does not support vector_size > 2048 (got {})",
-                vector_size
-            ));
-        }
-
-        // dot/ip already rejected above; es_similarity is only reached for the
-        // supported/unknown arms here (its dot arm exists for direct unit-testing).
-        let similarity = es_similarity(&dist_lower)?;
+        let similarity = resolve_index_similarity(&dist_lower, vector_size)?;
 
         let mut properties = serde_json::json!({
             "vector": {
@@ -424,6 +410,26 @@ fn id_to_uuid_hex(id: i64) -> String {
 fn uuid_hex_to_int(hex: &str) -> Result<i64, String> {
     let uuid = Uuid::parse_str(hex).map_err(|e| format!("Invalid UUID hex '{}': {}", hex, e))?;
     Ok(uuid.as_u128() as i64)
+}
+
+/// Validate index build parameters and resolve the `dense_vector` similarity.
+/// Extracted verbatim from `create_index` so the guard order + error strings are
+/// unit-testable without a live Elasticsearch. `dist_lower` must already be
+/// lowercased. Order matters: dot/ip is rejected first (with the DOT-specific
+/// message), then the dim cap, then the general similarity mapping.
+fn resolve_index_similarity(dist_lower: &str, vector_size: i64) -> Result<&'static str, String> {
+    if dist_lower == "dot" || dist_lower == "ip" {
+        return Err(
+            "Elasticsearch does not support DOT product distance for benchmarking".to_string(),
+        );
+    }
+    if vector_size > 2048 {
+        return Err(format!(
+            "Elasticsearch does not support vector_size > 2048 (got {})",
+            vector_size
+        ));
+    }
+    es_similarity(dist_lower)
 }
 
 /// Map a dataset distance name to the Elasticsearch `dense_vector` similarity.
@@ -1333,5 +1339,78 @@ mod tests {
             build_filter("n", "match", &serde_json::json!({"value":[1,2]})).unwrap(),
             serde_json::json!({"match":{"n":[1,2]}})
         );
+    }
+
+    // ── uuid_hex_to_int round-trip + invalid input ─────────────────────────
+    #[test]
+    fn uuid_hex_to_int_round_trips_with_id_to_uuid_hex() {
+        for id in [0i64, 1, 255, 12345, 9_999_999] {
+            let hex = id_to_uuid_hex(id);
+            assert_eq!(uuid_hex_to_int(&hex).unwrap(), id, "round-trip id={}", id);
+        }
+    }
+
+    #[test]
+    fn uuid_hex_to_int_rejects_invalid_hex() {
+        let err = uuid_hex_to_int("not-a-uuid").unwrap_err();
+        assert!(
+            err.starts_with("Invalid UUID hex 'not-a-uuid':"),
+            "err={}",
+            err
+        );
+    }
+
+    // ── extract_knn_hits: happy path + missing-field errors ────────────────
+    #[test]
+    fn extract_knn_hits_reads_id_and_score() {
+        let body = serde_json::json!({
+            "hits": {"hits": [
+                {"_id": id_to_uuid_hex(7), "_score": 0.9},
+                {"_id": id_to_uuid_hex(3), "_score": 0.5},
+            ]}
+        });
+        assert_eq!(extract_knn_hits(&body).unwrap(), vec![(7, 0.9), (3, 0.5)]);
+    }
+
+    #[test]
+    fn extract_knn_hits_missing_hits_hits_errors() {
+        let body = serde_json::json!({"hits": {"total": 0}});
+        assert_eq!(
+            extract_knn_hits(&body).unwrap_err(),
+            "Missing hits.hits in search response"
+        );
+    }
+
+    #[test]
+    fn extract_knn_hits_missing_id_errors() {
+        let body = serde_json::json!({"hits": {"hits": [{"_score": 0.9}]}});
+        assert_eq!(extract_knn_hits(&body).unwrap_err(), "Missing _id in hit");
+    }
+
+    #[test]
+    fn extract_knn_hits_missing_score_defaults_zero() {
+        // A hit without `_score` is not an error — score defaults to 0.0.
+        let body = serde_json::json!({"hits": {"hits": [{"_id": id_to_uuid_hex(4)}]}});
+        assert_eq!(extract_knn_hits(&body).unwrap(), vec![(4, 0.0)]);
+    }
+
+    // ── resolve_index_similarity: distance mapping + rejections ────────────
+    #[test]
+    fn resolve_index_similarity_maps_and_rejects() {
+        assert_eq!(resolve_index_similarity("cosine", 128).unwrap(), "cosine");
+        assert_eq!(resolve_index_similarity("l2", 2048).unwrap(), "l2_norm");
+        // dot/ip rejected with the DOT-specific message (before the dim check).
+        assert_eq!(
+            resolve_index_similarity("dot", 128).unwrap_err(),
+            "Elasticsearch does not support DOT product distance for benchmarking"
+        );
+        assert!(resolve_index_similarity("ip", 128).is_err());
+        // dim > 2048 rejected.
+        assert_eq!(
+            resolve_index_similarity("cosine", 4096).unwrap_err(),
+            "Elasticsearch does not support vector_size > 2048 (got 4096)"
+        );
+        // Unknown distance still errors (via es_similarity).
+        assert!(resolve_index_similarity("nope", 128).is_err());
     }
 }

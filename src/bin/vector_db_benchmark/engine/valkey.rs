@@ -818,6 +818,17 @@ fn redis_value_to_json(val: &redis::Value) -> serde_json::Value {
     }
 }
 
+/// Parse the `used_memory:` value (bytes) out of an `INFO memory` text block.
+/// Returns 0 when the line is absent or unparseable. The `used_memory:` prefix
+/// is exact, so it never matches sibling keys like `used_memory_rss:`.
+fn parse_used_memory(info: &str) -> i64 {
+    info.lines()
+        .find(|l| l.starts_with("used_memory:"))
+        .and_then(|l| l.strip_prefix("used_memory:"))
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
 // ── Condition parser ─────────────────────────────────────────────────────
 // Converts JSON filter conditions into Valkey Search query filter syntax.
 // Note: Valkey Search does not support $param inside TAG {…} brackets,
@@ -2144,12 +2155,7 @@ impl Engine for ValkeyEngine {
         let mut conn = self.get_connection().ok()?;
 
         let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
-        let used_memory: i64 = info_str
-            .lines()
-            .find(|l| l.starts_with("used_memory:"))
-            .and_then(|l| l.strip_prefix("used_memory:"))
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0);
+        let used_memory: i64 = parse_used_memory(&info_str);
 
         let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
             .arg("idx")
@@ -2509,6 +2515,95 @@ mod tests {
             "Okay should map to a non-empty JSON string, got {:?}",
             okay
         );
+    }
+
+    #[test]
+    fn redis_value_to_json_covers_double_simplestring_and_bad_utf8() {
+        // Arms not exercised by the test above.
+        assert_eq!(
+            redis_value_to_json(&Value::Double(1.5)),
+            serde_json::json!(1.5)
+        );
+        assert_eq!(
+            redis_value_to_json(&Value::SimpleString("PONG".into())),
+            serde_json::json!("PONG")
+        );
+        // Invalid UTF-8 BulkString → "<N bytes>" placeholder (never a panic/drop).
+        assert_eq!(
+            redis_value_to_json(&Value::BulkString(vec![0xff, 0xfe])),
+            serde_json::json!("<2 bytes>")
+        );
+    }
+
+    #[test]
+    fn value_as_i64_reads_simplestring_id() {
+        use super::value_as_i64;
+        // Redis-8 RESP2 can return the doc id as a SimpleString (e.g. "7").
+        assert_eq!(value_as_i64(&Value::SimpleString("7".into())), 7);
+        assert_eq!(value_as_i64(&bulk("42")), 42);
+        assert_eq!(value_as_i64(&Value::Int(5)), 5);
+        assert_eq!(value_as_i64(&Value::SimpleString("x".into())), 0);
+        assert_eq!(value_as_i64(&Value::Nil), 0);
+    }
+
+    #[test]
+    fn parse_ft_search_resp2_drops_trailing_id_without_fields() {
+        // Odd trailing element: [count, id] with no field block → dangling id
+        // dropped (no doc emitted), NOT surfaced with a zero score.
+        let resp = Value::Array(vec![Value::Int(1), bulk("5")]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn parse_ft_search_resp3_skips_non_map_doc_entries() {
+        // A non-map entry in `results` is skipped; sibling map docs still parse.
+        let doc = Value::Map(vec![
+            (bulk("id"), bulk("7")),
+            (
+                bulk("extra_attributes"),
+                Value::Map(vec![(bulk("vector_score"), bulk("0.25"))]),
+            ),
+        ]);
+        let resp = Value::Map(vec![(bulk("results"), Value::Array(vec![Value::Nil, doc]))]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(7, 0.25)]);
+    }
+
+    #[test]
+    fn parse_ft_search_resp3_id_parse_failure_yields_zero_id_doc() {
+        // A map doc whose `id` is unparseable is NOT skipped: id falls back to 0
+        // and the doc is still emitted (score parsed independently).
+        let resp = Value::Map(vec![(
+            bulk("results"),
+            Value::Array(vec![Value::Map(vec![
+                (bulk("id"), bulk("not-a-number")),
+                (
+                    bulk("extra_attributes"),
+                    Value::Map(vec![(bulk("vector_score"), bulk("0.5"))]),
+                ),
+            ])]),
+        )]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(0, 0.5)]);
+    }
+
+    #[test]
+    fn parse_ft_search_resp3_missing_results_key_is_empty() {
+        // RESP3 map with no `results` key → no hits.
+        let resp = Value::Map(vec![(bulk("total_results"), Value::Int(0))]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn parse_used_memory_parses_real_info_block() {
+        use super::parse_used_memory;
+        let info = "# Memory\r\nused_memory:1048576\r\nused_memory_rss:2097152\r\nused_memory_peak:3000000\r\n";
+        // Exact-prefix match: picks used_memory, never used_memory_rss/_peak.
+        assert_eq!(parse_used_memory(info), 1_048_576);
+        // Missing line → 0.
+        assert_eq!(parse_used_memory("# Memory\r\nmaxmemory:0\r\n"), 0);
+        // Malformed value → 0.
+        assert_eq!(parse_used_memory("used_memory:not_a_number\r\n"), 0);
+        // A block with ONLY used_memory_rss must not match the used_memory prefix.
+        assert_eq!(parse_used_memory("used_memory_rss:999\r\n"), 0);
     }
 
     // ── OR-branch of the condition parser ──────────────────────────────────

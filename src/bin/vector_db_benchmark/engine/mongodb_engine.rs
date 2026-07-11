@@ -1776,4 +1776,119 @@ mod tests {
         let doc = parse_mongo_conditions(&e).unwrap();
         assert_eq!(doc.get_str("color").unwrap(), "red");
     }
+
+    // ── json_to_bson: non-Int scalar + container arms ──────────────────────
+    #[test]
+    fn json_to_bson_covers_all_arms() {
+        use mongodb::bson::Bson;
+        assert_eq!(json_to_bson(&json!(null)), Bson::Null);
+        assert_eq!(json_to_bson(&json!(true)), Bson::Boolean(true));
+        assert_eq!(json_to_bson(&json!(false)), Bson::Boolean(false));
+        // Integer JSON numbers map to Int64, floats to Double.
+        assert_eq!(json_to_bson(&json!(7)), Bson::Int64(7));
+        assert_eq!(json_to_bson(&json!(1.5)), Bson::Double(1.5));
+        assert_eq!(json_to_bson(&json!("hi")), Bson::String("hi".to_string()));
+        // Array preserves order and recurses per element.
+        assert_eq!(
+            json_to_bson(&json!([1, "a"])),
+            Bson::Array(vec![Bson::Int64(1), Bson::String("a".to_string())])
+        );
+        // Object → Document with recursively-converted values.
+        match json_to_bson(&json!({"k": 2})) {
+            Bson::Document(d) => assert_eq!(d.get_i64("k").unwrap(), 2),
+            other => panic!("expected Document, got {:?}", other),
+        }
+    }
+
+    // ── metadata_value_to_bson: fallback / Labels / Geo ────────────────────
+    #[test]
+    fn metadata_int_field_unparseable_falls_back_to_string() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let mut schema = HashMap::new();
+        schema.insert("size".to_string(), "int".to_string());
+        // Schema says int but the value is not a valid i64 → keep the raw string.
+        let v = metadata_value_to_bson(
+            "size",
+            &MetadataValue::String("not-a-number".into()),
+            &schema,
+        );
+        assert_eq!(v.as_str(), Some("not-a-number"));
+    }
+
+    #[test]
+    fn metadata_labels_become_bson_string_array() {
+        use mongodb::bson::Bson;
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let schema = HashMap::new();
+        let v = metadata_value_to_bson(
+            "tags",
+            &MetadataValue::Labels(vec!["a".into(), "b".into()]),
+            &schema,
+        );
+        assert_eq!(
+            v,
+            Bson::Array(vec![Bson::String("a".into()), Bson::String("b".into()),])
+        );
+    }
+
+    #[test]
+    fn metadata_geo_becomes_geojson_point() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let schema = HashMap::new();
+        let v = metadata_value_to_bson(
+            "loc",
+            &MetadataValue::Geo {
+                lon: 10.0,
+                lat: 20.0,
+            },
+            &schema,
+        );
+        // GeoJSON Point: {type:"Point", coordinates:[lon, lat]} (lon first).
+        let expected = mongodb::bson::Bson::Document(doc! {
+            "type": "Point",
+            "coordinates": [10.0f64, 20.0f64],
+        });
+        assert_eq!(v, expected);
+    }
+
+    // ── build_uri: passthrough / auth / no-auth ────────────────────────────
+    // Sequenced in ONE test so the shared MONGODB_USER/PASSWORD env vars are not
+    // mutated concurrently by parallel test threads (no serial_test dep here).
+    #[test]
+    fn build_uri_covers_passthrough_auth_and_noauth() {
+        let saved_user = std::env::var("MONGODB_USER").ok();
+        let saved_pass = std::env::var("MONGODB_PASSWORD").ok();
+
+        // Full mongodb:// URI is passed through verbatim (env ignored).
+        std::env::set_var("MONGODB_USER", "u");
+        std::env::set_var("MONGODB_PASSWORD", "p");
+        assert_eq!(
+            build_uri("mongodb+srv://cluster.example.net/db", 27017),
+            "mongodb+srv://cluster.example.net/db"
+        );
+
+        // user + password present → credentialled URI.
+        assert_eq!(
+            build_uri("host1", 27018),
+            "mongodb://u:p@host1:27018/?directConnection=true"
+        );
+
+        // No credentials → plain URI.
+        std::env::remove_var("MONGODB_USER");
+        std::env::remove_var("MONGODB_PASSWORD");
+        assert_eq!(
+            build_uri("host2", 27019),
+            "mongodb://host2:27019/?directConnection=true"
+        );
+
+        // Restore the environment for any other test that may read it.
+        match saved_user {
+            Some(v) => std::env::set_var("MONGODB_USER", v),
+            None => std::env::remove_var("MONGODB_USER"),
+        }
+        match saved_pass {
+            Some(v) => std::env::set_var("MONGODB_PASSWORD", v),
+            None => std::env::remove_var("MONGODB_PASSWORD"),
+        }
+    }
 }
