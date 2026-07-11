@@ -735,21 +735,24 @@ fn hit_id(hit: &serde_json::Value) -> Option<&str> {
         .or_else(|| hit.get("_id").and_then(|v| v.as_str()))
 }
 
-fn knn_search(
+/// Send a pre-serialized KNN search request and return the DECODED response.
+/// The consistent timed boundary (see qdrant/pgvector/redis) is: request body
+/// pre-serialized to a `RawValue` OUTSIDE the window (the vector-to-JSON ryu
+/// formatting is client CPU work); RPC send + receive + decode-to-structured-
+/// response INSIDE the window (this fn: send + status check + wire read +
+/// `from_str`); id/score extraction OUTSIDE (`extract_knn_hits`). So the JSON
+/// decode is billed as latency exactly like qdrant's protobuf decode.
+fn knn_send(
     rt: &tokio::runtime::Runtime,
     client: &OpenSearch,
     index_name: &str,
-    query_vector: &[f32],
-    top: usize,
-    filter: Option<&serde_json::Value>,
-) -> Result<Vec<(i64, f64)>, String> {
-    let body = build_knn_body(query_vector, top, filter);
-
+    raw_body: &serde_json::value::RawValue,
+) -> Result<serde_json::Value, String> {
     let resp = rt
         .block_on(
             client
                 .search(SearchParts::Index(&[index_name]))
-                .body(body)
+                .body(raw_body)
                 .send(),
         )
         .map_err(|e| format!("KNN search failed: {}", e))?;
@@ -759,10 +762,16 @@ fn knn_search(
         return Err(format!("KNN search error: {}", text));
     }
 
-    let resp_body: serde_json::Value = rt
-        .block_on(resp.json())
-        .map_err(|e| format!("Failed to parse search response: {}", e))?;
+    let text = rt
+        .block_on(resp.text())
+        .map_err(|e| format!("Failed to read search response: {}", e))?;
+    serde_json::from_str(&text).map_err(|e| format!("Failed to parse search response: {}", e))
+}
 
+/// Extract the id/score list from an already-decoded response (done AFTER the
+/// timed window — only pulling final ids out of the decoded struct for recall,
+/// mirroring pgvector/qdrant).
+fn extract_knn_hits(resp_body: &serde_json::Value) -> Result<Vec<(i64, f64)>, String> {
     let hits = resp_body
         .get("hits")
         .and_then(|h| h.get("hits"))
@@ -888,6 +897,31 @@ impl Engine for OpenSearchEngine {
             queries.len()
         };
 
+        // Precompute per-query `top` and the fully serialized request bodies
+        // BEFORE the parallel region so the timed window wraps only the RPC
+        // round-trip. `build_knn_body` builds the DOM and `to_raw_value`
+        // performs the vector-to-JSON ryu formatting (client CPU work) once here;
+        // the timed send only copies the already-formatted bytes. `tops[idx]`
+        // reproduces the same k the request embeds, so recall is unchanged.
+        let tops: Vec<usize> = (0..num_to_run)
+            .map(|idx| {
+                explicit_top.unwrap_or_else(|| {
+                    let n = neighbors[idx].len();
+                    if n > 0 {
+                        n
+                    } else {
+                        10
+                    }
+                })
+            })
+            .collect();
+        let raw_bodies: Vec<Box<serde_json::value::RawValue>> = (0..num_to_run)
+            .map(|idx| {
+                let body = build_knn_body(&queries[idx], tops[idx], parsed_filters[idx].as_ref());
+                serde_json::value::to_raw_value(&body).expect("serialize KNN search body")
+            })
+            .collect();
+
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
         // order-independent so results are unchanged; work counter uses Relaxed.
@@ -910,9 +944,9 @@ impl Engine for OpenSearchEngine {
             for _ in 0..parallel {
                 let base_url = base_url.clone();
                 let index_name = index_name.clone();
-                let queries = &queries;
                 let neighbors = &neighbors;
-                let parsed_filters = &parsed_filters;
+                let tops = &tops;
+                let raw_bodies = &raw_bodies;
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -941,27 +975,16 @@ impl Engine for OpenSearchEngine {
                             break;
                         }
 
-                        let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
-                            if n > 0 {
-                                n
-                            } else {
-                                10
-                            }
-                        });
+                        let top = tops[idx];
 
+                        // Timed window: network send + receive + decode of the
+                        // response into a structured value. Body is pre-serialized
+                        // (out); id/score extraction runs after `elapsed` (out).
                         let query_start = Instant::now();
-                        let results = knn_search(
-                            &rt,
-                            &client,
-                            &index_name,
-                            &queries[idx],
-                            top,
-                            parsed_filters[idx].as_ref(),
-                        );
+                        let response = knn_send(&rt, &client, &index_name, &raw_bodies[idx]);
                         let query_time = query_start.elapsed().as_secs_f64();
 
-                        match results {
+                        match response.and_then(|resp_body| extract_knn_hits(&resp_body)) {
                             Ok(result_ids) => {
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
@@ -1014,6 +1037,29 @@ impl Engine for OpenSearchEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Load-bearing: the hoisted request body is `to_raw_value(&build_knn_body())`.
+    /// Its verbatim bytes (what JsonBody writes on the wire) must equal the bytes
+    /// the old inline `.body(build_knn_body())` path serialized via `to_vec`.
+    #[test]
+    fn build_knn_body_raw_value_roundtrips_to_wire_bytes() {
+        let vec = vec![0.1f32, -0.2, 0.3];
+        let top = 2usize;
+        let filter = json!({"term": {"color": "red"}});
+
+        let body = build_knn_body(&vec, top, Some(&filter));
+        let to_vec_bytes = serde_json::to_vec(&body).unwrap();
+        let raw = serde_json::value::to_raw_value(&body).unwrap();
+        assert_eq!(raw.get().as_bytes(), to_vec_bytes.as_slice());
+
+        // Unfiltered variant.
+        let body_nf = build_knn_body(&vec, top, None);
+        let raw_nf = serde_json::value::to_raw_value(&body_nf).unwrap();
+        assert_eq!(
+            raw_nf.get().as_bytes(),
+            serde_json::to_vec(&body_nf).unwrap().as_slice()
+        );
+    }
 
     #[test]
     fn test_match_any_string_list_emits_terms() {
