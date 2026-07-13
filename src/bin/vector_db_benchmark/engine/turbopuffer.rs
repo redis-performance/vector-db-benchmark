@@ -272,10 +272,19 @@ fn parse_single_condition(condition: &serde_json::Value) -> Option<serde_json::V
                                 ]
                             ]));
                         }
-                        // follow-up: element-type coercion (int vs string) and
-                        // multi-valued attributes in turbopuffer's In are
-                        // dataset-dependent and cloud-only (untestable locally);
-                        // the common keyword/int IN-list is covered.
+                        // follow-up (cloud-only, untestable locally — NOT
+                        // implemented): scalar `In` here tests whole-value set
+                        // membership and does NOT do array CONTAINS-ANY for a
+                        // multi-valued attribute (e.g. `labels` stored as an
+                        // array), so it can't match a doc whose attribute is a
+                        // list. It also does NOT reconcile ELEMENT TYPES with the
+                        // upload-side string→number coercion in
+                        // `metadata_value_to_json` (a numeric-looking string is
+                        // stored as int/float, so a string `"1"` in the IN-list
+                        // would not equal the stored int `1`). The common
+                        // keyword/int IN-list is covered; both gaps are
+                        // dataset-dependent and require a live cloud namespace to
+                        // verify.
                         return Some(serde_json::json!([field_name, "In", any]));
                     }
                     // {"match": {"value": x}} => ["field_name", "Eq", x]

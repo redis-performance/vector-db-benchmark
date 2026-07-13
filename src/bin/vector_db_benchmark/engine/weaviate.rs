@@ -1069,6 +1069,14 @@ fn build_weaviate_filter(
             }
 
             let value = criteria.get("value")?;
+            // Guard non-scalar: an array/object/null under `value` is malformed
+            // input — the canonical model uses `match.any` for lists. Without
+            // this, `value_key` falls back to "valueText" and forwards the array
+            // verbatim. Drop the clause (return None) instead, matching
+            // qdrant/redis/valkey/vectorsets.
+            if !(value.is_string() || value.is_number() || value.is_boolean()) {
+                return None;
+            }
             let vk = value_key(value);
             Some(serde_json::json!({
                 "path": [field_name],
@@ -1713,6 +1721,17 @@ mod tests {
         assert_eq!(c["valueText"], "red");
     }
 
+    // #121: a non-scalar `value` (object/null) is malformed input — the
+    // canonical model uses `match.any` for lists. Without the guard, `value_key`
+    // falls back to "valueText" and forwards it verbatim. It must be dropped
+    // (None). Matches qdrant/redis/valkey/vectorsets. (Array case covered by
+    // exact_match_array_value_is_none.)
+    #[test]
+    fn match_non_scalar_value_dropped() {
+        assert!(build_weaviate_filter("n", "match", &json!({"value": {"x": 1}})).is_none());
+        assert!(build_weaviate_filter("n", "match", &json!({"value": null})).is_none());
+    }
+
     #[test]
     fn keyword_property_is_filterable_with_field_tokenization() {
         // Modern Weaviate needs `indexFilterable` (not the deprecated
@@ -1893,12 +1912,12 @@ mod tests {
     }
 
     #[test]
-    fn exact_match_array_value_falls_back_to_value_text() {
-        // No scalar guard: a non-scalar value falls through value_key's default
-        // (valueText) with the array as the value (documents behavior).
-        let f = build_weaviate_filter("n", "match", &json!({"value":[1,2]})).unwrap();
-        assert_eq!(f["operator"], "Equal");
-        assert_eq!(f["valueText"], json!([1, 2]));
+    fn exact_match_array_value_is_none() {
+        // #121: the scalar exact-match arm now guards non-scalars; a JSON array
+        // value is dropped (None) instead of falling through value_key's default
+        // (valueText) with the array as the value. Matches qdrant/redis/valkey/
+        // vectorsets.
+        assert!(build_weaviate_filter("n", "match", &json!({"value":[1,2]})).is_none());
     }
 
     // ── gRPC Filters translation (must mirror the GraphQL where-tree) ───────
@@ -2037,9 +2056,11 @@ mod tests {
 
     #[test]
     fn grpc_non_scalar_equal_value_is_untranslatable() {
-        // The degenerate array-under-valueText leaf can't become a proto scalar,
-        // so translation returns None → the run falls back to GraphQL.
-        let leaf = build_weaviate_filter("n", "match", &json!({"value":[1,2]})).unwrap();
+        // A degenerate array-under-valueText leaf (build_weaviate_filter no longer
+        // produces one after #121, so it's constructed directly here) can't become
+        // a proto scalar, so translation returns None → the run falls back to
+        // GraphQL. Guards the gRPC translator's own scalar-accessor check.
+        let leaf = json!({"path": ["n"], "operator": "Equal", "valueText": [1, 2]});
         assert!(where_json_to_grpc_filters(&leaf).is_none());
     }
 

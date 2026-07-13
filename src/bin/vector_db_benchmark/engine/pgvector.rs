@@ -748,10 +748,13 @@ fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Op
                             let ph = builder.bind(PgValue::Float(f));
                             parts.push(format!("\"{}\" = {}", field_name, ph));
                         } else {
-                            // Non-scalar match value (e.g. a JSON array) — never
-                            // emitted by real datasets. Inlined verbatim; this is
-                            // the ONE case whose SQL text is value-dependent.
-                            parts.push(format!("\"{}\" = {}", field_name, value));
+                            // Non-scalar match value (a JSON array/object/null)
+                            // is malformed input — the canonical model uses
+                            // `match.any` for lists. Drop the clause (emit
+                            // nothing) instead of inlining `"f" = [1,2]`
+                            // verbatim, matching qdrant/redis/valkey/vectorsets.
+                            // As the sole condition this leaves `parts` empty →
+                            // the builder returns None.
                         }
                     }
                 }
@@ -953,6 +956,25 @@ mod tests {
         assert!(vals.is_empty());
     }
 
+    // #121: a non-scalar `value` (a JSON array) is malformed input — the
+    // canonical model uses `match.any` for lists. The clause is dropped (no SQL,
+    // no bound value) rather than inlining `"n" = [1,2]` verbatim. As the sole
+    // condition the whole filter is None. Matches qdrant/redis/valkey/vectorsets.
+    #[test]
+    fn match_non_scalar_value_dropped() {
+        assert!(parse(&json!({"and": [{"n": {"match": {"value": [1, 2]}}}]})).is_none());
+        assert!(parse(&json!({"and": [{"n": {"match": {"value": {"x": 1}}}}]})).is_none());
+        assert!(parse(&json!({"and": [{"n": {"match": {"value": null}}}]})).is_none());
+        // A non-scalar clause is dropped but a sibling scalar clause survives.
+        let cond = json!({"and": [
+            {"n": {"match": {"value": [1, 2]}}},
+            {"c": {"match": {"value": "red"}}},
+        ]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"c\" = $3)");
+        assert_eq!(vals, vec![PgValue::Text("red".to_string())]);
+    }
+
     // ── OR-branch of the condition parser ──────────────────────────────────
 
     #[test]
@@ -1091,12 +1113,11 @@ mod tests {
     }
 
     #[test]
-    fn exact_match_array_value_inlines_json_array() {
-        // Non-scalar match values are never produced by real datasets; this one
-        // degenerate case stays inlined (no bound value), documented in
-        // build_pg_clause.
-        let (sql, vals) = parse(&json!({"and":[{"n":{"match":{"value":[1,2]}}}]})).unwrap();
-        assert_eq!(sql, "(\"n\" = [1,2])");
-        assert!(vals.is_empty());
+    fn exact_match_array_value_is_dropped() {
+        // #121: a non-scalar match value (a JSON array) is malformed input — the
+        // canonical model uses `match.any` for lists. The clause is dropped (as
+        // the sole condition → None), matching qdrant/redis/valkey/vectorsets
+        // (was previously inlined verbatim as `"n" = [1,2]`).
+        assert!(parse(&json!({"and":[{"n":{"match":{"value":[1,2]}}}]})).is_none());
     }
 }

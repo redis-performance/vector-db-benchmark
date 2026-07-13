@@ -716,8 +716,15 @@ fn build_milvus_filter(
             let value = criteria.get("value")?;
             if let Some(s) = value.as_str() {
                 Some(format!("{} == {}", field_name, quote_milvus_string(s)))
-            } else {
+            } else if value.is_number() || value.is_boolean() {
                 Some(format!("{} == {}", field_name, value))
+            } else {
+                // Non-scalar exact-match value (a JSON array/object/null) is
+                // malformed input — the canonical model uses `match.any` for
+                // lists. Drop the clause (return None) instead of forwarding
+                // `field == [1,2]` verbatim, matching qdrant/redis/valkey/
+                // vectorsets.
+                None
             }
         }
         "range" => {
@@ -1095,6 +1102,20 @@ mod tests {
         );
     }
 
+    // #121: a non-scalar `value` (a JSON array/object/null) is malformed input —
+    // the canonical model uses `match.any` for lists. It must be dropped (None),
+    // not forwarded verbatim as `n == [1,2]`. Matches qdrant/redis/valkey/
+    // vectorsets. (Scalar kinds int/float/bool covered by exact_match_int_float_bool.)
+    #[test]
+    fn match_non_scalar_value_dropped() {
+        assert!(build_milvus_filter("n", "match", &json!({"value": [1, 2]})).is_none());
+        assert!(build_milvus_filter("n", "match", &json!({"value": {"x": 1}})).is_none());
+        assert!(build_milvus_filter("n", "match", &json!({"value": null})).is_none());
+        // As the sole clause, the whole filter is dropped.
+        let e = json!({"and": [{"n": {"match": {"value": [1, 2]}}}]});
+        assert!(parse_milvus_conditions(&e).is_none());
+    }
+
     #[test]
     fn match_exact_value_escapes_quotes_and_backslashes() {
         // Exact-value string branch must escape through the shared helper:
@@ -1218,12 +1239,10 @@ mod tests {
     }
 
     #[test]
-    fn exact_match_array_value_inlines_json_array() {
-        // No scalar guard: a non-scalar value is Display-formatted verbatim
-        // (documents behavior).
-        assert_eq!(
-            build_milvus_filter("n", "match", &json!({"value":[1,2]})).unwrap(),
-            "n == [1,2]"
-        );
+    fn exact_match_array_value_is_none() {
+        // #121: the scalar exact-match arm now guards non-scalars; a JSON array
+        // value is dropped (None), matching qdrant/redis/valkey/vectorsets (was
+        // previously Display-formatted verbatim as `n == [1,2]`).
+        assert!(build_milvus_filter("n", "match", &json!({"value":[1,2]})).is_none());
     }
 }
