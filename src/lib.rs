@@ -10,6 +10,7 @@ pub mod config;
 pub mod metrics;
 pub mod readers;
 pub mod redis_client;
+pub mod synthetic;
 
 // Re-export commonly used types
 pub use config::RedisConfig;

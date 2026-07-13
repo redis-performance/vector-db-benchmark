@@ -1367,5 +1367,35 @@
     "link": "https://dbyiw3u3rf9yr.cloudfront.net/corpora/vectorsearch/cohere-wikipedia-22-12-en-embeddings/documents-10m.hdf5.bz2",
     "vector_count": 10000000,
     "description": "Wikipedia embeddings"
+  },
+  {
+    "name": "synthetic-sparse-300",
+    "vector_size": 300,
+    "distance": "dot",
+    "type": "sparse",
+    "path": "synthetic-sparse-300",
+    "description": "Locally-generated sparse dataset (data.csr + queries.csr + neighbours.jsonl), dot/MIPS ground truth. NO public download — generate with `cargo run --release --bin generate-dataset` (writes into datasets/). Exercises the sparse code path end-to-end, e.g. --engines qdrant-default --datasets synthetic-sparse-300."
+  },
+  {
+    "name": "synthetic-hybrid-16",
+    "vector_size": 16,
+    "distance": "l2",
+    "type": "hybrid",
+    "path": "synthetic-hybrid-16",
+    "description": "Locally-generated hybrid dense+sparse dataset (vectors.npy + queries.npy + data.csr + queries.csr + shared neighbours.jsonl). Ground truth is recoverable ONLY by fusing both modalities (RRF). NO public download — generate with `cargo run --release --bin generate-dataset`. Exercises the hybrid path, e.g. --engines qdrant-hybrid --datasets synthetic-hybrid-16."
+  },
+  {
+    "name": "synthetic-filter-32",
+    "vector_size": 32,
+    "distance": "l2",
+    "type": "tar",
+    "path": "synthetic-filter-32/",
+    "schema": {
+      "color": "keyword",
+      "size": "int",
+      "flag": "bool",
+      "ts": "datetime"
+    },
+    "description": "Locally-generated filter-datatype dataset (compound: vectors.npy + payloads.jsonl + tests.jsonl). Per-query `conditions` rotate through keyword/int/bool/datetime filters, each with filtered ground truth. NO public download — generate with `cargo run --release --bin generate-dataset`. Exercises the filter path, e.g. --engines redis-docker-test --datasets synthetic-filter-32."
   }
 ]

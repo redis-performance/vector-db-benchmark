@@ -238,6 +238,48 @@ Most datasets are automatically downloaded on first use. The image includes `ran
 | Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (with filters)                     |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 | Random Match Keyword Small Vocab-256: Small vocabulary keyword matching (no filters)                       |        256 |   1,000,000 |    10,000 |       100 | Cosine    |
 
+### Generating local datasets
+
+The sparse-vector, hybrid (dense+sparse fusion), and multi-datatype filter code
+paths ship with **locally-generated** synthetic datasets — small, deterministic
+(fixed-seed) fixtures with **no public download link**. Generate them once with:
+
+```bash
+cargo run --release --bin generate-dataset          # writes into ./datasets
+# or a subset / custom location:
+cargo run --release --bin generate-dataset -- --only sparse --out-dir /tmp/ds
+```
+
+This writes three datasets under `datasets/` (each in the exact on-disk layout
+its reader expects), registered in [`datasets/datasets.json`](./datasets/datasets.json):
+
+| Dataset                | Type     | Dims | Distance | Layout                                                                                  |
+| ---------------------- | -------- | ---: | -------- | --------------------------------------------------------------------------------------- |
+| `synthetic-sparse-300` | `sparse` |  300 | dot      | `data.csr` + `queries.csr` + `neighbours.jsonl` (dot/MIPS ground truth)                 |
+| `synthetic-hybrid-16`  | `hybrid` |   16 | l2       | `vectors.npy` + `queries.npy` + `data.csr` + `queries.csr` + shared `neighbours.jsonl`  |
+| `synthetic-filter-32`  | `tar`    |   32 | l2       | `vectors.npy` + `payloads.jsonl` + `tests.jsonl` (per-query `conditions` + filtered GT) |
+
+`synthetic-filter-32`'s per-query `conditions` rotate through **keyword**, **int**,
+**bool** and **datetime** filters (schema `color:keyword, size:int, flag:bool, ts:datetime`),
+each with ground truth brute-forced over only the matching documents, so a high
+recall proves the engine actually applied the filter. The generated files are
+git-ignored — regenerate them on any checkout with the command above.
+
+Example runs against a generated dataset (start the engine first, e.g.
+`docker compose -f tests/docker-compose.test.yml up -d qdrant redis`):
+
+```bash
+# Sparse (Qdrant):
+cargo run --release --bin vector-db-benchmark -- \
+  --engines qdrant-default --datasets synthetic-sparse-300
+# Hybrid dense+sparse fusion (Qdrant):
+cargo run --release --bin vector-db-benchmark -- \
+  --engines qdrant-hybrid --datasets synthetic-hybrid-16
+# Filter datatypes (Redis):
+cargo run --release --bin vector-db-benchmark -- \
+  --engines redis-docker-test --datasets synthetic-filter-32
+```
+
 ## Engine Configurations
 
 Engine configurations live in [`experiments/configurations/`](./experiments/configurations/). Each JSON file defines one or more experiment configurations specifying the engine, index parameters, search parameters, and upload parallelism.
