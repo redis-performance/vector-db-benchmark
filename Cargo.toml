@@ -52,3 +52,7 @@ path = "src/bin/bench_npy.rs"
 [[bin]]
 name = "vector-db-benchmark"
 path = "src/bin/vector_db_benchmark/main.rs"
+
+[[bin]]
+name = "generate-dataset"
+path = "src/bin/generate_dataset.rs"

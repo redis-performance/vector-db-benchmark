@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use vector_db_benchmark::readers::{write_npy_vectors, write_sparse_matrix, SparseVector};
+use vector_db_benchmark::readers::{write_npy_vectors, write_sparse_matrix};
+use vector_db_benchmark::synthetic::{generate_hybrid, generate_sparse, HybridData, SparseData};
 
 /// Keyword values assigned round-robin to documents by `id % 4`.
 ///
@@ -729,52 +730,13 @@ pub fn write_sparse_project(dataset_name: &str, engine_configs_json: &str) -> Sp
     const TOP: usize = 10;
 
     // Fixed seed → reproducible data/queries/ground-truth across engines & runs.
-    let mut rng = StdRng::seed_from_u64(0x5A5A_5EED);
-    let mut make = |count: usize| -> Vec<SparseVector> {
-        (0..count)
-            .map(|_| {
-                let mut idx: Vec<u32> = Vec::with_capacity(NNZ);
-                while idx.len() < NNZ {
-                    let c = rng.gen_range(0..DIM as u32);
-                    if !idx.contains(&c) {
-                        idx.push(c);
-                    }
-                }
-                idx.sort_unstable();
-                let values: Vec<f32> = (0..NNZ).map(|_| rng.gen_range(0.1..1.0)).collect();
-                SparseVector {
-                    indices: idx,
-                    values,
-                }
-            })
-            .collect()
-    };
-    let data = make(N);
-    let queries = make(Q);
-
-    // Brute-force sparse dot product; sort DESCENDING (MIPS).
-    let dot = |a: &SparseVector, b: &SparseVector| -> f64 {
-        let mut s = 0.0f64;
-        for (i, &ai) in a.indices.iter().enumerate() {
-            if let Some(j) = b.indices.iter().position(|&bi| bi == ai) {
-                s += a.values[i] as f64 * b.values[j] as f64;
-            }
-        }
-        s
-    };
-    let neighbors: Vec<Vec<i64>> = queries
-        .iter()
-        .map(|qv| {
-            let mut scored: Vec<(i64, f64)> = data
-                .iter()
-                .enumerate()
-                .map(|(i, d)| (i as i64, dot(qv, d)))
-                .collect();
-            // DESCENDING by dot product (b vs a). Do NOT flip this.
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            scored.iter().take(TOP).map(|(id, _)| *id).collect()
-        })
-        .collect();
+    // Generation is shared with the `generate-dataset` binary via
+    // `vector_db_benchmark::synthetic` so both produce byte-identical datasets.
+    let SparseData {
+        data,
+        queries,
+        neighbours: neighbors,
+    } = generate_sparse(0x5A5A_5EED, DIM, NNZ, N, Q, TOP);
 
     let tmp = tempfile::tempdir().expect("temp dir");
     let root = tmp.path().to_path_buf();
@@ -861,114 +823,20 @@ pub struct HybridProject {
 /// Build a temp project with a deterministic planted hybrid dataset whose fused
 /// (RRF) top-K ground truth is recoverable ONLY by combining both modalities.
 pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> HybridProject {
-    const K: usize = 8; // top-k / ground-truth-set size (must be even)
-    const HALF: usize = K / 2; // per-half / per-distractor-ring size
-    const Q: usize = 6; // queries (and dense centre axes)
-    const DENSE_DIM: usize = 16; // >= Q centre dims + HALF distractor bump dims
-    const PER_Q: usize = 4 * HALF; // R_dense + R_sparse + D_d + D_s per query
-    const FILLER: usize = 24;
-    const N: usize = Q * PER_Q + FILLER; // = 120
-    const BIG: f32 = 100.0; // centre magnitude → regions ~141 apart, origin ~100
-
-    // Sparse layout: query q owns index block F_q = [q*HALF .. q*HALF+HALF);
-    // dense-only distractors / filler use a disjoint "junk" block J (dot 0).
-    const F_TOTAL: usize = Q * HALF;
-
-    let mut rng = StdRng::seed_from_u64(0xB19_1DEA);
-    let tiny = |rng: &mut StdRng| -> f32 { rng.gen_range(-0.01f32..0.01) };
-
-    // Doc-id block layout for query q: base = q*PER_Q, then four HALF-sized rings.
-    let base = |q: usize| q * PER_Q;
-    let r_dense_id = |q: usize, j: usize| base(q) + j; //            [base,       base+HALF)
-    let r_sparse_id = |q: usize, j: usize| base(q) + HALF + j; //    [base+HALF,  base+2HALF)
-    let d_d_id = |q: usize, j: usize| base(q) + 2 * HALF + j; //     [base+2HALF, base+3HALF)
-    let d_s_id = |q: usize, j: usize| base(q) + 3 * HALF + j; //     [base+3HALF, base+4HALF)
-    let filler_start = Q * PER_Q;
-
-    // Dense centre for query q: BIG on axis q, else 0.
-    let centre = |q: usize| -> Vec<f32> {
-        let mut v = vec![0.0f32; DENSE_DIM];
-        v[q] = BIG;
-        v
-    };
-    // A dense doc = centre + `mag` along a distractor axis (dims Q..DENSE_DIM),
-    // so its L2 distance from the query (= centre) is exactly `mag`.
-    let offset_from = |c: &[f32], mag: f32, j: usize| -> Vec<f32> {
-        let mut v = c.to_vec();
-        v[Q + (j % (DENSE_DIM - Q))] += mag;
-        v
-    };
-
-    let junk: Vec<u32> = (F_TOTAL..F_TOTAL + HALF).map(|i| i as u32).collect();
-
-    let mut dense: Vec<Vec<f32>> = vec![vec![0.0f32; DENSE_DIM]; N];
-    let mut sparse: Vec<SparseVector> = vec![
-        SparseVector {
-            indices: vec![],
-            values: vec![]
-        };
-        N
-    ];
-
-    for q in 0..Q {
-        let c = centre(q);
-        let f_q: Vec<u32> = (q * HALF..q * HALF + HALF).map(|i| i as u32).collect();
-        // Per-doc tiny increments break ties so tiers stay crisply ordered.
-        let sp = |indices: &[u32], val: f32, j: usize| SparseVector {
-            indices: indices.to_vec(),
-            values: indices.iter().map(|_| val + 0.001 * j as f32).collect(),
-        };
-        for j in 0..HALF {
-            // R_dense: dense dist 1.0 (ranks 0..HALF); sparse dot ~ HALF*1 (low).
-            dense[r_dense_id(q, j)] = offset_from(&c, 1.0, j);
-            sparse[r_dense_id(q, j)] = sp(&f_q, 1.0, j);
-
-            // D_d: dense dist 2.0 (ranks HALF..K); sparse = junk → dot 0.
-            dense[d_d_id(q, j)] = offset_from(&c, 2.0, HALF + j);
-            sparse[d_d_id(q, j)] = sp(&junk, 1.0, j);
-
-            // R_sparse: dense dist 3.0 (ranks K..3K/2); sparse dot ~ HALF*3 (top).
-            dense[r_sparse_id(q, j)] = offset_from(&c, 3.0, 2 * HALF + j);
-            sparse[r_sparse_id(q, j)] = sp(&f_q, 3.0, j);
-
-            // D_s: dense ≈ origin (dist ~BIG, absent from dense top); sparse dot ~
-            // HALF*2 (ranks HALF..K, between R_sparse and R_dense).
-            let mut ds_v = vec![0.0f32; DENSE_DIM];
-            for x in ds_v.iter_mut() {
-                *x += tiny(&mut rng);
-            }
-            dense[d_s_id(q, j)] = ds_v;
-            sparse[d_s_id(q, j)] = sp(&f_q, 2.0, j);
-        }
-    }
-    // Filler: dense ≈ origin, sparse in junk block (dot 0 with every query).
-    for id in filler_start..N {
-        let mut fv = vec![0.0f32; DENSE_DIM];
-        for x in fv.iter_mut() {
-            *x += tiny(&mut rng);
-        }
-        dense[id] = fv;
-        sparse[id] = SparseVector {
-            indices: junk.clone(),
-            values: vec![1.0f32; HALF],
-        };
-    }
-
-    // Queries: dense = centre_q, sparse = ones on F_q. Ground truth R_q =
-    // R_dense ∪ R_sparse (the full K planted docs).
-    let mut dense_q: Vec<Vec<f32>> = Vec::with_capacity(Q);
-    let mut sparse_q: Vec<SparseVector> = Vec::with_capacity(Q);
-    let mut neighbours: Vec<Vec<i64>> = Vec::with_capacity(Q);
-    for q in 0..Q {
-        dense_q.push(centre(q));
-        sparse_q.push(SparseVector {
-            indices: (q * HALF..q * HALF + HALF).map(|i| i as u32).collect(),
-            values: vec![1.0f32; HALF],
-        });
-        let mut gt: Vec<i64> = (0..HALF).map(|j| r_dense_id(q, j) as i64).collect();
-        gt.extend((0..HALF).map(|j| r_sparse_id(q, j) as i64));
-        neighbours.push(gt);
-    }
+    // The planted dataset is generated by the shared `synthetic::generate_hybrid`
+    // (same code path as the `generate-dataset` binary), so the fixture and the
+    // registered dataset are byte-identical. See that function for the full
+    // fused-only-recoverable planting rationale.
+    let HybridData {
+        dense,
+        dense_queries: dense_q,
+        sparse,
+        sparse_queries: sparse_q,
+        neighbours,
+        dim: dense_dim,
+        top: k,
+    } = generate_hybrid(0xB19_1DEA);
+    let n = dense.len();
 
     let tmp = tempfile::tempdir().expect("temp dir");
     let root = tmp.path().to_path_buf();
@@ -997,11 +865,11 @@ pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> Hy
     let datasets_json = serde_json::json!([
         {
             "name": dataset_name, "type": "hybrid", "path": dataset_name,
-            "distance": "l2", "vector_size": DENSE_DIM, "vector_count": N,
+            "distance": "l2", "vector_size": dense_dim, "vector_count": n,
         },
         {
             "name": dense_dataset_name, "type": "jsonl", "path": format!("{dense_dataset_name}/"),
-            "distance": "l2", "vector_size": DENSE_DIM, "vector_count": N,
+            "distance": "l2", "vector_size": dense_dim, "vector_count": n,
         },
     ]);
     fs::write(
@@ -1019,29 +887,24 @@ pub fn write_hybrid_project(dataset_name: &str, engine_configs_json: &str) -> Hy
         root,
         dataset_name: dataset_name.to_string(),
         dense_dataset_name,
-        top: K,
+        top: k,
     }
 }
 
-/// Write `vectors` as a `.jsonl` file (one JSON float-array per line), the
-/// layout the `type:"jsonl"` reader expects.
+/// Write `vectors` as a `.jsonl` file (delegates to the shared serializer in
+/// `vector_db_benchmark::synthetic`, so there is a single source of truth).
 fn write_jsonl_vectors(path: &Path, vectors: &[Vec<f32>]) {
-    let body = vectors
-        .iter()
-        .map(|v| serde_json::to_string(&v.iter().map(|x| *x as f64).collect::<Vec<_>>()).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(path, body).unwrap();
+    vector_db_benchmark::synthetic::write_jsonl_vectors(path, vectors).unwrap();
 }
 
-/// Write `neighbours.jsonl` (one JSON id-array per line) into `ds_dir`.
+/// Write `neighbours.jsonl` (one JSON id-array per line) into `ds_dir`
+/// (delegates to the shared serializer in `vector_db_benchmark::synthetic`).
 fn write_neighbours(ds_dir: &Path, neighbours: &[Vec<i64>]) {
-    let nb = neighbours
-        .iter()
-        .map(|nn| serde_json::to_string(nn).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(ds_dir.join("neighbours.jsonl"), nb).unwrap();
+    vector_db_benchmark::synthetic::write_neighbours_jsonl(
+        &ds_dir.join("neighbours.jsonl"),
+        neighbours,
+    )
+    .unwrap();
 }
 
 /// Path to the compiled binary under test. Cargo exports

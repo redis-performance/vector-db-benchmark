@@ -904,3 +904,91 @@ fn test_binary_qdrant_quantization_is_applied() {
          not appear to be applied to the read path"
     );
 }
+
+// ---------------------------------------------------------------------------
+// generate-dataset binary coverage (issue #122): prove that a dataset written
+// by the `generate-dataset` binary is consumable end-to-end by the benchmark.
+//
+// This is stronger than the fixture-based `test_binary_qdrant_sparse`: it runs
+// the SHIPPED binary (its own CLI, its own on-disk writes into a fresh
+// `datasets/` dir), registers the result exactly as `datasets/datasets.json`
+// does (local `path`, no download link), and runs the real engine against it.
+// ---------------------------------------------------------------------------
+
+/// Path to the compiled `generate-dataset` binary (Cargo exports this env var
+/// to integration tests automatically).
+fn generate_dataset_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_generate-dataset"))
+}
+
+#[test]
+fn test_generate_dataset_binary_sparse_end_to_end() {
+    wait_for_qdrant();
+
+    // Fresh temp project: <root>/datasets, <root>/experiments/..., <root>/results.
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    let datasets_dir = root.join("datasets");
+    std::fs::create_dir_all(&datasets_dir).unwrap();
+    std::fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    std::fs::create_dir_all(root.join("results")).unwrap();
+
+    // 1. Run the REAL generator binary, writing only the sparse dataset.
+    let ds_name = "synthetic-sparse-300";
+    let out = std::process::Command::new(generate_dataset_bin())
+        .args([
+            "--out-dir",
+            datasets_dir.to_str().unwrap(),
+            "--only",
+            "sparse",
+        ])
+        .output()
+        .expect("run generate-dataset");
+    assert!(
+        out.status.success(),
+        "generate-dataset failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Layout check: the sparse reader needs exactly these three files.
+    for f in ["data.csr", "queries.csr", "neighbours.jsonl"] {
+        assert!(
+            datasets_dir.join(ds_name).join(f).exists(),
+            "generator did not write {f}"
+        );
+    }
+
+    // 2. Register the generated dataset (local path, NO link) + an engine config,
+    //    exactly as datasets/datasets.json does for the shipped entry.
+    let datasets_json = serde_json::json!([{
+        "name": ds_name, "type": "sparse", "path": ds_name,
+        "distance": "dot", "vector_size": 300,
+    }]);
+    std::fs::write(
+        datasets_dir.join("datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    let configs = serde_json::json!([{
+        "name": "qdrant-gen-sparse", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1}], "upload_params": {"parallel": 1, "batch_size": 50}
+    }]);
+    std::fs::write(
+        root.join("experiments/configurations/test.json"),
+        serde_json::to_string(&configs).unwrap(),
+    )
+    .unwrap();
+
+    // 3. Run the benchmark against the GENERATED dataset and check recall.
+    assert!(
+        run_qdrant_binary(&root, "qdrant-gen-sparse", ds_name),
+        "benchmark run over generated sparse dataset failed"
+    );
+    let precision = read_precision(&root, "qdrant-gen-sparse");
+    println!("generated sparse dataset precision={precision:.3}");
+    assert!(
+        precision >= 0.9,
+        "generated sparse precision {precision:.3} < 0.9"
+    );
+}
