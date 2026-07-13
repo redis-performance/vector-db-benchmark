@@ -59,6 +59,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "mongodb",
         "valkey",
         "turbopuffer",
+        "dragonfly",
     ];
     let mut engines: Vec<_> = engine_configs
         .iter()
