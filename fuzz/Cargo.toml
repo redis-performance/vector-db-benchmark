@@ -1,0 +1,57 @@
+[package]
+name = "vector_db_benchmark-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Own workspace: keeps `cargo build`/`cargo test` at the repo root unaffected
+# (the root crate is not a workspace, and this nested crate is nightly-only).
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+tempfile = "3"
+serde_json = "1"
+
+[dependencies.vector_db_benchmark]
+path = ".."
+
+# Prevent this from interfering with `cargo test` in the root crate.
+[[bin]]
+name = "sparse_reader"
+path = "fuzz_targets/sparse_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "npy_reader"
+path = "fuzz_targets/npy_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonl_reader"
+path = "fuzz_targets/jsonl_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compound_payloads"
+path = "fuzz_targets/compound_payloads.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata"
+path = "fuzz_targets/metadata.rs"
+test = false
+doc = false
+bench = false

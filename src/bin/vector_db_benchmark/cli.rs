@@ -149,4 +149,20 @@ mod tests {
         assert!(!parse(&["--exit-on-error", "false"]).exit_on_error);
         assert!(!parse(&["--exit-on-error=false"]).exit_on_error);
     }
+
+    // `--describe datasets|engines` is what the docker-build smoke test exercises;
+    // pin that it parses (and is absent by default) so the dispatch in main.rs
+    // always receives the expected value.
+    #[test]
+    fn describe_option_parses() {
+        assert_eq!(parse(&[]).describe, None, "omitted → None");
+        assert_eq!(
+            parse(&["--describe", "datasets"]).describe.as_deref(),
+            Some("datasets")
+        );
+        assert_eq!(
+            parse(&["--describe", "engines"]).describe.as_deref(),
+            Some("engines")
+        );
+    }
 }
