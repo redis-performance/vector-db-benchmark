@@ -955,10 +955,37 @@ impl Engine for VectorSetsEngine {
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or(0);
 
+        // Vector-set stats via VINFO (quant-type, hnsw-m, vector-dim, size, ...).
+        let index_info: Option<serde_json::Value> = redis::cmd("VINFO")
+            .arg("idx")
+            .query::<redis::Value>(&mut conn)
+            .ok()
+            .map(|v| redis_utils::value_to_json(&v));
+
         Some(serde_json::json!({
             "used_memory": used_memory,
             "shards": 1,
+            "index_info": index_info,
         }))
+    }
+
+    fn server_metadata(&mut self) -> Option<serde_json::Value> {
+        let mut conn = self.get_connection().ok()?;
+        let mut meta = redis_utils::collect_server_metadata(&mut conn);
+        // VectorSets has no FT index; VINFO returns the vector-set metadata.
+        // Errors on the BEFORE snapshot (vset not yet created) → index_info: null.
+        let vinfo = redis::cmd("VINFO")
+            .arg("idx")
+            .query::<redis::Value>(&mut conn)
+            .ok()
+            .map(|v| redis_utils::value_to_json(&v));
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "index_info".to_string(),
+                vinfo.unwrap_or(serde_json::Value::Null),
+            );
+        }
+        Some(meta)
     }
 }
 
