@@ -40,6 +40,7 @@ const ENGINE_FILES: &[&str] = &[
     "vectorsets.rs",
     "mongodb_engine.rs",
     "turbopuffer.rs",
+    "dragonfly.rs",
 ];
 
 fn engine_dir() -> PathBuf {

@@ -279,6 +279,9 @@ impl DragonflyEngine {
 
             let mut num_docs: usize = 0;
             let mut indexing: bool = false;
+            // Default 1.0 (fully indexed) so an FT.INFO that omits the field does
+            // not stall the wait; Dragonfly DOES expose percent_indexed.
+            let mut percent_indexed: f64 = 1.0;
 
             fn extract_usize(val: &redis::Value) -> usize {
                 match val {
@@ -301,10 +304,23 @@ impl DragonflyEngine {
                 }
             }
 
+            fn extract_f64(val: &redis::Value) -> f64 {
+                match val {
+                    redis::Value::BulkString(s) => {
+                        String::from_utf8_lossy(s).parse().unwrap_or(1.0)
+                    }
+                    redis::Value::Int(n) => *n as f64,
+                    redis::Value::Double(f) => *f,
+                    redis::Value::SimpleString(s) => s.parse().unwrap_or(1.0),
+                    _ => 1.0,
+                }
+            }
+
             let mut handle_pair = |key: &str, val: &redis::Value| match key {
                 "num_docs" => num_docs = extract_usize(val),
                 "indexing" => indexing = indexing || extract_bool_nonzero(val),
                 "backfill_in_progress" => indexing = indexing || extract_bool_nonzero(val),
+                "percent_indexed" => percent_indexed = extract_f64(val),
                 _ => {}
             };
 
@@ -336,7 +352,10 @@ impl DragonflyEngine {
                 }
             }
 
-            if num_docs >= expected && !indexing {
+            // Require the HNSW graph to be fully built (percent_indexed >= 1.0),
+            // not just the doc count, so the search sweep never runs against a
+            // partially-backfilled graph (which would depress recall).
+            if num_docs >= expected && !indexing && percent_indexed >= 1.0 {
                 println!(
                     "Indexing complete: {} docs in {:.1}s",
                     num_docs,
@@ -347,17 +366,18 @@ impl DragonflyEngine {
 
             if start.elapsed().as_secs() > max_wait {
                 println!(
-                    "Warning: indexing timeout after {}s (num_docs={}/{}, indexing={})",
-                    max_wait, num_docs, expected, indexing
+                    "Warning: indexing timeout after {}s (num_docs={}/{}, indexing={}, percent_indexed={:.2})",
+                    max_wait, num_docs, expected, indexing, percent_indexed
                 );
                 return Ok(());
             }
 
             if start.elapsed().as_secs().is_multiple_of(10) && start.elapsed().as_secs() > 0 {
                 println!(
-                    "Waiting for indexing: {} docs, indexing={} ({:.0}s)",
+                    "Waiting for indexing: {} docs, indexing={}, percent_indexed={:.2} ({:.0}s)",
                     num_docs,
                     indexing,
+                    percent_indexed,
                     start.elapsed().as_secs_f64()
                 );
             }
@@ -434,15 +454,30 @@ fn map_distance_metric(distance: &str) -> &'static str {
     }
 }
 
+/// Whether `EF_RUNTIME` should be emitted for the given algorithm.
+///
+/// `EF_RUNTIME` is an HNSW-only per-query attribute — a FLAT index rejects it
+/// with a query syntax error. Gating it (query string, the `EF` PARAM, and the
+/// PARAMS count) on HNSW keeps a `"algorithm":"flat"` config usable, mirroring
+/// redis.rs.
+fn uses_ef_runtime(algorithm: &str) -> bool {
+    algorithm.eq_ignore_ascii_case("hnsw")
+}
+
 /// Build the FT.SEARCH KNN query string (unfiltered `*` prefilter).
 ///
 /// Pure client-side string formatting, kept OUT of the per-query timed window
-/// (precomputed once before the parallel region). `EF_RUNTIME $EF` is a
-/// supported per-query HNSW attribute (verified live) — without it every `ef`
-/// in the search sweep runs at the index default. The query vector is bound as
-/// `$vec_param`, so this string is identical across all queries.
-fn build_knn_query_str() -> String {
-    "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]".to_string()
+/// (precomputed once before the parallel region). `EF_RUNTIME $EF` is emitted
+/// only for an HNSW index (verified live) — a per-query attribute FLAT rejects;
+/// without it every `ef` in the search sweep runs at the index default. The
+/// query vector is bound as `$vec_param`, so this string is identical across all
+/// queries.
+fn build_knn_query_str(algorithm: &str) -> String {
+    if uses_ef_runtime(algorithm) {
+        "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]".to_string()
+    } else {
+        "*=>[KNN $K @vector $vec_param AS vector_score]".to_string()
+    }
 }
 
 /// Execute a Dragonfly FT.SEARCH KNN query, return (id, score) pairs.
@@ -456,6 +491,7 @@ fn ft_search_knn(
     query_str: &str,
     top: usize,
     ef: i64,
+    algorithm: &str,
     query_timeout: i64,
 ) -> Result<Vec<(i64, f64)>, String> {
     let mut cmd = redis::cmd("FT.SEARCH");
@@ -475,11 +511,15 @@ fn ft_search_knn(
         .arg("TIMEOUT")
         .arg(query_timeout);
 
-    // Params: vec_param(2) + K(2) + EF(2).
-    cmd.arg("PARAMS").arg(6);
+    // Params: vec_param(2) + K(2), plus EF(2) only for HNSW (EF_RUNTIME is
+    // HNSW-only; binding it on a FLAT index would be a syntax error).
+    let ef_runtime = uses_ef_runtime(algorithm);
+    cmd.arg("PARAMS").arg(if ef_runtime { 6 } else { 4 });
     cmd.arg("vec_param").arg(vec_bytes);
     cmd.arg("K").arg(top.to_string());
-    cmd.arg("EF").arg(ef.to_string());
+    if ef_runtime {
+        cmd.arg("EF").arg(ef.to_string());
+    }
 
     // Query the raw Value (not Vec<Value>) so both a RESP2 array and a RESP3 map
     // deserialize; parse_ft_search_response dispatches on the shape.
@@ -661,6 +701,13 @@ impl Engine for DragonflyEngine {
         );
 
         self.create_index(&mut conn, dataset)?;
+        // NOTE: Dragonfly's INFO commandstats omits the `failed_calls=` field
+        // that redis/valkey expose, so the check_commandstats guards in
+        // upload()/search() are best-effort no-ops on Dragonfly — they cannot
+        // observe server-side command failures. Primary error propagation is
+        // still correct: every HSET/FT.SEARCH goes through `cmd.query`, which
+        // surfaces an `Err` on failure. The baseline is still reset for parity
+        // (and would activate automatically if Dragonfly ever adds failed_calls).
         self.commandstats_baseline = redis_utils::reset_commandstats(&mut conn)?;
         Ok(())
     }
@@ -717,7 +764,9 @@ impl Engine for DragonflyEngine {
             index_time, total_time
         );
 
-        // Verify no HSET failures occurred during upload
+        // Best-effort HSET failure guard. Inert on Dragonfly (its commandstats
+        // has no failed_calls field — see configure()); real HSET errors already
+        // propagate as `Err` from the pipelined `cmd.query` above.
         let mut conn = self.get_connection()?;
         redis_utils::check_commandstats(
             &mut conn,
@@ -772,7 +821,8 @@ impl Engine for DragonflyEngine {
         // across all queries. Shared read-only across workers.
         let encoded_queries: Vec<Vec<u8>> =
             queries.iter().map(|q| encode_query_vector(q)).collect();
-        let query_str = build_knn_query_str();
+        let algorithm = self.config.algorithm.clone();
+        let query_str = build_knn_query_str(&algorithm);
 
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
@@ -796,6 +846,7 @@ impl Engine for DragonflyEngine {
                 let neighbors = &neighbors;
                 let encoded_queries = &encoded_queries;
                 let query_str = query_str.as_str();
+                let algorithm = algorithm.as_str();
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -836,6 +887,7 @@ impl Engine for DragonflyEngine {
                             query_str,
                             top,
                             ef,
+                            algorithm,
                             query_timeout,
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
@@ -885,7 +937,10 @@ impl Engine for DragonflyEngine {
             return Err("No searches completed".to_string());
         }
 
-        // Verify no FT.SEARCH failures occurred
+        // Best-effort FT.SEARCH failure guard. Inert on Dragonfly (no
+        // failed_calls in commandstats — see configure()); a failing FT.SEARCH
+        // already surfaces as `Err` from `ft_search_knn` and is logged +
+        // excluded from the stats (num_to_run minus successes).
         let mut check_conn = self.get_connection()?;
         redis_utils::check_commandstats(
             &mut check_conn,
@@ -964,10 +1019,21 @@ mod tests {
 
     #[test]
     fn build_knn_query_str_is_unfiltered_with_ef_runtime() {
+        // HNSW emits EF_RUNTIME (per-query ef sweep); FLAT must NOT (it would be
+        // a syntax error on a FLAT index).
         assert_eq!(
-            build_knn_query_str(),
+            build_knn_query_str("hnsw"),
             "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
         );
+        assert_eq!(
+            build_knn_query_str("HNSW"),
+            "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
+        );
+        assert_eq!(
+            build_knn_query_str("flat"),
+            "*=>[KNN $K @vector $vec_param AS vector_score]"
+        );
+        assert!(uses_ef_runtime("hnsw") && !uses_ef_runtime("flat"));
     }
 
     #[test]
