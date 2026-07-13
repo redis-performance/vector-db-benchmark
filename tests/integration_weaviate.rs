@@ -465,13 +465,12 @@ fn test_weaviate_full_cycle() {
     assert_eq!(resp.status().as_u16(), 404);
 }
 
-/// End-to-end `match_any`: filter a keyword field to an OR-set and assert the
-/// engine returns the filtered nearest neighbours (recall vs ground truth
-/// brute-forced over only the matching docs). Proves the `ContainsAny` arm.
-#[test]
-fn test_binary_weaviate_match_any() {
-    wait_for_weaviate();
-
+/// Run a filtered `match_any` benchmark once, over the given transport, and
+/// return `(transport_log_line, mean_recall)`. `use_graphql` forces the GraphQL
+/// fallback via `WEAVIATE_USE_GRAPHQL`; otherwise the run uses gRPC with the
+/// filter translated into the gRPC `Filters` message. A fresh project (its own
+/// results dir) and class name per call keep the two runs independent.
+fn run_weaviate_match_any(use_graphql: bool) -> (String, f64) {
     let dim = 8;
     let configs = serde_json::json!([{
         "name": "weaviate-ma", "engine": "weaviate",
@@ -479,11 +478,13 @@ fn test_binary_weaviate_match_any() {
         "search_params": [{"parallel": 1, "vectorIndexConfig": {"ef": 400}}],
         "upload_params": {"parallel": 1, "batch_size": 100}
     }]);
-    let proj = common::write_match_any_project(
-        "match-any-test",
-        &serde_json::to_string(&configs).unwrap(),
-        dim,
-    );
+    let ds_name = if use_graphql {
+        "match-any-graphql"
+    } else {
+        "match-any-grpc"
+    };
+    let proj =
+        common::write_match_any_project(ds_name, &serde_json::to_string(&configs).unwrap(), dim);
     assert!(
         proj.matching_docs >= proj.top,
         "fixture must have >= top matching docs (got {})",
@@ -491,37 +492,101 @@ fn test_binary_weaviate_match_any() {
     );
 
     let port = std::env::var("WEAVIATE_HTTP_PORT").unwrap_or_else(|_| WEAVIATE_PORT.to_string());
+    let class_name = if use_graphql {
+        "BenchMatchanyGql"
+    } else {
+        "BenchMatchanyGrpc"
+    };
     // Run directly (not common::run_binary) so we always surface the engine's
     // stdout/stderr — the filtered search's per-query errors print to stderr and
     // would otherwise be hidden on a zero-exit run that produced no results.
-    let out = std::process::Command::new(common::binary_path())
-        .args([
-            "--engines",
-            "weaviate-ma",
-            "--datasets",
-            "match-any-test",
-            "--host",
-            WEAVIATE_HOST,
-            "--skip-if-exists",
-            "false",
-        ])
-        .env("WEAVIATE_HTTP_PORT", &port)
-        .env("WEAVIATE_CLASS_NAME", "BenchMatchany")
-        .current_dir(&proj.root)
-        .output()
-        .expect("run vector-db-benchmark");
+    let mut cmd = std::process::Command::new(common::binary_path());
+    cmd.args([
+        "--engines",
+        "weaviate-ma",
+        "--datasets",
+        ds_name,
+        "--host",
+        WEAVIATE_HOST,
+        "--skip-if-exists",
+        "false",
+    ])
+    .env("WEAVIATE_HTTP_PORT", &port)
+    .env("WEAVIATE_CLASS_NAME", class_name)
+    .current_dir(&proj.root);
+    if use_graphql {
+        cmd.env("WEAVIATE_USE_GRAPHQL", "1");
+    }
+    let out = cmd.output().expect("run vector-db-benchmark");
+    let stdout = String::from_utf8_lossy(&out.stdout);
     println!(
-        "weaviate stdout:\n{}\nweaviate stderr:\n{}",
-        String::from_utf8_lossy(&out.stdout),
+        "weaviate ({}) stdout:\n{}\nweaviate stderr:\n{}",
+        if use_graphql { "graphql" } else { "grpc" },
+        stdout,
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(out.status.success(), "weaviate match_any run failed");
 
+    let transport = stdout
+        .lines()
+        .find(|l| l.contains("search transport:"))
+        .unwrap_or("<no transport line>")
+        .trim()
+        .to_string();
     let recall = common::read_recall(&proj.root, "weaviate-ma");
-    println!("weaviate match_any recall={:.3}", recall);
+    (transport, recall)
+}
+
+/// End-to-end `match_any` across BOTH transports: filter a keyword field to an
+/// OR-set and assert the engine returns the filtered nearest neighbours (recall
+/// vs ground truth brute-forced over only the matching docs). Runs once over
+/// gRPC (filter translated into the gRPC `Filters` message) and once over the
+/// GraphQL fallback, then asserts BOTH clear 0.9 recall AND that the two are
+/// identical — proving the gRPC `Filters` translation matches GraphQL `where`
+/// semantics exactly (#119).
+#[test]
+fn test_binary_weaviate_match_any() {
+    wait_for_weaviate();
+
+    let (grpc_transport, grpc_recall) = run_weaviate_match_any(false);
+    let (gql_transport, gql_recall) = run_weaviate_match_any(true);
+
+    println!(
+        "weaviate match_any [{}] recall={:.4}",
+        grpc_transport, grpc_recall
+    );
+    println!(
+        "weaviate match_any [{}] recall={:.4}",
+        gql_transport, gql_recall
+    );
+
     assert!(
-        recall >= 0.9,
-        "weaviate match_any recall {:.3} < 0.9",
-        recall
+        grpc_transport.contains("grpc"),
+        "default run should use gRPC, got: {}",
+        grpc_transport
+    );
+    assert!(
+        gql_transport.contains("graphql"),
+        "WEAVIATE_USE_GRAPHQL run should use GraphQL, got: {}",
+        gql_transport
+    );
+
+    assert!(
+        grpc_recall >= 0.9,
+        "weaviate match_any gRPC recall {:.4} < 0.9",
+        grpc_recall
+    );
+    assert!(
+        gql_recall >= 0.9,
+        "weaviate match_any GraphQL recall {:.4} < 0.9",
+        gql_recall
+    );
+    // The translated gRPC Filters must select the same result set as the GraphQL
+    // where; identical mean recall across transports is the proof.
+    assert!(
+        (grpc_recall - gql_recall).abs() < 1e-6,
+        "gRPC vs GraphQL recall differ: {:.6} vs {:.6}",
+        grpc_recall,
+        gql_recall
     );
 }
