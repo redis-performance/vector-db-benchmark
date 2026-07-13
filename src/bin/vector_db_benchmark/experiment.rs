@@ -231,6 +231,12 @@ fn run_single_experiment(
         }
     }
 
+    // Snapshot server metadata BEFORE any upload/search so results are
+    // reproducible (server version, loaded modules incl. the search module,
+    // full INFO/CONFIG, index state). None for non-Redis-wire engines.
+    // Telemetry only — captured outside every timed window.
+    let server_metadata_before = engine.server_metadata();
+
     // Configure phase
     if !args.skip_upload {
         println!("Experiment stage: Configure");
@@ -286,6 +292,10 @@ fn run_single_experiment(
 
     // Search phase
     let mut search_entries: Vec<SearchEntry> = Vec::new();
+    // Search-result files are written after the whole search phase so the
+    // AFTER server-metadata snapshot (taken once all reps complete) can be
+    // embedded alongside the BEFORE snapshot in every file.
+    let mut pending_saves: Vec<(usize, SearchParams, crate::engine::SearchResults)> = Vec::new();
     let skip_vector_index = args.skip_vector_index;
 
     if !args.skip_search {
@@ -539,13 +549,8 @@ fn run_single_experiment(
                                 results.saturation_reason, cpu,
                             );
                         }
-                        save_search_results(
-                            engine.name(),
-                            &dataset.config.name,
-                            *search_id,
-                            effective_params,
-                            &results,
-                        )?;
+                        // Defer the file write until the AFTER snapshot exists.
+                        pending_saves.push((*search_id, effective_params.clone(), results.clone()));
 
                         search_entries.push(SearchEntry {
                             search_id: *search_id,
@@ -564,6 +569,23 @@ fn run_single_experiment(
                 }
             }
         }
+    }
+
+    // Snapshot server metadata AFTER all search reps complete (index still
+    // present) and write the deferred search-result files, embedding both the
+    // before and after snapshots. For non-Redis engines both are None and the
+    // `server_metadata` key is omitted from the result JSON.
+    let server_metadata_after = engine.server_metadata();
+    for (search_id, params, results) in &pending_saves {
+        save_search_results(
+            engine.name(),
+            &dataset.config.name,
+            *search_id,
+            params,
+            results,
+            server_metadata_before.as_ref(),
+            server_metadata_after.as_ref(),
+        )?;
     }
 
     // Display precision summary and save summary JSON
@@ -669,12 +691,15 @@ fn calibrate(
 }
 
 /// Save search results to JSON file (matches Python v0 format)
+#[allow(clippy::too_many_arguments)]
 fn save_search_results(
     engine_name: &str,
     dataset_name: &str,
     search_id: usize,
     search_params: &crate::config::SearchParams,
     results: &crate::engine::SearchResults,
+    server_metadata_before: Option<&serde_json::Value>,
+    server_metadata_after: Option<&serde_json::Value>,
 ) -> Result<(), String> {
     let timestamp = Local::now().format("%Y-%m-%d-%H-%M-%S");
     let pid = std::process::id();
@@ -760,6 +785,21 @@ fn save_search_results(
         }
         if let Some(ref lats) = results.update_latencies {
             results_obj.insert("update_latencies".to_string(), json!(lats));
+        }
+    }
+
+    // Embed server reproducibility metadata (Redis-wire engines only). Both
+    // before and after are stored; a None side is serialized as null. Omitted
+    // entirely when the engine reports no metadata (non-Redis engines).
+    if server_metadata_before.is_some() || server_metadata_after.is_some() {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert(
+                "server_metadata".to_string(),
+                json!({
+                    "before": server_metadata_before,
+                    "after": server_metadata_after,
+                }),
+            );
         }
     }
 

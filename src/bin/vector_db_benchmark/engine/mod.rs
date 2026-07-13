@@ -240,6 +240,15 @@ pub trait Engine {
         None
     }
 
+    /// Snapshot server reproducibility metadata (version, loaded modules +
+    /// versions, full INFO/CONFIG). Default `None` (non-Redis engines are
+    /// unaffected). Redis-wire engines override this to return
+    /// `redis_utils::collect_server_metadata`. Telemetry only — captured
+    /// outside any timed window, must never affect measurements.
+    fn server_metadata(&mut self) -> Option<serde_json::Value> {
+        None
+    }
+
     /// Run mixed benchmark (interleaved search + update).
     /// Default: not supported. Override in engines that support it.
     fn search_mixed(

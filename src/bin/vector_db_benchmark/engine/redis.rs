@@ -2129,6 +2129,25 @@ impl Engine for RedisEngine {
             "index_info": ft_info,
         }))
     }
+
+    fn server_metadata(&mut self) -> Option<serde_json::Value> {
+        let mut conn = self.get_connection().ok()?;
+        let mut meta = redis_utils::collect_server_metadata(&mut conn);
+        // Vector index stats (HNSW M/EF, num_docs, index memory, ...). Errors on
+        // the BEFORE snapshot (index not yet created) → index_info: null.
+        let ft_info = redis::cmd("FT.INFO")
+            .arg("idx")
+            .query::<redis::Value>(&mut conn)
+            .ok()
+            .map(|v| redis_value_to_json(&v));
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "index_info".to_string(),
+                ft_info.unwrap_or(serde_json::Value::Null),
+            );
+        }
+        Some(meta)
+    }
 }
 
 #[cfg(test)]

@@ -1,9 +1,283 @@
 //! Shared utilities for Redis-protocol engines (Redis, Valkey, VectorSets).
 //!
-//! Provides `INFO COMMANDSTATS` validation to detect silent command failures.
+//! Provides `INFO COMMANDSTATS` validation to detect silent command failures,
+//! and `collect_server_metadata` to snapshot server version / loaded modules /
+//! a full `INFO` dump for result reproducibility.
 
 use redis::Connection;
+use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
+
+/// Collect reproducibility metadata from a Redis-wire server (Redis, Valkey,
+/// VectorSets, Dragonfly). Returns
+/// `{ "versions": {...}, "modules": {...}|null, "info": { section -> kv } }`.
+///
+/// This is telemetry only: it never panics and, if a command fails, returns
+/// whatever succeeded (e.g. `modules: null` when `MODULE LIST` is denied).
+///
+/// - `INFO everything` is tried first (richer); when the reply is empty/blank —
+///   as on Dragonfly, which returns nothing for `everything` — it falls back to
+///   plain `INFO`, which works on every server.
+/// - `MODULE LIST` is parsed into `name -> { ver, path, args }`, handling both
+///   the RESP2 (flat array of k/v) and RESP3 (map) module shapes.
+pub fn collect_server_metadata(conn: &mut Connection) -> Json {
+    // INFO everything (rich); fall back to plain INFO when empty (Dragonfly).
+    let everything: String = redis::cmd("INFO")
+        .arg("everything")
+        .query::<String>(conn)
+        .unwrap_or_default();
+    let info_str = if info_reply_empty(&everything) {
+        redis::cmd("INFO").query::<String>(conn).unwrap_or_default()
+    } else {
+        everything
+    };
+    let info = parse_info(&info_str);
+    let versions = extract_versions(&info);
+
+    let modules = match redis::cmd("MODULE").arg("LIST").query::<redis::Value>(conn) {
+        Ok(val) => parse_modules(&val),
+        Err(_) => Json::Null,
+    };
+
+    // Full server config (includes module config: Redis `search-*`, Dragonfly
+    // `search.*`, Valkey's unified search config). Secret-bearing values are
+    // redacted. On error, `config: null` (never fails the whole collection).
+    let config = match redis::cmd("CONFIG")
+        .arg("GET")
+        .arg("*")
+        .query::<redis::Value>(conn)
+    {
+        Ok(val) => redact_config(parse_kv_map(&val)),
+        Err(_) => Json::Null,
+    };
+
+    // SEARCH module's own config. Works on Redis / Dragonfly; Valkey lacks
+    // FT.CONFIG (ERR unknown command) → `search_config: null`.
+    let search_config = match redis::cmd("FT.CONFIG")
+        .arg("GET")
+        .arg("*")
+        .query::<redis::Value>(conn)
+    {
+        Ok(val) => parse_kv_map(&val),
+        Err(_) => Json::Null,
+    };
+
+    serde_json::json!({
+        "versions": versions,
+        "modules": modules,
+        "info": info,
+        "config": config,
+        "search_config": search_config,
+    })
+}
+
+/// Parse a config reply (`CONFIG GET *`, `FT.CONFIG GET *`) into a
+/// `{ key -> value }` object. Handles all three shapes seen in the wild:
+/// - RESP3 map (`{ k: v }`) — e.g. redis-rs' `CONFIG GET`;
+/// - RESP2 flat array (`[k, v, k, v, ...]`) — plain `CONFIG GET`;
+/// - array of `[k, v]` pair-arrays / maps — e.g. Redis' `FT.CONFIG GET *`.
+///
+/// The pair-array vs flat shape is detected from the first element (nested ⇒
+/// pair-arrays). Values render via `value_to_json`.
+fn parse_kv_map(val: &redis::Value) -> Json {
+    let mut out = Map::new();
+    match val {
+        redis::Value::Map(pairs) => {
+            for (k, v) in pairs {
+                out.insert(value_to_string(k), value_to_json(v));
+            }
+        }
+        redis::Value::Array(items) => {
+            let nested = matches!(
+                items.first(),
+                Some(redis::Value::Array(_)) | Some(redis::Value::Map(_))
+            );
+            if nested {
+                // Array of [key, value] pair-arrays (or per-entry maps).
+                for item in items {
+                    match item {
+                        redis::Value::Array(kv) if kv.len() >= 2 => {
+                            out.insert(value_to_string(&kv[0]), value_to_json(&kv[1]));
+                        }
+                        redis::Value::Map(pairs) => {
+                            for (k, v) in pairs {
+                                out.insert(value_to_string(k), value_to_json(v));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                // Flat [k, v, k, v, ...] array.
+                for c in items.chunks(2) {
+                    if let [k, v] = c {
+                        out.insert(value_to_string(k), value_to_json(v));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Json::Object(out)
+}
+
+/// Redact secret-bearing config values in place: any key whose lowercased name
+/// contains `pass`, `auth`, `secret`, or `token` keeps its key but has its value
+/// replaced with `"<redacted>"` (e.g. `requirepass`, `masterauth`,
+/// `tls-key-file-pass`). Non-secret keys (paths like `aclfile`) are untouched.
+fn redact_config(config: Json) -> Json {
+    let Json::Object(mut map) = config else {
+        return config;
+    };
+    for (key, val) in map.iter_mut() {
+        let lower = key.to_ascii_lowercase();
+        if ["pass", "auth", "secret", "token"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+        {
+            *val = Json::String("<redacted>".to_string());
+        }
+    }
+    Json::Object(map)
+}
+
+/// True when an `INFO` reply carries no content (empty or whitespace-only),
+/// signalling that a fallback command should be issued.
+fn info_reply_empty(s: &str) -> bool {
+    s.trim().is_empty()
+}
+
+/// Parse a Redis `INFO` reply into `{ "<section>": { "<key>": "<value>" } }`.
+///
+/// A `# Section` line opens a new section; `key:value` lines populate the
+/// current section; blank and `#`-only lines are skipped. Values are kept as
+/// strings (the first `:` splits key from value, so values may contain colons).
+fn parse_info(info: &str) -> Json {
+    let mut root = Map::new();
+    let mut current = String::from("default");
+    let mut section = Map::new();
+    for raw in info.lines() {
+        let line = raw.trim_end_matches('\r');
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(name) = trimmed.strip_prefix("# ") {
+            if !section.is_empty() {
+                root.insert(current.clone(), Json::Object(std::mem::take(&mut section)));
+            }
+            current = name.trim().to_string();
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            section.insert(k.to_string(), Json::String(v.to_string()));
+        }
+    }
+    if !section.is_empty() {
+        root.insert(current, Json::Object(section));
+    }
+    Json::Object(root)
+}
+
+/// Pull the server-version keys present in the `Server` section into a compact
+/// `versions` object (`redis_version`, `valkey_version`, `dragonfly_version` —
+/// whichever the server reports).
+fn extract_versions(info: &Json) -> Json {
+    let mut out = Map::new();
+    if let Some(server) = info.get("Server").and_then(|s| s.as_object()) {
+        for key in ["redis_version", "valkey_version", "dragonfly_version"] {
+            if let Some(val) = server.get(key) {
+                out.insert(key.to_string(), val.clone());
+            }
+        }
+    }
+    Json::Object(out)
+}
+
+/// Parse a `MODULE LIST` reply into `{ "<name>": { "ver": .., "path": .., "args": .. } }`.
+/// Each module entry is a k/v collection in either RESP2 (flat array) or RESP3
+/// (map) form. The `name` field becomes the map key; remaining fields become
+/// the value object. A non-array reply yields an empty object.
+fn parse_modules(val: &redis::Value) -> Json {
+    let items = match val {
+        redis::Value::Array(items) => items,
+        _ => return Json::Object(Map::new()),
+    };
+    let mut out = Map::new();
+    for m in items {
+        let mut name: Option<String> = None;
+        let mut entry = Map::new();
+        for (k, v) in module_fields(m) {
+            if k == "name" {
+                name = Some(value_to_string(&v));
+            } else {
+                entry.insert(k, value_to_json(&v));
+            }
+        }
+        if let Some(n) = name {
+            out.insert(n, Json::Object(entry));
+        }
+    }
+    Json::Object(out)
+}
+
+/// Flatten a single module entry into `(field, value)` pairs, accepting both the
+/// RESP3 map shape and the RESP2 flat-array-of-k/v shape.
+fn module_fields(m: &redis::Value) -> Vec<(String, redis::Value)> {
+    match m {
+        redis::Value::Map(pairs) => pairs
+            .iter()
+            .map(|(k, v)| (value_to_string(k), v.clone()))
+            .collect(),
+        redis::Value::Array(items) => items
+            .chunks(2)
+            .filter_map(|c| match c {
+                [k, v] => Some((value_to_string(k), v.clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Render a `redis::Value` as a plain string (used for module names / keys).
+fn value_to_string(v: &redis::Value) -> String {
+    match v {
+        redis::Value::SimpleString(s) => s.clone(),
+        redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
+        redis::Value::Int(n) => n.to_string(),
+        other => format!("{:?}", other),
+    }
+}
+
+/// Convert a `redis::Value` into `serde_json::Value` (module field values —
+/// `ver` stays an integer, `path`/`args` become strings). Public so engines
+/// without their own converter (e.g. VectorSets) can render `VINFO`/`FT.INFO`.
+pub fn value_to_json(v: &redis::Value) -> Json {
+    match v {
+        redis::Value::Nil => Json::Null,
+        redis::Value::Int(n) => serde_json::json!(n),
+        redis::Value::Double(f) => serde_json::json!(f),
+        redis::Value::Boolean(b) => serde_json::json!(b),
+        redis::Value::SimpleString(s) => serde_json::json!(s),
+        redis::Value::BulkString(b) => match String::from_utf8(b.clone()) {
+            Ok(s) => serde_json::json!(s),
+            Err(_) => serde_json::json!(format!("<{} bytes>", b.len())),
+        },
+        redis::Value::Array(a) => Json::Array(a.iter().map(value_to_json).collect()),
+        redis::Value::Map(pairs) => {
+            let mut map = Map::new();
+            for (k, val) in pairs {
+                map.insert(value_to_string(k), value_to_json(val));
+            }
+            Json::Object(map)
+        }
+        other => serde_json::json!(format!("{:?}", other)),
+    }
+}
 
 /// Baseline snapshot of failed_calls per command, used when CONFIG RESETSTAT is unavailable.
 pub type CommandStatsBaseline = HashMap<String, u64>;
@@ -204,5 +478,180 @@ mod tests {
         let m = parse_failed_calls(info);
         assert_eq!(m.get("FT.CREATE"), Some(&2));
         assert!(!m.contains_key("BAD"));
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::{extract_versions, info_reply_empty, parse_info, parse_modules};
+    use redis::Value;
+
+    fn bulk(s: &str) -> Value {
+        Value::BulkString(s.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn parse_info_builds_nested_sections() {
+        // A multi-section INFO dump becomes { section -> { key -> value } }.
+        // `# Section` headers open sections; blank and `#`-only lines are skipped;
+        // values keep their colons (e.g. db0 keyspace line).
+        let info = "# Server\r\n\
+                    redis_version:8.8.0\r\n\
+                    os:Linux\r\n\
+                    \r\n\
+                    # Memory\r\n\
+                    used_memory:1048576\r\n\
+                    used_memory_human:1.00M\r\n\
+                    #\r\n\
+                    # Keyspace\r\n\
+                    db0:keys=3,expires=0,avg_ttl=0\r\n";
+        let parsed = parse_info(info);
+        assert_eq!(parsed["Server"]["redis_version"], "8.8.0");
+        assert_eq!(parsed["Server"]["os"], "Linux");
+        assert_eq!(parsed["Memory"]["used_memory"], "1048576");
+        // Value with embedded commas/colons preserved verbatim.
+        assert_eq!(parsed["Keyspace"]["db0"], "keys=3,expires=0,avg_ttl=0");
+        // Exactly the three real sections (no spurious "default").
+        assert_eq!(parsed.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn parse_info_empty_is_empty_object() {
+        // Empty / whitespace INFO yields an empty object and is flagged for
+        // fallback (the Dragonfly `INFO everything` case).
+        assert!(info_reply_empty(""));
+        assert!(info_reply_empty("   \r\n  "));
+        assert!(!info_reply_empty("# Server\r\nredis_version:1"));
+        assert_eq!(parse_info("").as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn extract_versions_pulls_present_keys_only() {
+        let info = parse_info(
+            "# Server\r\nredis_version:7.4.0\r\nvalkey_version:9.1.0\r\narch_bits:64\r\n",
+        );
+        let versions = extract_versions(&info);
+        assert_eq!(versions["redis_version"], "7.4.0");
+        assert_eq!(versions["valkey_version"], "9.1.0");
+        // dragonfly_version absent → not inserted; arch_bits ignored.
+        assert!(versions.get("dragonfly_version").is_none());
+        assert_eq!(versions.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parse_modules_resp2_flat_array_shape() {
+        // RESP2: array of modules, each a flat [k, v, k, v, ...] array. This is
+        // the Redis / Dragonfly shape. `ver` stays an integer; the SEARCH module
+        // version is the load-bearing field.
+        let reply = Value::Array(vec![
+            Value::Array(vec![
+                bulk("name"),
+                bulk("search"),
+                bulk("ver"),
+                Value::Int(21015),
+                bulk("path"),
+                bulk("/usr/lib/redisearch.so"),
+                bulk("args"),
+                bulk(""),
+            ]),
+            Value::Array(vec![
+                bulk("name"),
+                bulk("ReJSON"),
+                bulk("ver"),
+                Value::Int(20609),
+            ]),
+        ]);
+        let mods = parse_modules(&reply);
+        assert_eq!(mods["search"]["ver"], 21015);
+        assert_eq!(mods["search"]["path"], "/usr/lib/redisearch.so");
+        assert_eq!(mods["search"]["args"], "");
+        assert_eq!(mods["ReJSON"]["ver"], 20609);
+        // `name` becomes the key, not a nested field.
+        assert!(mods["search"].get("name").is_none());
+        assert_eq!(mods.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parse_modules_resp3_map_shape() {
+        // RESP3: array of Map entries. Same resulting shape as RESP2.
+        let reply = Value::Array(vec![Value::Map(vec![
+            (bulk("name"), bulk("search")),
+            (bulk("ver"), Value::Int(21015)),
+            (bulk("path"), bulk("/x.so")),
+        ])]);
+        let mods = parse_modules(&reply);
+        assert_eq!(mods["search"]["ver"], 21015);
+        assert_eq!(mods["search"]["path"], "/x.so");
+    }
+
+    #[test]
+    fn parse_modules_non_array_is_empty() {
+        // A malformed / unexpected reply must not panic — yields an empty object.
+        assert_eq!(parse_modules(&Value::Nil).as_object().unwrap().len(), 0);
+        assert_eq!(parse_modules(&Value::Int(5)).as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn config_get_parses_and_redacts_secrets() {
+        use super::{parse_kv_map, redact_config};
+        // RESP2 flat [k, v, k, v, ...] CONFIG GET reply. Secret-bearing keys
+        // (pass/auth/secret/token substrings) have their VALUE redacted but the
+        // key is kept; normal keys (maxmemory) and non-secret paths (aclfile)
+        // stay verbatim.
+        let reply = Value::Array(vec![
+            bulk("maxmemory"),
+            bulk("0"),
+            bulk("requirepass"),
+            bulk("hunter2"),
+            bulk("masterauth"),
+            bulk("s3cr3t"),
+            bulk("tls-key-file-pass"),
+            bulk("filepw"),
+            bulk("aclfile"),
+            bulk("/etc/redis/users.acl"),
+            bulk("search-timeout"),
+            bulk("500"),
+        ]);
+        let cfg = redact_config(parse_kv_map(&reply));
+        assert_eq!(cfg["maxmemory"], "0");
+        assert_eq!(cfg["search-timeout"], "500");
+        assert_eq!(cfg["aclfile"], "/etc/redis/users.acl");
+        assert_eq!(cfg["requirepass"], "<redacted>");
+        assert_eq!(cfg["masterauth"], "<redacted>");
+        assert_eq!(cfg["tls-key-file-pass"], "<redacted>");
+    }
+
+    #[test]
+    fn ft_config_get_parses_array_of_pairs() {
+        use super::parse_kv_map;
+        // Redis' FT.CONFIG GET * returns an array of [name, value] pair-arrays
+        // (not a flat array). Verify a search param (MAXSEARCHRESULTS) is keyed
+        // by name with its scalar value.
+        let reply = Value::Array(vec![
+            Value::Array(vec![bulk("MAXSEARCHRESULTS"), bulk("1000000")]),
+            Value::Array(vec![bulk("MINPREFIX"), bulk("2")]),
+            Value::Array(vec![bulk("TIMEOUT"), bulk("500")]),
+        ]);
+        let cfg = parse_kv_map(&reply);
+        assert_eq!(cfg["MAXSEARCHRESULTS"], "1000000");
+        assert_eq!(cfg["MINPREFIX"], "2");
+        assert_eq!(cfg["TIMEOUT"], "500");
+        assert_eq!(cfg.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn config_get_flat_array_still_parses() {
+        use super::parse_kv_map;
+        // Plain CONFIG GET on RESP2 is a flat [k, v, k, v] array — the
+        // non-nested branch must chunk it by pairs.
+        let reply = Value::Array(vec![
+            bulk("maxmemory"),
+            bulk("0"),
+            bulk("save"),
+            bulk("3600 1"),
+        ]);
+        let cfg = parse_kv_map(&reply);
+        assert_eq!(cfg["maxmemory"], "0");
+        assert_eq!(cfg["save"], "3600 1");
     }
 }
