@@ -1360,11 +1360,14 @@ fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f6
         let redis::Value::Map(fields) = doc else {
             continue;
         };
-        let mut id = 0i64;
+        // A doc whose `id` is missing or cannot be parsed to an integer is
+        // skipped (mirrors the RESP2 trailing-id drop) rather than emitted as a
+        // phantom id=0 hit.
+        let mut id: Option<i64> = None;
         let mut score = 0.0f64;
         for (k, v) in fields {
             match value_as_string(k).as_deref() {
-                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()).unwrap_or(0),
+                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()),
                 Some("extra_attributes") => {
                     if let redis::Value::Map(attrs) = v {
                         for (ak, av) in attrs {
@@ -1379,7 +1382,9 @@ fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f6
                 _ => {}
             }
         }
-        out.push((id, score));
+        if let Some(id) = id {
+            out.push((id, score));
+        }
     }
     out
 }
@@ -1470,8 +1475,16 @@ fn encode_string_field(config: &RedisEngineConfig, key: &str, value: &str) -> St
 
 /// Collect the schema field names typed `datetime`.
 fn datetime_fields_from_schema(dataset: &Dataset) -> HashSet<String> {
+    prime_datetime_fields(dataset.config.schema.as_ref())
+}
+
+/// Pure schema → datetime-field-set priming. Extracted so it can be primed both
+/// during `configure()` (upload path) and at the start of `search()` (the
+/// `--skip-upload` path, where configure() never runs), and unit-tested without
+/// a full `Dataset`.
+fn prime_datetime_fields(schema: Option<&serde_json::Value>) -> HashSet<String> {
     let mut set = HashSet::new();
-    if let Some(schema) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+    if let Some(schema) = schema.and_then(|s| s.as_object()) {
         for (field, ty) in schema {
             if ty.as_str() == Some("datetime") {
                 set.insert(field.clone());
@@ -1613,6 +1626,13 @@ impl Engine for RedisEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        // Prime the datetime field-type map from the schema so datetime range
+        // filters are built with the correct field type even on the
+        // `--skip-upload` path, where configure() (which normally primes it) is
+        // never called. Idempotent: on the upload path this reproduces exactly
+        // what configure() already set.
+        self.config.datetime_fields = Arc::new(datetime_fields_from_schema(dataset));
+
         if self.config.skip_vector_index {
             return self.search_filter_only(dataset, params, num_queries);
         }
@@ -1823,6 +1843,11 @@ impl Engine for RedisEngine {
         num_queries: i64,
         ratio: &UpdateSearchRatio,
     ) -> Result<SearchResults, String> {
+        // Prime the datetime field-type map from the schema so the update half of
+        // the mixed workload encodes datetime payloads as epoch seconds even on
+        // the `--skip-upload` path (configure() does not run there). Idempotent.
+        self.config.datetime_fields = Arc::new(datetime_fields_from_schema(dataset));
+
         let ef = params
             .search_params
             .as_ref()
@@ -2622,20 +2647,69 @@ mod tests {
     }
 
     #[test]
-    fn parse_ft_search_resp3_id_parse_failure_yields_zero_id_doc() {
-        // A map doc whose `id` is unparseable is NOT skipped: id falls back to 0
-        // and the doc is still emitted (score parsed independently).
+    fn parse_ft_search_resp3_id_parse_failure_skips_doc() {
+        // A map doc whose `id` is unparseable is SKIPPED (mirrors the RESP2
+        // trailing-id drop), not emitted as a phantom id=0 hit. A sibling doc
+        // with a valid id still parses and is emitted.
+        let bad = Value::Map(vec![
+            (bulk("id"), bulk("not-a-number")),
+            (
+                bulk("extra_attributes"),
+                Value::Map(vec![(bulk("vector_score"), bulk("0.5"))]),
+            ),
+        ]);
+        let good = Value::Map(vec![
+            (bulk("id"), bulk("42")),
+            (
+                bulk("extra_attributes"),
+                Value::Map(vec![(bulk("vector_score"), bulk("0.9"))]),
+            ),
+        ]);
+        let resp = Value::Map(vec![(bulk("results"), Value::Array(vec![bad, good]))]);
+        // Only the valid-id doc survives; the unparseable one is dropped.
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(42, 0.9)]);
+    }
+
+    #[test]
+    fn parse_ft_search_resp3_missing_id_skips_doc() {
+        // A doc with no `id` field at all is also skipped, not emitted as id=0.
         let resp = Value::Map(vec![(
             bulk("results"),
-            Value::Array(vec![Value::Map(vec![
-                (bulk("id"), bulk("not-a-number")),
-                (
-                    bulk("extra_attributes"),
-                    Value::Map(vec![(bulk("vector_score"), bulk("0.5"))]),
-                ),
-            ])]),
+            Value::Array(vec![Value::Map(vec![(
+                bulk("extra_attributes"),
+                Value::Map(vec![(bulk("vector_score"), bulk("0.5"))]),
+            )])]),
         )]);
-        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(0, 0.5)]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![]);
+    }
+
+    // ── field-type map priming (#125) ─────────────────────────────────────
+    // These primed maps must be identical whether upload runs (configure())
+    // or not (--skip-upload, primed at the start of search()). Cover the pure
+    // priming fn directly so both call sites stay correct.
+    #[test]
+    fn prime_datetime_fields_selects_only_datetime_schema_fields() {
+        use super::prime_datetime_fields;
+        let schema = serde_json::json!({
+            "created_at": "datetime",
+            "updated_at": "datetime",
+            "price": "int",
+            "brand": "keyword",
+            "title": "text",
+        });
+        let got = prime_datetime_fields(Some(&schema));
+        let mut expected = std::collections::HashSet::new();
+        expected.insert("created_at".to_string());
+        expected.insert("updated_at".to_string());
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn prime_datetime_fields_empty_for_none_or_no_datetime() {
+        use super::prime_datetime_fields;
+        assert!(prime_datetime_fields(None).is_empty());
+        let schema = serde_json::json!({ "price": "int", "brand": "keyword" });
+        assert!(prime_datetime_fields(Some(&schema)).is_empty());
     }
 
     #[test]
