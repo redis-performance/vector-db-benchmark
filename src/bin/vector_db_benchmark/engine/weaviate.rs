@@ -2,10 +2,14 @@
 //!
 //! Schema/upload/ef-tuning use Weaviate's REST API (v1) via reqwest::blocking.
 //! Vector search uses Weaviate's **gRPC** API (port 50051) by default — the
-//! high-throughput query path used by the official clients — falling back to
-//! GraphQL over HTTP when a metadata filter is present or WEAVIATE_USE_GRAPHQL
-//! is set. (GraphQL with a stringified query vector is markedly slower and caps
-//! throughput, which is why gRPC is the default for the benchmark.)
+//! high-throughput query path used by the official clients — for BOTH filtered
+//! and unfiltered queries: metadata filters are translated into the gRPC
+//! `Filters` message from the exact same where-tree the GraphQL path serializes
+//! (see `where_json_to_grpc_filters`), so the two transports evaluate identical
+//! filter semantics. GraphQL over HTTP remains the fallback for the whole run
+//! when `WEAVIATE_USE_GRAPHQL` is set or a filter uses a condition the gRPC
+//! proto can't express. (GraphQL with a stringified query vector is markedly
+//! slower and caps throughput, which is why gRPC is the default.)
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,7 +20,8 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use uuid::Uuid;
 
 use super::weaviate_grpc::weaviate_v1::{
-    weaviate_client::WeaviateClient, MetadataRequest, NearVector, SearchReply, SearchRequest,
+    filter_target, filters, weaviate_client::WeaviateClient, FilterTarget, Filters,
+    GeoCoordinatesFilter, MetadataRequest, NearVector, SearchReply, SearchRequest,
 };
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
@@ -700,8 +705,17 @@ fn extract_graphql_hits(
 /// `NearVector::vector_bytes` is marked deprecated in the newer weaviate protos
 /// (superseded by a multi-vector `vectors` field) but remains the accepted
 /// packed-vector input on the 1.29–1.38 servers this targets, so we allow it.
+///
+/// `filter` is the pre-translated gRPC `Filters` message for this query (built
+/// once, outside the timed window, from the same where-tree the GraphQL path
+/// serializes), or `None` for an unfiltered query.
 #[allow(deprecated)]
-fn build_grpc_request(class_name: &str, query_vector: &[f32], top: usize) -> SearchRequest {
+fn build_grpc_request(
+    class_name: &str,
+    query_vector: &[f32],
+    top: usize,
+    filter: Option<&Filters>,
+) -> SearchRequest {
     let vector_bytes: Vec<u8> = query_vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
     SearchRequest {
@@ -716,8 +730,112 @@ fn build_grpc_request(class_name: &str, query_vector: &[f32], top: usize) -> Sea
             distance: true,
             ..Default::default()
         }),
+        filters: filter.cloned(),
         ..Default::default()
     }
+}
+
+/// Translate the Weaviate GraphQL where-filter tree (produced by
+/// `parse_weaviate_conditions` / `build_weaviate_filter`) into the equivalent
+/// gRPC `Filters` message.
+///
+/// This consumes the SAME tree the GraphQL path serializes, so both transports
+/// evaluate byte-for-byte identical filter semantics and score identical recall:
+///   * `Equal`/`NotEqual`               → `Operator::Equal`/`NotEqual`
+///   * `LessThan[Equal]`/`GreaterThan[Equal]` → the matching range operators
+///   * `And`/`Or` (incl. the collapsed `range` two-sided AND and the
+///     `match_any` Or-of-`Equal` set) → `Operator::And`/`Or` over nested filters
+///   * `WithinGeoRange`                 → `Operator::WithinGeoRange` + `ValueGeo`
+///
+/// The typed value is placed in the corresponding `TestValue` field
+/// (`valueText`→`ValueText`, `valueInt`→`ValueInt`, `valueNumber`→`ValueNumber`,
+/// `valueBoolean`→`ValueBoolean`). `match_any` is intentionally NOT lowered to
+/// the proto's `ContainsAny`: the shared where-tree already expands it to an
+/// Or-of-`Equal`, and reusing that guarantees the gRPC result set matches
+/// GraphQL exactly.
+///
+/// Returns `None` if any node uses an operator or value shape the proto can't
+/// express (e.g. a non-scalar `Equal` value), so the caller can keep the run on
+/// the GraphQL transport rather than silently dropping the filter.
+fn where_json_to_grpc_filters(node: &serde_json::Value) -> Option<Filters> {
+    let obj = node.as_object()?;
+    let operator = obj.get("operator")?.as_str()?;
+
+    // Logical node: And / Or over `operands`.
+    if let Some(operands) = obj.get("operands").and_then(|v| v.as_array()) {
+        let op = match operator {
+            "And" => filters::Operator::And,
+            "Or" => filters::Operator::Or,
+            _ => return None,
+        };
+        let mut children = Vec::with_capacity(operands.len());
+        for operand in operands {
+            children.push(where_json_to_grpc_filters(operand)?);
+        }
+        return Some(Filters {
+            operator: op as i32,
+            filters: children,
+            ..Default::default()
+        });
+    }
+
+    // Leaf node: comparison on a single property path.
+    let path = obj.get("path")?.as_array()?;
+    let field = path.first()?.as_str()?;
+    let target = Some(FilterTarget {
+        target: Some(filter_target::Target::Property(field.to_string())),
+    });
+
+    // Geo range leaf.
+    if operator == "WithinGeoRange" {
+        let gr = obj.get("valueGeoRange")?;
+        let coords = gr.get("geoCoordinates")?;
+        let lat = coords.get("latitude")?.as_f64()? as f32;
+        let lon = coords.get("longitude")?.as_f64()? as f32;
+        let dist = gr.get("distance")?.get("max")?.as_f64()? as f32;
+        return Some(Filters {
+            operator: filters::Operator::WithinGeoRange as i32,
+            target,
+            test_value: Some(filters::TestValue::ValueGeo(GeoCoordinatesFilter {
+                latitude: lat,
+                longitude: lon,
+                distance: dist,
+            })),
+            ..Default::default()
+        });
+    }
+
+    let op = match operator {
+        "Equal" => filters::Operator::Equal,
+        "NotEqual" => filters::Operator::NotEqual,
+        "LessThan" => filters::Operator::LessThan,
+        "LessThanEqual" => filters::Operator::LessThanEqual,
+        "GreaterThan" => filters::Operator::GreaterThan,
+        "GreaterThanEqual" => filters::Operator::GreaterThanEqual,
+        _ => return None,
+    };
+
+    // Typed value field — exactly one is present in a leaf built by
+    // `build_weaviate_filter`. A non-scalar (e.g. array under `valueText`) fails
+    // the scalar accessor and yields None → GraphQL fallback for the run.
+    let test_value = if let Some(v) = obj.get("valueText") {
+        filters::TestValue::ValueText(v.as_str()?.to_string())
+    } else if let Some(v) = obj.get("valueInt") {
+        filters::TestValue::ValueInt(v.as_i64()?)
+    } else if let Some(v) = obj.get("valueNumber") {
+        filters::TestValue::ValueNumber(v.as_f64()?)
+    } else if let Some(v) = obj.get("valueBoolean") {
+        filters::TestValue::ValueBoolean(v.as_bool()?)
+    } else {
+        return None;
+    };
+
+    Some(Filters {
+        operator: op as i32,
+        target,
+        test_value: Some(test_value),
+        ..Default::default()
+    })
 }
 
 /// Issue a prebuilt gRPC search and return the DECODED reply. The consistent
@@ -1172,10 +1290,11 @@ impl Engine for WeaviateEngine {
         let pb = self.create_progress_bar(num_to_run);
 
         // Vector search runs over gRPC by default (packed vectors — the
-        // high-throughput path); GraphQL is the fallback for filtered datasets
-        // (gRPC filter translation not implemented) or when WEAVIATE_USE_GRAPHQL
-        // is set. gRPC concurrency is async tasks on a shared runtime (one
-        // connection per task, HTTP/2); GraphQL concurrency is blocking OS threads.
+        // high-throughput path) for both filtered and unfiltered queries;
+        // GraphQL is the fallback when WEAVIATE_USE_GRAPHQL is set or a filter
+        // uses a condition the gRPC proto can't express. gRPC concurrency is
+        // async tasks on a shared runtime (one connection per task, HTTP/2);
+        // GraphQL concurrency is blocking OS threads.
         let grpc_ep: Option<tonic::transport::Endpoint> =
             if std::env::var("WEAVIATE_USE_GRAPHQL").is_ok() {
                 None
@@ -1194,26 +1313,48 @@ impl Engine for WeaviateEngine {
                     }
                 }
             };
-        // Count filters over the executed slice only (`--num-queries` may cap the
-        // run below the full query set), so the ratio printed below is never
-        // impossible.
+        // Translate each query's where-filter tree into the gRPC `Filters`
+        // message (built once, outside the timed window). A query with no filter
+        // stays `None`; a filter that translates becomes `Some(Filters)`. If a
+        // filtered query can't be expressed in the proto, its entry is `None`
+        // even though the query carries a filter — see `untranslatable` below.
+        // Count over the executed slice only (`--num-queries` may cap the run).
+        let grpc_filters: Vec<Option<Filters>> = parsed_filters[..num_to_run]
+            .iter()
+            .map(|f| f.as_ref().and_then(where_json_to_grpc_filters))
+            .collect();
         let num_filtered = parsed_filters[..num_to_run]
             .iter()
             .filter(|f| f.is_some())
             .count();
-        let use_grpc = grpc_ep.is_some() && num_filtered == 0;
+        // Filtered queries whose condition the gRPC proto can't express. If any
+        // exist we keep the WHOLE run on GraphQL (single transport, never
+        // silently unfiltered), so gRPC's Filters and GraphQL's where stay in
+        // lockstep on the queries that DO run over gRPC.
+        let untranslatable = parsed_filters[..num_to_run]
+            .iter()
+            .zip(&grpc_filters)
+            .filter(|(orig, translated)| orig.is_some() && translated.is_none())
+            .count();
+        let use_grpc = grpc_ep.is_some() && untranslatable == 0;
 
         // Measurement-fairness note: the query transport is recorded so a reviewer
-        // can see that filtered runs fall back to GraphQL while unfiltered runs use
-        // gRPC — i.e. filtered vs unfiltered Weaviate latencies are NOT measured on
-        // the same wire. gRPC filter translation is a documented follow-up; until
-        // then this log makes the asymmetry explicit rather than silent.
+        // can see which wire carried the run. Filters are translated to the gRPC
+        // `Filters` message from the same where-tree the GraphQL path serializes,
+        // so filtered and unfiltered runs are now measured on the SAME transport
+        // (gRPC) unless a filter forces the GraphQL fallback.
         let transport = if use_grpc { "grpc" } else { "graphql" };
-        if grpc_ep.is_some() && num_filtered > 0 {
+        if grpc_ep.is_some() && !use_grpc && untranslatable > 0 {
             println!(
-                "\tWeaviate search transport: graphql (forced — {} of {} queries carry a \
-                 filter and gRPC filter translation is not implemented; unfiltered runs use gRPC, \
-                 so filtered vs unfiltered numbers are on different transports)",
+                "\tWeaviate search transport: graphql (forced — {} of {} filtered queries use a \
+                 condition the gRPC proto can't express; the whole set runs on GraphQL so filter \
+                 semantics stay identical across queries)",
+                untranslatable, num_to_run
+            );
+        } else if use_grpc && num_filtered > 0 {
+            println!(
+                "\tWeaviate search transport: grpc ({} of {} queries carry a filter, translated \
+                 to the gRPC Filters message)",
                 num_filtered, num_to_run
             );
         } else {
@@ -1242,7 +1383,14 @@ impl Engine for WeaviateEngine {
         };
         let grpc_requests: Vec<SearchRequest> = if use_grpc {
             (0..num_to_run)
-                .map(|idx| build_grpc_request(&self.class_name, &queries[idx], tops[idx]))
+                .map(|idx| {
+                    build_grpc_request(
+                        &self.class_name,
+                        &queries[idx],
+                        tops[idx],
+                        grpc_filters[idx].as_ref(),
+                    )
+                })
                 .collect()
         } else {
             Vec::new()
@@ -1751,5 +1899,159 @@ mod tests {
         let f = build_weaviate_filter("n", "match", &json!({"value":[1,2]})).unwrap();
         assert_eq!(f["operator"], "Equal");
         assert_eq!(f["valueText"], json!([1, 2]));
+    }
+
+    // ── gRPC Filters translation (must mirror the GraphQL where-tree) ───────
+
+    use super::filters::{Operator, TestValue};
+
+    /// Convert a `conditions` blob the same way both transports do: through
+    /// `parse_weaviate_conditions` (GraphQL where-tree) then
+    /// `where_json_to_grpc_filters` (gRPC Filters). Returns the gRPC message.
+    fn grpc_filters_for(conditions: serde_json::Value) -> Filters {
+        let where_tree =
+            parse_weaviate_conditions(&conditions).expect("conditions must produce a where-tree");
+        where_json_to_grpc_filters(&where_tree).expect("where-tree must translate to gRPC")
+    }
+
+    fn property_of(f: &Filters) -> &str {
+        match f.target.as_ref().unwrap().target.as_ref().unwrap() {
+            filter_target::Target::Property(p) => p,
+            _ => panic!("expected a Property target"),
+        }
+    }
+
+    #[test]
+    fn grpc_match_keyword_maps_to_equal_value_text() {
+        let f = grpc_filters_for(json!({"and":[{"color":{"match":{"value":"red"}}}]}));
+        assert_eq!(f.operator, Operator::Equal as i32);
+        assert_eq!(property_of(&f), "color");
+        assert_eq!(f.test_value, Some(TestValue::ValueText("red".into())));
+        assert!(f.filters.is_empty());
+    }
+
+    #[test]
+    fn grpc_match_int_maps_to_equal_value_int() {
+        let f = grpc_filters_for(json!({"and":[{"size":{"match":{"value":7}}}]}));
+        assert_eq!(f.operator, Operator::Equal as i32);
+        assert_eq!(property_of(&f), "size");
+        assert_eq!(f.test_value, Some(TestValue::ValueInt(7)));
+    }
+
+    #[test]
+    fn grpc_match_bool_maps_to_equal_value_boolean() {
+        let f = grpc_filters_for(json!({"and":[{"flag":{"match":{"value":true}}}]}));
+        assert_eq!(f.operator, Operator::Equal as i32);
+        assert_eq!(f.test_value, Some(TestValue::ValueBoolean(true)));
+    }
+
+    #[test]
+    fn grpc_match_any_maps_to_or_of_equals() {
+        let f = grpc_filters_for(json!({
+            "and":[{"color":{"match":{"any":["red","blue"]}}}]
+        }));
+        assert_eq!(f.operator, Operator::Or as i32);
+        assert_eq!(f.filters.len(), 2);
+        for (child, want) in f.filters.iter().zip(["red", "blue"]) {
+            assert_eq!(child.operator, Operator::Equal as i32);
+            assert_eq!(property_of(child), "color");
+            assert_eq!(child.test_value, Some(TestValue::ValueText(want.into())));
+        }
+    }
+
+    #[test]
+    fn grpc_match_any_int_maps_to_or_of_equal_value_int() {
+        let f = grpc_filters_for(json!({"and":[{"size":{"match":{"any":[1,2]}}}]}));
+        assert_eq!(f.operator, Operator::Or as i32);
+        assert_eq!(f.filters.len(), 2);
+        assert_eq!(f.filters[0].test_value, Some(TestValue::ValueInt(1)));
+        assert_eq!(f.filters[1].test_value, Some(TestValue::ValueInt(2)));
+    }
+
+    #[test]
+    fn grpc_range_two_sided_maps_to_and_of_less_and_greater() {
+        let f = grpc_filters_for(json!({"and":[{"n":{"range":{"gte":10,"lt":20}}}]}));
+        assert_eq!(f.operator, Operator::And as i32);
+        assert_eq!(f.filters.len(), 2);
+        // Fixed emission order: lt, gt, lte, gte.
+        assert_eq!(f.filters[0].operator, Operator::LessThan as i32);
+        assert_eq!(f.filters[0].test_value, Some(TestValue::ValueInt(20)));
+        assert_eq!(f.filters[1].operator, Operator::GreaterThanEqual as i32);
+        assert_eq!(f.filters[1].test_value, Some(TestValue::ValueInt(10)));
+    }
+
+    #[test]
+    fn grpc_range_float_bound_uses_value_number() {
+        let f = grpc_filters_for(json!({"and":[{"n":{"range":{"lt":1.5}}}]}));
+        assert_eq!(f.operator, Operator::LessThan as i32);
+        assert_eq!(f.test_value, Some(TestValue::ValueNumber(1.5)));
+    }
+
+    #[test]
+    fn grpc_or_group_maps_to_or_operator() {
+        let f = grpc_filters_for(json!({"or":[
+            {"a":{"match":{"value":"x"}}},
+            {"b":{"match":{"value":"y"}}},
+        ]}));
+        assert_eq!(f.operator, Operator::Or as i32);
+        assert_eq!(f.filters.len(), 2);
+        assert_eq!(property_of(&f.filters[0]), "a");
+        assert_eq!(property_of(&f.filters[1]), "b");
+    }
+
+    #[test]
+    fn grpc_and_plus_or_nests_both_groups_under_and() {
+        let f = grpc_filters_for(json!({
+            "and":[{"a":{"match":{"value":"x"}}}],
+            "or":[{"b":{"match":{"value":"y"}}},{"c":{"match":{"value":"z"}}}],
+        }));
+        assert_eq!(f.operator, Operator::And as i32);
+        assert_eq!(f.filters.len(), 2);
+        // One operand is the collapsed AND (a bare Equal), the other the OR group.
+        assert!(f.filters.iter().any(|c| c.operator == Operator::Or as i32));
+        assert!(f
+            .filters
+            .iter()
+            .any(|c| c.operator == Operator::Equal as i32));
+    }
+
+    #[test]
+    fn grpc_geo_maps_to_within_geo_range_value_geo() {
+        // `geo` isn't produced through parse_weaviate_conditions' and/or entries
+        // in these fixtures, so translate the leaf directly.
+        let leaf =
+            build_weaviate_filter("loc", "geo", &json!({"lat":20.0,"lon":10.0,"radius":500}))
+                .unwrap();
+        let f = where_json_to_grpc_filters(&leaf).unwrap();
+        assert_eq!(f.operator, Operator::WithinGeoRange as i32);
+        assert_eq!(property_of(&f), "loc");
+        match f.test_value.unwrap() {
+            TestValue::ValueGeo(g) => {
+                assert_eq!(g.latitude, 20.0);
+                assert_eq!(g.longitude, 10.0);
+                assert_eq!(g.distance, 500.0);
+            }
+            other => panic!("expected ValueGeo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn grpc_non_scalar_equal_value_is_untranslatable() {
+        // The degenerate array-under-valueText leaf can't become a proto scalar,
+        // so translation returns None → the run falls back to GraphQL.
+        let leaf = build_weaviate_filter("n", "match", &json!({"value":[1,2]})).unwrap();
+        assert!(where_json_to_grpc_filters(&leaf).is_none());
+    }
+
+    #[test]
+    fn grpc_empty_match_any_maps_to_unsatisfiable_and() {
+        // Empty IN-set → And(Equal(x), NotEqual(x)): matches nothing, mirroring
+        // the GraphQL path exactly (never inverted to match-all).
+        let f = grpc_filters_for(json!({"and":[{"color":{"match":{"any":[]}}}]}));
+        assert_eq!(f.operator, Operator::And as i32);
+        assert_eq!(f.filters.len(), 2);
+        assert_eq!(f.filters[0].operator, Operator::Equal as i32);
+        assert_eq!(f.filters[1].operator, Operator::NotEqual as i32);
+        assert_eq!(f.filters[0].test_value, f.filters[1].test_value);
     }
 }
