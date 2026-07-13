@@ -6,24 +6,24 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 
 | Engine | Client Library | Protocol | Distance Metrics | Metadata Filters |
 |--------|---------------|----------|-----------------|-----------------|
-| **Redis** (RediSearch) | `redis` 0.27 | Redis protocol | L2, Cosine, IP | Yes |
-| **VectorSets** | `redis` 0.27 | Redis protocol | L2, Cosine | Yes |
+| **Redis** (RediSearch) | `redis` 1.3 | Redis protocol | L2, Cosine, IP | Yes |
+| **VectorSets** | `redis` 1.3 | Redis protocol | L2, Cosine | Yes |
 | **Elasticsearch** | `elasticsearch` 8.15 | HTTP/REST | L2, Cosine | Yes |
-| **OpenSearch** | `opensearch` 2.3 | HTTP/REST | L2, Cosine | Yes |
-| **Qdrant** | `qdrant-client` 1.17 | gRPC | L2, Cosine, Dot | Yes |
+| **OpenSearch** | `opensearch` 2.4 | HTTP/REST | L2, Cosine | Yes |
+| **Qdrant** | `qdrant-client` 1.18 | gRPC | L2, Cosine, Dot | Yes |
 | **PgVector** | `postgres` 0.19 + `pgvector` 0.4 | PostgreSQL | L2, Cosine | Yes |
 | **Weaviate** | `tonic` 0.12 / `prost` 0.13 (gRPC) + `reqwest` (REST) | gRPC (search) + HTTP/REST (schema) [\*\*](#weaviate-protocol-note) | L2, Cosine, Dot | Yes |
 | **Milvus** | `reqwest` (REST API v2) | HTTP/REST | L2, Cosine, IP | Yes |
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
-| **Valkey** (Valkey Search) | `redis` 0.27 [\*](#valkey-client-note) | RESP protocol | L2, Cosine, IP | Yes |
+| **Valkey** (Valkey Search) | `redis` 1.3 [\*](#valkey-client-note) | RESP protocol | L2, Cosine, IP | Yes |
 | **Turbopuffer** | `turbopuffer-client` 0.0.4 | HTTP/REST (cloud) | Cosine, Euclidean | Yes |
-| **Dragonfly** (Dragonfly Search) | `redis` 0.27 | RESP protocol | L2, Cosine, IP | No [\*\*\*](#dragonfly-note) |
+| **Dragonfly** (Dragonfly Search) | `redis` 1.3 | RESP protocol | L2, Cosine, IP | No [\*\*\*](#dragonfly-note) |
 
 <a id="valkey-client-note"></a>
 \* **Valkey client note:** Valkey GLIDE has no published Rust crate ([valkey-io/valkey-glide#828](https://github.com/valkey-io/valkey-glide/issues/828), closed NOT_PLANNED). The GLIDE maintainers recommend using `redis-rs` for Rust and upstream their improvements to it. The `redis` crate works with Valkey since it speaks the same RESP protocol.
 
 <a id="weaviate-protocol-note"></a>
-\*\* **Weaviate protocol note:** Vector search runs over Weaviate's **gRPC** API (port 50051) by default — the high-throughput query path used by the official clients (packed binary vectors). Schema management, upload, and search-time `ef` tuning use the REST API (v1). The tool falls back to the slower GraphQL-over-HTTP search path when a metadata filter is present (gRPC filter translation is not implemented) or when `WEAVIATE_USE_GRAPHQL` is set. Override the gRPC port with `WEAVIATE_GRPC_PORT`.
+\*\* **Weaviate protocol note:** Vector search runs over Weaviate's **gRPC** API (port 50051) by default — the high-throughput query path used by the official clients (packed binary vectors). Schema management, upload, and search-time `ef` tuning use the REST API (v1). Filtered searches also run over gRPC — metadata filter conditions are translated to the gRPC `Filters` message. The tool falls back to the slower GraphQL-over-HTTP search path only when a filter condition can't be expressed in gRPC or when `WEAVIATE_USE_GRAPHQL` is set. Override the gRPC port with `WEAVIATE_GRPC_PORT`.
 
 <a id="dragonfly-note"></a>
 \*\*\* **Dragonfly note:** Uses **Dragonfly Search** (Beta), the RediSearch-compatible `FT.*` subset Dragonfly ships (`FT.CREATE`/`FT.SEARCH`/`FT.INFO`/`FT.DROPINDEX`, `VECTOR` FLAT/HNSW, `*=>[KNN k @field $blob AS score]`). This engine implements **pure vector KNN only** — no metadata filters, no full-text, no mixed workload, no quantization. Dragonfly Search supports only the **float32** vector type, so vectors are always encoded as FLOAT32. Runs over the RESP protocol via Docker; set the host port with `DRAGONFLY_PORT` (default `6385`).
