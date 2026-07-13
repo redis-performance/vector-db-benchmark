@@ -731,3 +731,53 @@ fn test_binary_opensearch_match_any() {
         recall
     );
 }
+
+/// End-to-end full-text filter (#120): the query carries a single
+/// `{"body":{"match":{"text":"quick"}}}` condition and ground truth is
+/// brute-forced over only the docs whose body CONTAINS "quick". Before the fix,
+/// OpenSearch dropped the text clause and ran the kNN query UNFILTERED, so
+/// recall was scored against the filtered ground truth and collapsed. A high
+/// recall here proves the analyzed `match` filter arm is applied end-to-end.
+#[test]
+fn test_binary_opensearch_fulltext() {
+    wait_for_opensearch();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-text", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_fulltext_project("text-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-text",
+            "text-test",
+            // Explicit http:// scheme: the OpenSearch engine defaults to https
+            // for a bare host, but the CI container runs plaintext http (security
+            // plugin disabled).
+            "http://127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_fulltext"),
+            ],
+        ),
+        "opensearch fulltext run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "os-text");
+    println!("opensearch fulltext recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "opensearch fulltext recall {:.3} < 0.9",
+        recall
+    );
+}
