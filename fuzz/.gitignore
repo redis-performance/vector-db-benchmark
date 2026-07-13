@@ -1,0 +1,13 @@
+# cargo-fuzz build output
+/target
+# crash reproducers (surfaced via CI artifacts, not committed)
+/artifacts
+# coverage reports
+/coverage
+# generated fuzzing corpus — the small curated seeds under corpus/<target>/ are
+# force-added; everything the fuzzer generates locally is ignored (CI persists
+# the accumulated corpus via actions/cache instead).
+/corpus/**
+!/corpus/
+!/corpus/*/
+!/corpus/*/valid*

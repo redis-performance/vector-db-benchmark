@@ -398,6 +398,16 @@ make integration-test-valkey           # Valkey Bundle (latest)
 
 Each target starts the engine via `docker compose -f tests/docker-compose.test.yml`, runs the tests, then stops the container.
 
+### Fuzzing
+
+The untrusted dataset parsers (sparse CSR, NPY, JSONL, and metadata/JSON readers) are fuzzed with [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) / libFuzzer to ensure malformed input returns `Err` instead of panicking/overflowing/OOMing. Run locally with a nightly toolchain:
+
+```bash
+cargo +nightly fuzz run sparse_reader -- -max_total_time=60 -rss_limit_mb=2048
+```
+
+A nightly GitHub Actions workflow (`.github/workflows/fuzz.yml`) fuzzes each parser at higher effort. See [`fuzz/README.md`](fuzz/README.md) for details.
+
 **Turbopuffer** is cloud-only and requires an API key:
 ```bash
 TURBOPUFFER_API_KEY=your-key ./target/release/vector-db-benchmark \

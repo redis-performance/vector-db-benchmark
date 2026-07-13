@@ -24,8 +24,21 @@ pub struct SparseVector {
     pub values: Vec<f32>,
 }
 
-fn read_i64_le(r: &mut impl Read, n: usize) -> Result<Vec<i64>, String> {
-    let mut buf = vec![0u8; n * 8];
+/// Read `n` little-endian `i64` values, bounding the up-front allocation by
+/// `max_bytes` (the file size). A corrupt/hostile header can claim an absurd
+/// count; capping the allocation to what the file could actually contain turns
+/// an OOM into a clean `Err`. Size math is checked to reject integer overflow.
+fn read_i64_le(r: &mut impl Read, n: usize, max_bytes: u64) -> Result<Vec<i64>, String> {
+    let byte_len = n
+        .checked_mul(8)
+        .ok_or_else(|| "CSR size overflow (i64 count too large)".to_string())?;
+    if byte_len as u64 > max_bytes {
+        return Err(format!(
+            "CSR claims {} bytes but file is only {} bytes",
+            byte_len, max_bytes
+        ));
+    }
+    let mut buf = vec![0u8; byte_len];
     r.read_exact(&mut buf).map_err(|e| e.to_string())?;
     Ok(buf
         .chunks_exact(8)
@@ -33,12 +46,42 @@ fn read_i64_le(r: &mut impl Read, n: usize) -> Result<Vec<i64>, String> {
         .collect())
 }
 
+/// Read a `n_non_zero`-long array of little-endian 4-byte values, mapping each
+/// via `f`. Allocation is bounded by `max_bytes` and the byte length is checked
+/// for overflow, so a hostile `n_non_zero` cannot OOM or wrap.
+fn read_u32_array<T>(
+    r: &mut impl Read,
+    n_non_zero: usize,
+    max_bytes: u64,
+    f: impl Fn([u8; 4]) -> T,
+) -> Result<Vec<T>, String> {
+    let byte_len = n_non_zero
+        .checked_mul(4)
+        .ok_or_else(|| "CSR nnz size overflow".to_string())?;
+    if byte_len as u64 > max_bytes {
+        return Err(format!(
+            "CSR claims {} bytes but file is only {} bytes",
+            byte_len, max_bytes
+        ));
+    }
+    let mut buf = vec![0u8; byte_len];
+    r.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(buf
+        .chunks_exact(4)
+        .map(|c| f(c.try_into().unwrap()))
+        .collect())
+}
+
 /// Parse a CSR file into a list of sparse vectors.
 pub fn read_sparse_matrix(path: &str) -> Result<Vec<SparseVector>, String> {
     let file = File::open(Path::new(path)).map_err(|e| format!("open {}: {}", path, e))?;
+    // File size is an upper bound on any array the header can legitimately
+    // describe; use it to cap every up-front allocation so a corrupt header
+    // cannot OOM the process before `read_exact` would fail.
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut r = BufReader::new(file);
 
-    let sizes = read_i64_le(&mut r, 3)?;
+    let sizes = read_i64_le(&mut r, 3, file_len)?;
     let (n_row, n_col, n_non_zero) = (sizes[0], sizes[1], sizes[2]);
     if n_row < 0 || n_col < 0 || n_non_zero < 0 {
         return Err(format!("invalid CSR header in {}", path));
@@ -46,32 +89,53 @@ pub fn read_sparse_matrix(path: &str) -> Result<Vec<SparseVector>, String> {
     let n_row = n_row as usize;
     let n_non_zero = n_non_zero as usize;
 
-    let index_pointer = read_i64_le(&mut r, n_row + 1)?;
+    let ip_count = n_row
+        .checked_add(1)
+        .ok_or_else(|| "CSR n_row overflow".to_string())?;
+    let index_pointer = read_i64_le(&mut r, ip_count, file_len)?;
     if index_pointer.last().copied().unwrap_or(0) as usize != n_non_zero {
         return Err(format!("CSR index_pointer/nnz mismatch in {}", path));
     }
+    // Validate the whole index_pointer array BEFORE using any entry to slice:
+    // every value must be non-negative, `<= n_non_zero`, and monotonically
+    // non-decreasing. Otherwise `columns[start..end]` could panic on an
+    // out-of-bounds or `start > end` range.
+    for pair in index_pointer.windows(2) {
+        let (prev, next) = (pair[0], pair[1]);
+        if prev < 0 || next < 0 {
+            return Err(format!("CSR index_pointer has negative offset in {}", path));
+        }
+        if prev > next {
+            return Err(format!("CSR index_pointer not monotonic in {}", path));
+        }
+        if next as usize > n_non_zero {
+            return Err(format!(
+                "CSR index_pointer offset {} exceeds nnz {} in {}",
+                next, n_non_zero, path
+            ));
+        }
+    }
 
-    let mut col_buf = vec![0u8; n_non_zero * 4];
-    r.read_exact(&mut col_buf).map_err(|e| e.to_string())?;
-    let columns: Vec<u32> = col_buf
-        .chunks_exact(4)
-        .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as u32)
-        .collect();
-
-    let mut val_buf = vec![0u8; n_non_zero * 4];
-    r.read_exact(&mut val_buf).map_err(|e| e.to_string())?;
-    let values: Vec<f32> = val_buf
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-        .collect();
+    let columns: Vec<u32> = read_u32_array(&mut r, n_non_zero, file_len, |c| {
+        i32::from_le_bytes(c) as u32
+    })?;
+    let values: Vec<f32> = read_u32_array(&mut r, n_non_zero, file_len, f32::from_le_bytes)?;
 
     let mut out = Vec::with_capacity(n_row);
     for i in 0..n_row {
         let start = index_pointer[i] as usize;
         let end = index_pointer[i + 1] as usize;
+        // `.get` instead of `[..]`: validated above, but stay panic-free even if
+        // an invariant is ever missed.
+        let indices = columns
+            .get(start..end)
+            .ok_or_else(|| format!("CSR columns range {}..{} out of bounds", start, end))?;
+        let vals = values
+            .get(start..end)
+            .ok_or_else(|| format!("CSR values range {}..{} out of bounds", start, end))?;
         out.push(SparseVector {
-            indices: columns[start..end].to_vec(),
-            values: values[start..end].to_vec(),
+            indices: indices.to_vec(),
+            values: vals.to_vec(),
         });
     }
     Ok(out)
@@ -144,5 +208,89 @@ mod tests {
         let read = read_sparse_matrix(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(read, rows);
+    }
+
+    // ---- Regression tests for fuzzer-found crashes ----
+    // Each writes exactly-crafted malformed CSR bytes and asserts the reader
+    // returns Err instead of panicking / overflowing / OOMing.
+
+    fn write_tmp(bytes: &[u8]) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(bytes).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    /// Header n_row so large that `(n_row + 1) * 8` overflows usize.
+    /// Previously panicked "attempt to multiply with overflow" at read_i64_le.
+    #[test]
+    fn rejects_index_pointer_count_overflow() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&i64::MAX.to_le_bytes()); // n_row
+        b.extend_from_slice(&1i64.to_le_bytes()); // n_col
+        b.extend_from_slice(&0i64.to_le_bytes()); // nnz
+        let f = write_tmp(&b);
+        assert!(read_sparse_matrix(f.path().to_str().unwrap()).is_err());
+    }
+
+    /// nnz so large that `nnz * 4` overflows usize.
+    /// Previously panicked "attempt to multiply with overflow" at columns alloc.
+    #[test]
+    fn rejects_nnz_byte_overflow() {
+        let nnz: i64 = 1 << 62; // *4 overflows u64/usize
+        let mut b = Vec::new();
+        b.extend_from_slice(&0i64.to_le_bytes()); // n_row = 0 -> ip has 1 elem
+        b.extend_from_slice(&1i64.to_le_bytes()); // n_col
+        b.extend_from_slice(&nnz.to_le_bytes()); // nnz
+        b.extend_from_slice(&nnz.to_le_bytes()); // index_pointer[0] == nnz
+        let f = write_tmp(&b);
+        assert!(read_sparse_matrix(f.path().to_str().unwrap()).is_err());
+    }
+
+    /// index_pointer with start > end (non-monotonic) for a row.
+    /// Previously panicked "slice index starts at 5 but ends at 1".
+    #[test]
+    fn rejects_non_monotonic_index_pointer() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&1i64.to_le_bytes()); // n_row = 1
+        b.extend_from_slice(&1i64.to_le_bytes()); // n_col
+        b.extend_from_slice(&1i64.to_le_bytes()); // nnz = 1
+        b.extend_from_slice(&5i64.to_le_bytes()); // ip[0] = 5
+        b.extend_from_slice(&1i64.to_le_bytes()); // ip[1] = 1 (last == nnz)
+        b.extend_from_slice(&0i32.to_le_bytes()); // columns[0]
+        b.extend_from_slice(&0f32.to_le_bytes()); // values[0]
+        let f = write_tmp(&b);
+        assert!(read_sparse_matrix(f.path().to_str().unwrap()).is_err());
+    }
+
+    /// index_pointer offset exceeding nnz (out of bounds).
+    #[test]
+    fn rejects_out_of_bounds_index_pointer() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&2i64.to_le_bytes()); // n_row = 2
+        b.extend_from_slice(&1i64.to_le_bytes()); // n_col
+        b.extend_from_slice(&1i64.to_le_bytes()); // nnz = 1
+        b.extend_from_slice(&0i64.to_le_bytes()); // ip[0] = 0
+        b.extend_from_slice(&9i64.to_le_bytes()); // ip[1] = 9 > nnz
+        b.extend_from_slice(&1i64.to_le_bytes()); // ip[2] = 1 (last == nnz)
+        b.extend_from_slice(&0i32.to_le_bytes()); // columns[0]
+        b.extend_from_slice(&0f32.to_le_bytes()); // values[0]
+        let f = write_tmp(&b);
+        assert!(read_sparse_matrix(f.path().to_str().unwrap()).is_err());
+    }
+
+    /// nnz large enough that `nnz * 4` fits in usize but implies a multi-TB
+    /// allocation far exceeding the tiny file. Must Err (alloc cap), not OOM.
+    #[test]
+    fn rejects_absurd_allocation_from_small_file() {
+        let nnz: i64 = 1 << 40; // *4 = 4 TiB
+        let mut b = Vec::new();
+        b.extend_from_slice(&0i64.to_le_bytes()); // n_row = 0
+        b.extend_from_slice(&1i64.to_le_bytes()); // n_col
+        b.extend_from_slice(&nnz.to_le_bytes()); // nnz
+        b.extend_from_slice(&nnz.to_le_bytes()); // index_pointer[0] == nnz
+        let f = write_tmp(&b);
+        assert!(read_sparse_matrix(f.path().to_str().unwrap()).is_err());
     }
 }
