@@ -162,3 +162,16 @@ services:
       interval: 1s
       timeout: 3s
       retries: 10
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    # Dragonfly requires the ability to lock memory; disable the memlock limit.
+    ulimits:
+      memlock: -1
+    ports:
+      - "6385:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10

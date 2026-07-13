@@ -271,3 +271,24 @@ jobs:
     - name: Stop Valkey
       if: always()
       run: docker compose -f tests/docker-compose.test.yml down
+
+  integration-dragonfly:
+    name: Integration tests (Dragonfly)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libhdf5-dev pkg-config
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Start Dragonfly
+      run: docker compose -f tests/docker-compose.test.yml up -d dragonfly --wait
+
+    - name: Run Dragonfly integration tests
+      run: DRAGONFLY_PORT=6385 cargo test --test integration_dragonfly --release -- --test-threads=1
+
+    - name: Stop Dragonfly
+      if: always()
+      run: docker compose -f tests/docker-compose.test.yml down

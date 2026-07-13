@@ -6,6 +6,7 @@
 //! - `Uploader` trait = BaseUploader
 //! - `Searcher` trait = BaseSearcher
 
+mod dragonfly;
 mod elasticsearch;
 mod milvus;
 mod mongodb_engine;
@@ -23,6 +24,7 @@ mod weaviate_grpc;
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 
+pub use dragonfly::DragonflyEngine;
 pub use elasticsearch::ElasticsearchEngine;
 pub use milvus::MilvusEngine;
 pub use mongodb_engine::MongoDBEngine;
@@ -295,8 +297,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "mongodb" => Ok(Box::new(MongoDBEngine::new(engine_config, host)?)),
         "valkey" => Ok(Box::new(ValkeyEngine::new(engine_config, host)?)),
         "turbopuffer" => Ok(Box::new(TurbopufferEngine::new(engine_config, host)?)),
+        "dragonfly" => Ok(Box::new(DragonflyEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer', 'dragonfly'.",
             other
         )),
     }

@@ -17,12 +17,16 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 | **MongoDB** (Atlas Search) | `mongodb` 3 (sync) | MongoDB protocol | Euclidean, Cosine, Dot | Yes |
 | **Valkey** (Valkey Search) | `redis` 0.27 [\*](#valkey-client-note) | RESP protocol | L2, Cosine, IP | Yes |
 | **Turbopuffer** | `turbopuffer-client` 0.0.4 | HTTP/REST (cloud) | Cosine, Euclidean | Yes |
+| **Dragonfly** (Dragonfly Search) | `redis` 0.27 | RESP protocol | L2, Cosine, IP | No [\*\*\*](#dragonfly-note) |
 
 <a id="valkey-client-note"></a>
 \* **Valkey client note:** Valkey GLIDE has no published Rust crate ([valkey-io/valkey-glide#828](https://github.com/valkey-io/valkey-glide/issues/828), closed NOT_PLANNED). The GLIDE maintainers recommend using `redis-rs` for Rust and upstream their improvements to it. The `redis` crate works with Valkey since it speaks the same RESP protocol.
 
 <a id="weaviate-protocol-note"></a>
 \*\* **Weaviate protocol note:** Vector search runs over Weaviate's **gRPC** API (port 50051) by default — the high-throughput query path used by the official clients (packed binary vectors). Schema management, upload, and search-time `ef` tuning use the REST API (v1). The tool falls back to the slower GraphQL-over-HTTP search path when a metadata filter is present (gRPC filter translation is not implemented) or when `WEAVIATE_USE_GRAPHQL` is set. Override the gRPC port with `WEAVIATE_GRPC_PORT`.
+
+<a id="dragonfly-note"></a>
+\*\*\* **Dragonfly note:** Uses **Dragonfly Search** (Beta), the RediSearch-compatible `FT.*` subset Dragonfly ships (`FT.CREATE`/`FT.SEARCH`/`FT.INFO`/`FT.DROPINDEX`, `VECTOR` FLAT/HNSW, `*=>[KNN k @field $blob AS score]`). This engine implements **pure vector KNN only** — no metadata filters, no full-text, no mixed workload, no quantization. Dragonfly Search supports only the **float32** vector type, so vectors are always encoded as FLOAT32. Runs over the RESP protocol via Docker; set the host port with `DRAGONFLY_PORT` (default `6385`).
 
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
