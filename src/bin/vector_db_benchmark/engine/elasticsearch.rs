@@ -530,10 +530,19 @@ fn build_filter(
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                 return Some(serde_json::json!({"terms": {field_name: any}}));
             }
-            // follow-up: full-text `{"match": {"text": …}}` conditions are dropped
-            // here (no "value" key → None). This is PRE-EXISTING and shared with
-            // OpenSearch's build_filter; fixing text filtering in both is out of
-            // scope for this PR.
+            // Full-text `{"match": {"text": …}}` conditions: emit an ES `match`
+            // query against the analyzed `text` field. `match` tokenizes the
+            // query the same way the field is analyzed, so it matches docs
+            // CONTAINING the term(s) — aligning with the tokenized semantics
+            // redis uses via `@field:($tok)` and the ground truth in
+            // `write_fulltext_project` (docs whose body CONTAINS "quick"). We use
+            // `match` (not `match_phrase`) because the fixture filters on single
+            // tokens; dropping this clause would leave `bool.must:[]`, which ES
+            // treats as match-ALL — silently running the kNN query UNFILTERED
+            // while recall is scored against the filtered ground truth (#120).
+            if let Some(text) = criteria.get("text") {
+                return Some(serde_json::json!({"match": {field_name: text}}));
+            }
             let value = criteria.get("value")?;
             Some(serde_json::json!({"match": {field_name: value}}))
         }
@@ -1057,6 +1066,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c, serde_json::json!({"terms": {"color": ["red", "blue"]}}));
+    }
+
+    // #120: a full-text `{"match": {"text": …}}` condition must emit an analyzed
+    // `match` query — NOT be dropped. Dropping it leaves `bool.must:[]`, which ES
+    // treats as match-ALL, silently running the kNN query UNFILTERED.
+    #[test]
+    fn test_match_text_emits_match_query() {
+        let c = build_filter("body", "match", &serde_json::json!({"text": "quick"})).unwrap();
+        assert_eq!(c, serde_json::json!({"match": {"body": "quick"}}));
+    }
+
+    #[test]
+    fn es_text_only_condition_not_dropped() {
+        // `{"and":[{"body":{"match":{"text":"quick"}}}]}` — the exact fixture
+        // condition from `write_fulltext_project`. Must yield a non-empty
+        // `bool.must` containing the `match` clause (was None → dropped → #120).
+        let conditions = serde_json::json!({"and": [{"body": {"match": {"text": "quick"}}}]});
+        let parsed =
+            parse_es_conditions(&conditions).expect("text-only filter must not be dropped");
+        assert_eq!(
+            parsed,
+            serde_json::json!({"bool": {"must": [{"match": {"body": "quick"}}]}})
+        );
     }
 
     #[test]
