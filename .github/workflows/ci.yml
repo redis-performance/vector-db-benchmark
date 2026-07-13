@@ -59,7 +59,15 @@ jobs:
     - uses: Swatinem/rust-cache@v2
 
     - name: Run unit tests
-      run: cargo test --lib --release
+      # --lib AND --bins: the bulk of the unit tests (engine filter builders,
+      # CLI/config parsing, per-engine helpers) live in the binary crate, so
+      # `--lib` alone never executed them in CI.
+      run: cargo test --lib --bins --release
+
+    - name: Run CLI smoke tests (no container)
+      # --help / --describe datasets|engines — the same paths the docker-build
+      # job smoke-tests, now in the blocking suite.
+      run: cargo test --test integration_cli --release
 
   integration-redis:
     name: Integration tests (Redis)
