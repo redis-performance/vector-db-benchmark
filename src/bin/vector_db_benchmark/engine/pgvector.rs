@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
+use postgres::types::ToSql;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
@@ -396,9 +397,14 @@ impl Engine for PgVectorEngine {
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
 
-        let parsed_filters: Vec<Option<String>> = conditions
+        // Parse each query's filter ONCE (outside the timed region) into a
+        // parameterized template + a list of typed values to bind. The template
+        // SQL text is stable per filter shape (values are `$N` placeholders, not
+        // inlined), so the server reuses one prepared plan across queries in a
+        // run. Filter placeholders start at $3 ($1 = query vector, $2 = LIMIT).
+        let parsed_filters: Vec<Option<(String, Vec<PgValue>)>> = conditions
             .iter()
-            .map(|c| c.as_ref().and_then(parse_pg_conditions))
+            .map(|c| c.as_ref().and_then(|v| parse_pg_conditions(v, 3)))
             .collect();
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
@@ -471,19 +477,34 @@ impl Engine for PgVectorEngine {
                         });
 
                         let query_vec = pgvector::Vector::from(queries[idx].clone());
+                        // `top` (LIMIT) and every filter value are BOUND params,
+                        // not inlined, so the statement text is stable per filter
+                        // shape and the plan is reused across queries.
+                        let top_param = top as i64;
 
-                        let where_clause = parsed_filters[idx]
-                            .as_deref()
-                            .map(|f| format!(" WHERE {}", f))
+                        let filter = parsed_filters[idx].as_ref();
+                        let where_clause = filter
+                            .map(|(tmpl, _)| format!(" WHERE {}", tmpl))
                             .unwrap_or_default();
 
+                        // $1 = query vector, $2 = LIMIT (bigint), $3.. = filter values.
                         let query_sql = format!(
-                            "SELECT id, embedding {} $1 AS _score FROM items{} ORDER BY _score LIMIT {}",
-                            distance_op, where_clause, top
+                            "SELECT id, embedding {} $1 AS _score FROM items{} ORDER BY _score LIMIT $2::bigint",
+                            distance_op, where_clause
                         );
 
+                        let mut query_params: Vec<&(dyn ToSql + Sync)> =
+                            Vec::with_capacity(2 + filter.map(|(_, v)| v.len()).unwrap_or(0));
+                        query_params.push(&query_vec);
+                        query_params.push(&top_param);
+                        if let Some((_, values)) = filter {
+                            for v in values {
+                                query_params.push(v.as_sql());
+                            }
+                        }
+
                         let query_start = Instant::now();
-                        let results = conn.query(&query_sql, &[&query_vec]);
+                        let results = conn.query(&query_sql, &query_params);
                         let query_time = query_start.elapsed().as_secs_f64();
 
                         match results {
@@ -560,23 +581,87 @@ fn map_pg_distance_ops(distance: &str) -> Result<(&'static str, &'static str), S
     }
 }
 
-fn parse_pg_conditions(conditions: &serde_json::Value) -> Option<String> {
+/// A filter value bound as a query parameter (instead of inlined into the SQL
+/// text) so the prepared-statement text stays stable across queries in a run and
+/// the server reuses one plan. Each variant owns its data and lends a
+/// `&(dyn ToSql + Sync)` for binding via `as_sql`.
+#[derive(Debug, Clone, PartialEq)]
+enum PgValue {
+    Text(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    TextArray(Vec<String>),
+    IntArray(Vec<i64>),
+    FloatArray(Vec<f64>),
+}
+
+impl PgValue {
+    fn as_sql(&self) -> &(dyn ToSql + Sync) {
+        match self {
+            PgValue::Text(v) => v,
+            PgValue::Int(v) => v,
+            PgValue::Float(v) => v,
+            PgValue::Bool(v) => v,
+            PgValue::TextArray(v) => v,
+            PgValue::IntArray(v) => v,
+            PgValue::FloatArray(v) => v,
+        }
+    }
+}
+
+/// Accumulates the ordered list of bound values and hands out sequential `$N`
+/// placeholders so the emitted template and the values line up positionally.
+struct FilterBuilder {
+    next_param: usize,
+    values: Vec<PgValue>,
+}
+
+impl FilterBuilder {
+    /// Record `v` as the next bound value and return its `$N` placeholder text.
+    fn bind(&mut self, v: PgValue) -> String {
+        let n = self.next_param;
+        self.next_param += 1;
+        self.values.push(v);
+        format!("${}", n)
+    }
+}
+
+/// Parse a dataset filter into a parameterized SQL template + the ordered typed
+/// values to bind. `first_param` is the placeholder number the filter's first
+/// value takes (callers pass 3: $1 = query vector, $2 = LIMIT). The template
+/// text depends only on the filter *shape* (fields/operators), never on the
+/// values, so distinct queries in a run share one prepared statement.
+fn parse_pg_conditions(
+    conditions: &serde_json::Value,
+    first_param: usize,
+) -> Option<(String, Vec<PgValue>)> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
         return None;
     }
 
+    let mut builder = FilterBuilder {
+        next_param: first_param,
+        values: Vec::new(),
+    };
     let mut clauses = Vec::new();
 
     if let Some(and_entries) = obj.get("and").and_then(|v| v.as_array()) {
-        let sub: Vec<String> = and_entries.iter().filter_map(build_pg_clause).collect();
+        let sub: Vec<String> = and_entries
+            .iter()
+            .filter_map(|e| build_pg_clause(e, &mut builder))
+            .collect();
         if !sub.is_empty() {
             clauses.push(format!("({})", sub.join(" AND ")));
         }
     }
 
     if let Some(or_entries) = obj.get("or").and_then(|v| v.as_array()) {
-        let sub: Vec<String> = or_entries.iter().filter_map(build_pg_clause).collect();
+        let sub: Vec<String> = or_entries
+            .iter()
+            .filter_map(|e| build_pg_clause(e, &mut builder))
+            .collect();
         if !sub.is_empty() {
             clauses.push(format!("({})", sub.join(" OR ")));
         }
@@ -585,11 +670,11 @@ fn parse_pg_conditions(conditions: &serde_json::Value) -> Option<String> {
     if clauses.is_empty() {
         None
     } else {
-        Some(clauses.join(" AND "))
+        Some((clauses.join(" AND "), builder.values))
     }
 }
 
-fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
+fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Option<String> {
     let entry_obj = entry.as_object()?;
     let mut parts = Vec::new();
     for (field_name, field_filters) in entry_obj {
@@ -601,9 +686,23 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                     // Condition::matches(field, Vec).
                     if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
                         if !any.is_empty() && any.iter().all(|v| v.is_number()) {
-                            // Numeric IN-set on a scalar numeric column.
-                            let nums: Vec<String> = any.iter().map(|v| v.to_string()).collect();
-                            parts.push(format!("\"{}\" IN ({})", field_name, nums.join(", ")));
+                            // Numeric contains-any on a scalar numeric column. The
+                            // WHOLE list is bound as ONE array param and tested with
+                            // `= ANY(...)` (equivalent to `IN`), so the SQL text is
+                            // independent of the list length — a stable statement.
+                            if any.iter().all(|v| v.is_i64() || v.is_u64()) {
+                                let nums: Vec<i64> = any.iter().map(json_as_i64).collect();
+                                let ph = builder.bind(PgValue::IntArray(nums));
+                                parts.push(format!("\"{}\" = ANY({}::bigint[])", field_name, ph));
+                            } else {
+                                let nums: Vec<f64> =
+                                    any.iter().map(|v| v.as_f64().unwrap_or(0.0)).collect();
+                                let ph = builder.bind(PgValue::FloatArray(nums));
+                                parts.push(format!(
+                                    "\"{}\" = ANY({}::double precision[])",
+                                    field_name, ph
+                                ));
+                            }
                         } else {
                             // Keyword contains-any. Multi-valued keyword payloads
                             // are stored as a single ';'-joined TEXT scalar (see
@@ -612,11 +711,13 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                             // set intersection with the query values — correct for
                             // both single-valued ('red' -> {red}) and multi-valued
                             // ('red;green' -> {red,green}) keyword fields, mirroring
-                            // qdrant's array-contains-any semantics.
+                            // qdrant's array-contains-any semantics. The value set is
+                            // a single bound text[] param (no manual escaping, stable
+                            // statement text regardless of list length).
                             let elems: Vec<String> = any
                                 .iter()
                                 .filter_map(|v| v.as_str())
-                                .map(|s| format!("'{}'", s.replace('\'', "''")))
+                                .map(|s| s.to_string())
                                 .collect();
                             if elems.is_empty() {
                                 // Empty (or no representable) IN-set matches
@@ -626,17 +727,30 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                                 // row — the inverse of the filter).
                                 parts.push("false".to_string());
                             } else {
+                                let ph = builder.bind(PgValue::TextArray(elems));
                                 parts.push(format!(
-                                    "string_to_array(\"{}\", ';') && ARRAY[{}]::text[]",
-                                    field_name,
-                                    elems.join(", ")
+                                    "string_to_array(\"{}\", ';') && {}::text[]",
+                                    field_name, ph
                                 ));
                             }
                         }
                     } else if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
-                            parts.push(format!("\"{}\" = '{}'", field_name, s.replace('\'', "''")));
+                            let ph = builder.bind(PgValue::Text(s.to_string()));
+                            parts.push(format!("\"{}\" = {}", field_name, ph));
+                        } else if let Some(b) = value.as_bool() {
+                            let ph = builder.bind(PgValue::Bool(b));
+                            parts.push(format!("\"{}\" = {}", field_name, ph));
+                        } else if value.is_i64() || value.is_u64() {
+                            let ph = builder.bind(PgValue::Int(json_as_i64(value)));
+                            parts.push(format!("\"{}\" = {}", field_name, ph));
+                        } else if let Some(f) = value.as_f64() {
+                            let ph = builder.bind(PgValue::Float(f));
+                            parts.push(format!("\"{}\" = {}", field_name, ph));
                         } else {
+                            // Non-scalar match value (e.g. a JSON array) — never
+                            // emitted by real datasets. Inlined verbatim; this is
+                            // the ONE case whose SQL text is value-dependent.
                             parts.push(format!("\"{}\" = {}", field_name, value));
                         }
                     }
@@ -651,7 +765,17 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
                                 "gte" => ">=",
                                 _ => continue,
                             };
-                            if !val.is_null() {
+                            if val.is_null() {
+                                continue;
+                            }
+                            if val.is_i64() || val.is_u64() {
+                                let ph = builder.bind(PgValue::Int(json_as_i64(val)));
+                                parts.push(format!("\"{}\" {} {}", field_name, sql_op, ph));
+                            } else if let Some(f) = val.as_f64() {
+                                let ph = builder.bind(PgValue::Float(f));
+                                parts.push(format!("\"{}\" {} {}", field_name, sql_op, ph));
+                            } else {
+                                // Non-numeric range bound (degenerate) — inline.
                                 parts.push(format!("\"{}\" {} {}", field_name, sql_op, val));
                             }
                         }
@@ -666,6 +790,14 @@ fn build_pg_clause(entry: &serde_json::Value) -> Option<String> {
     } else {
         Some(parts.join(" AND "))
     }
+}
+
+/// Coerce a JSON number to i64, tolerating u64 values that fit (falling back to
+/// a saturating cast for the rare > i64::MAX case).
+fn json_as_i64(v: &serde_json::Value) -> i64 {
+    v.as_i64()
+        .or_else(|| v.as_u64().map(|u| u as i64))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -708,61 +840,117 @@ mod tests {
         assert_eq!(copy_field(None, "category"), "\\N");
     }
 
+    // Parse with the production base offset ($1 = vector, $2 = LIMIT, filter
+    // values start at $3) and return the (template, values) pair.
+    fn parse(cond: &serde_json::Value) -> Option<(String, Vec<PgValue>)> {
+        parse_pg_conditions(cond, 3)
+    }
+
     #[test]
-    fn filter_clause_quotes_columns() {
-        // AND of a keyword match and a numeric range → quoted column identifiers.
+    fn filter_clause_quotes_columns_and_binds_values() {
+        // AND of a keyword match and a numeric range → quoted columns, values as
+        // sequential placeholders (NOT inlined), values captured in bind order.
         let cond = json!({
             "and": [
                 {"category": {"match": {"value": "shoes"}}},
                 {"year": {"range": {"gte": 2020}}}
             ]
         });
-        let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(sql.contains("\"category\" = 'shoes'"), "sql={}", sql);
-        assert!(sql.contains("\"year\" >= 2020"), "sql={}", sql);
-    }
-
-    #[test]
-    fn filter_clause_escapes_single_quotes() {
-        let cond = json!({"and": [{"name": {"match": {"value": "O'Brien"}}}]});
-        let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(sql.contains("'O''Brien'"), "sql={}", sql);
-    }
-
-    #[test]
-    fn match_any_string_list_emits_array_overlap() {
-        // Contains-any via set intersection, so it matches both single-valued
-        // and ';'-joined multi-valued keyword columns.
-        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
-        let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(
-            sql.contains("string_to_array(\"color\", ';') && ARRAY['red', 'blue']::text[]"),
-            "sql={}",
-            sql
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"category\" = $3 AND \"year\" >= $4)");
+        assert_eq!(
+            vals,
+            vec![PgValue::Text("shoes".to_string()), PgValue::Int(2020)]
         );
     }
 
     #[test]
-    fn match_any_int_list_emits_in() {
-        let cond = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
-        let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(sql.contains("\"size\" IN (1, 2, 3)"), "sql={}", sql);
+    fn match_value_binds_string_without_inline_escaping() {
+        // The value is a bound param — no SQL text escaping, no value in the text.
+        let cond = json!({"and": [{"name": {"match": {"value": "O'Brien"}}}]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"name\" = $3)");
+        assert_eq!(vals, vec![PgValue::Text("O'Brien".to_string())]);
     }
 
     #[test]
-    fn match_any_escapes_single_quotes() {
+    fn statement_text_is_stable_across_differing_values() {
+        // Same filter SHAPE, different values (tenant_7 vs tenant_3) → identical
+        // statement text so the server reuses one prepared plan. Only the bound
+        // values differ.
+        let (sql7, v7) =
+            parse(&json!({"and":[{"tenant":{"match":{"value":"tenant_7"}}}]})).unwrap();
+        let (sql3, v3) =
+            parse(&json!({"and":[{"tenant":{"match":{"value":"tenant_3"}}}]})).unwrap();
+        assert_eq!(
+            sql7, sql3,
+            "statement text must be identical across queries"
+        );
+        assert_eq!(sql7, "(\"tenant\" = $3)");
+        assert_eq!(v7, vec![PgValue::Text("tenant_7".to_string())]);
+        assert_eq!(v3, vec![PgValue::Text("tenant_3".to_string())]);
+    }
+
+    #[test]
+    fn first_param_offset_is_honored() {
+        // Placeholder numbering starts at the caller-supplied base.
+        let (sql, _) =
+            parse_pg_conditions(&json!({"and":[{"a":{"match":{"value":"x"}}}]}), 5).unwrap();
+        assert_eq!(sql, "(\"a\" = $5)");
+    }
+
+    #[test]
+    fn match_any_string_list_binds_text_array_overlap() {
+        // Contains-any via set intersection, so it matches both single-valued and
+        // ';'-joined multi-valued keyword columns. The whole set is one text[]
+        // param, so the statement text is independent of the list length.
+        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(string_to_array(\"color\", ';') && $3::text[])");
+        assert_eq!(
+            vals,
+            vec![PgValue::TextArray(vec![
+                "red".to_string(),
+                "blue".to_string()
+            ])]
+        );
+    }
+
+    #[test]
+    fn match_any_int_list_binds_bigint_array_any() {
+        // `= ANY($N::bigint[])` is equivalent to `IN`, with the list bound as one
+        // array param (stable statement text regardless of length).
+        let cond = json!({"and": [{"size": {"match": {"any": [1, 2, 3]}}}]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"size\" = ANY($3::bigint[]))");
+        assert_eq!(vals, vec![PgValue::IntArray(vec![1, 2, 3])]);
+    }
+
+    #[test]
+    fn match_any_float_list_binds_double_array_any() {
+        let cond = json!({"and": [{"score": {"match": {"any": [1.5, 2.5]}}}]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"score\" = ANY($3::double precision[]))");
+        assert_eq!(vals, vec![PgValue::FloatArray(vec![1.5, 2.5])]);
+    }
+
+    #[test]
+    fn match_any_string_values_are_bound_not_escaped() {
         let cond = json!({"and": [{"name": {"match": {"any": ["O'Brien"]}}}]});
-        let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(sql.contains("'O''Brien'"), "sql={}", sql);
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(string_to_array(\"name\", ';') && $3::text[])");
+        assert_eq!(vals, vec![PgValue::TextArray(vec!["O'Brien".to_string()])]);
     }
 
     #[test]
     fn match_any_empty_list_matches_nothing() {
         // An empty IN-set must match NOTHING (never invert to returning all
-        // rows), so the clause is a bare `false` rather than being dropped.
+        // rows), so the clause is a bare `false` (no bound value) rather than
+        // being dropped.
         let cond = json!({"and": [{"color": {"match": {"any": []}}}]});
-        let sql = parse_pg_conditions(&cond).unwrap();
-        assert!(sql.contains("false"), "sql={}", sql);
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(false)");
+        assert!(vals.is_empty());
     }
 
     // ── OR-branch of the condition parser ──────────────────────────────────
@@ -773,45 +961,67 @@ mod tests {
             {"a":{"match":{"value":"x"}}},
             {"b":{"match":{"value":"y"}}},
         ]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"a\" = $3 OR \"b\" = $4)");
         assert_eq!(
-            parse_pg_conditions(&cond).unwrap(),
-            "(\"a\" = 'x' OR \"b\" = 'y')"
+            vals,
+            vec![
+                PgValue::Text("x".to_string()),
+                PgValue::Text("y".to_string())
+            ]
         );
     }
 
     #[test]
     fn and_plus_or_keeps_both_groups() {
+        // AND group binds first ($3), then OR group ($4).
         let cond = json!({
             "and":[{"a":{"match":{"value":"x"}}}],
             "or":[{"b":{"match":{"value":"y"}}}],
         });
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "(\"a\" = $3) AND (\"b\" = $4)");
         assert_eq!(
-            parse_pg_conditions(&cond).unwrap(),
-            "(\"a\" = 'x') AND (\"b\" = 'y')"
+            vals,
+            vec![
+                PgValue::Text("x".to_string()),
+                PgValue::Text("y".to_string())
+            ]
         );
     }
 
     // ── Range operators ────────────────────────────────────────────────────
 
-    fn range_sql(criteria: serde_json::Value) -> Option<String> {
-        parse_pg_conditions(&json!({"and":[{"n":{"range":criteria}}]}))
+    fn range_sql(criteria: serde_json::Value) -> Option<(String, Vec<PgValue>)> {
+        parse(&json!({"and":[{"n":{"range":criteria}}]}))
     }
 
     #[test]
     fn range_lt_lte_gt_gte() {
-        assert_eq!(range_sql(json!({"lt":5})).unwrap(), "(\"n\" < 5)");
-        assert_eq!(range_sql(json!({"lte":5})).unwrap(), "(\"n\" <= 5)");
-        assert_eq!(range_sql(json!({"gt":5})).unwrap(), "(\"n\" > 5)");
-        assert_eq!(range_sql(json!({"gte":5})).unwrap(), "(\"n\" >= 5)");
+        assert_eq!(
+            range_sql(json!({"lt":5})).unwrap(),
+            ("(\"n\" < $3)".to_string(), vec![PgValue::Int(5)])
+        );
+        assert_eq!(
+            range_sql(json!({"lte":5})).unwrap(),
+            ("(\"n\" <= $3)".to_string(), vec![PgValue::Int(5)])
+        );
+        assert_eq!(
+            range_sql(json!({"gt":5})).unwrap(),
+            ("(\"n\" > $3)".to_string(), vec![PgValue::Int(5)])
+        );
+        assert_eq!(
+            range_sql(json!({"gte":5})).unwrap(),
+            ("(\"n\" >= $3)".to_string(), vec![PgValue::Int(5)])
+        );
     }
 
     #[test]
     fn range_two_sided_gte_lt() {
         // Criteria object keys iterate in sorted order (BTreeMap): gte, then lt.
-        assert_eq!(
-            range_sql(json!({"gte":10,"lt":20})).unwrap(),
-            "(\"n\" >= 10 AND \"n\" < 20)"
-        );
+        let (sql, vals) = range_sql(json!({"gte":10,"lt":20})).unwrap();
+        assert_eq!(sql, "(\"n\" >= $3 AND \"n\" < $4)");
+        assert_eq!(vals, vec![PgValue::Int(10), PgValue::Int(20)]);
     }
 
     #[test]
@@ -831,7 +1041,7 @@ mod tests {
         // pgvector filters on scalar columns only; geo has no clause arm, so the
         // filter is dropped. Assert None so an accidental future change is caught.
         let cond = json!({"and":[{"loc":{"geo":{"lat":20.0,"lon":10.0,"radius":5}}}]});
-        assert!(parse_pg_conditions(&cond).is_none());
+        assert!(parse(&cond).is_none());
     }
 
     // ── Distance-metric mapping ────────────────────────────────────────────
@@ -865,26 +1075,28 @@ mod tests {
 
     #[test]
     fn exact_match_int_float_bool() {
+        // Scalar match values become typed bound params (stable statement text).
         assert_eq!(
-            parse_pg_conditions(&json!({"and":[{"n":{"match":{"value":5}}}]})).unwrap(),
-            "(\"n\" = 5)"
+            parse(&json!({"and":[{"n":{"match":{"value":5}}}]})).unwrap(),
+            ("(\"n\" = $3)".to_string(), vec![PgValue::Int(5)])
         );
         assert_eq!(
-            parse_pg_conditions(&json!({"and":[{"n":{"match":{"value":1.5}}}]})).unwrap(),
-            "(\"n\" = 1.5)"
+            parse(&json!({"and":[{"n":{"match":{"value":1.5}}}]})).unwrap(),
+            ("(\"n\" = $3)".to_string(), vec![PgValue::Float(1.5)])
         );
         assert_eq!(
-            parse_pg_conditions(&json!({"and":[{"flag":{"match":{"value":true}}}]})).unwrap(),
-            "(\"flag\" = true)"
+            parse(&json!({"and":[{"flag":{"match":{"value":true}}}]})).unwrap(),
+            ("(\"flag\" = $3)".to_string(), vec![PgValue::Bool(true)])
         );
     }
 
     #[test]
     fn exact_match_array_value_inlines_json_array() {
-        // No scalar guard: a non-scalar value is Display-formatted verbatim.
-        assert_eq!(
-            parse_pg_conditions(&json!({"and":[{"n":{"match":{"value":[1,2]}}}]})).unwrap(),
-            "(\"n\" = [1,2])"
-        );
+        // Non-scalar match values are never produced by real datasets; this one
+        // degenerate case stays inlined (no bound value), documented in
+        // build_pg_clause.
+        let (sql, vals) = parse(&json!({"and":[{"n":{"match":{"value":[1,2]}}}]})).unwrap();
+        assert_eq!(sql, "(\"n\" = [1,2])");
+        assert!(vals.is_empty());
     }
 }
