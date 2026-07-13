@@ -894,6 +894,19 @@ fn build_qdrant_filter(
             if let Some(gte) = criteria_obj.get("gte").and_then(|v| v.as_f64()) {
                 range.gte = Some(gte);
             }
+            // If NO valid numeric bound was produced (all bounds unknown-op /
+            // null / non-numeric), SKIP the clause (return None) rather than
+            // emitting an empty, unconstraining Range — a present-but-vacuous
+            // condition that other engines drop. Mirrors the vectorsets
+            // null-bound fix (#115). A range with SOME valid bounds still
+            // produces a Range carrying just those.
+            if range.lt.is_none()
+                && range.gt.is_none()
+                && range.lte.is_none()
+                && range.gte.is_none()
+            {
+                return None;
+            }
             Some(Condition::range(field_name.to_string(), range))
         }
         "geo" => {
@@ -1581,18 +1594,29 @@ rest_responses_total{method=\"GET\"} 42
         assert_eq!(r.lt, Some(20.0));
     }
 
+    // #121: a range that produces NO valid numeric bound (unrecognized key,
+    // null/non-numeric bound) must be SKIPPED (None), not emitted as an empty,
+    // unconstraining Range (a present-but-vacuous condition). Mirrors the
+    // vectorsets null-bound fix (#115) and the other engines, which drop it.
     #[test]
-    fn range_unknown_op_yields_empty_numeric_range() {
-        // Qdrant emits an (empty) numeric Range for an unrecognized key rather
-        // than None — the condition is present but constrains nothing.
-        let r = numeric_range(json!({"foo":5}));
-        assert!(r.lt.is_none() && r.gt.is_none() && r.lte.is_none() && r.gte.is_none());
+    fn range_unknown_op_only_is_none() {
+        assert!(build_qdrant_filter("n", "range", &json!({"foo":5})).is_none());
     }
 
     #[test]
-    fn range_null_bound_yields_empty_numeric_range() {
-        let r = numeric_range(json!({"gte": serde_json::Value::Null}));
-        assert!(r.gte.is_none());
+    fn range_null_bound_only_is_none() {
+        assert!(
+            build_qdrant_filter("n", "range", &json!({"gte": serde_json::Value::Null})).is_none()
+        );
+    }
+
+    #[test]
+    fn range_valid_bound_survives_null_sibling() {
+        // A null/unknown bound is dropped, but a present valid bound still yields
+        // a Range carrying only that bound.
+        let r = numeric_range(json!({"gte": 5, "lt": serde_json::Value::Null, "foo": 9}));
+        assert_eq!(r.gte, Some(5.0));
+        assert!(r.lt.is_none() && r.gt.is_none() && r.lte.is_none());
     }
 
     // ── Geo filter ─────────────────────────────────────────────────────────

@@ -592,6 +592,14 @@ fn build_filter(
                 return Some(serde_json::json!({"match": {field_name: text}}));
             }
             let value = criteria.get("value")?;
+            // Guard non-scalar: an array/object/null under `value` is malformed
+            // input — the canonical model uses `match.any` for lists. Drop the
+            // clause (return None) instead of forwarding
+            // `{"match":{field:[1,2]}}` verbatim, matching qdrant/redis/valkey/
+            // vectorsets.
+            if !(value.is_string() || value.is_number() || value.is_boolean()) {
+                return None;
+            }
             Some(serde_json::json!({"match": {field_name: value}}))
         }
         "range" => {
@@ -1112,6 +1120,23 @@ mod tests {
         assert_eq!(c, json!({"match": {"color": "red"}}));
     }
 
+    // #121: a non-scalar `value` (a JSON array) is malformed input — the
+    // canonical model uses `match.any` for lists. It must be dropped (None),
+    // not forwarded verbatim as `{"match":{"n":[1,2]}}`. Matches qdrant/redis/
+    // valkey/vectorsets.
+    #[test]
+    fn test_match_non_scalar_value_dropped() {
+        assert_eq!(build_filter("n", "match", &json!({"value": [1, 2]})), None);
+        assert_eq!(
+            build_filter("n", "match", &json!({"value": {"x": 1}})),
+            None
+        );
+        assert_eq!(build_filter("n", "match", &json!({"value": null})), None);
+        // As the sole clause, the whole filter is dropped (no `bool.must`).
+        let conditions = json!({"and": [{"n": {"match": {"value": [1, 2]}}}]});
+        assert_eq!(parse_os_conditions(&conditions), None);
+    }
+
     // #120: a full-text `{"match": {"text": …}}` condition must emit an analyzed
     // `match` query — NOT be dropped. Dropping it leaves `bool.must:[]`, which
     // OpenSearch treats as match-ALL, silently running the kNN query UNFILTERED.
@@ -1328,11 +1353,11 @@ mod tests {
     }
 
     #[test]
-    fn exact_match_array_value_passes_through_unguarded() {
-        assert_eq!(
-            build_filter("n", "match", &json!({"value":[1,2]})).unwrap(),
-            json!({"match":{"n":[1,2]}})
-        );
+    fn exact_match_array_value_is_none() {
+        // #121: OS build_filter now guards the scalar exact-match arm; a
+        // non-scalar value is dropped (None), matching qdrant/redis/valkey/
+        // vectorsets (was previously forwarded verbatim as `{"match":{"n":[1,2]}}`).
+        assert_eq!(build_filter("n", "match", &json!({"value":[1,2]})), None);
     }
 
     // ── uuid_hex_to_int round-trip + invalid input ─────────────────────────

@@ -1091,13 +1091,18 @@ fn escape_str(s: &str) -> String {
 /// int AND float lists. Forms verified against a live VectorSets server
 /// (Redis 8.8):
 ///
-/// - string element → `.field == "<escaped>"` — EXACT equality. NOTE: the
-///   value-`in`-field form (`"v" in .field`) does SUBSTRING/word matching on a
-///   scalar string (`"blue" in .color` wrongly matches `.color == "dark blue"`),
-///   which violates the exact/whole-value keyword semantics of qdrant/redis
-///   match_any, so we use `==`. (A multi-valued `labels` array would need `in`
-///   for membership, but no keyword match_any in the benchmark targets an array
-///   field — keyword filters are scalar — and exact-match is the tested contract.)
+/// - string element on a SCALAR keyword field → `.field == "<escaped>"` — EXACT
+///   equality. NOTE: the value-`in`-field form (`"v" in .field`) does
+///   SUBSTRING/word matching on a scalar string (`"blue" in .color` wrongly
+///   matches `.color == "dark blue"`), which violates the exact/whole-value
+///   keyword semantics of qdrant/redis match_any, so we use `==` for scalars.
+/// - string element on the multi-valued `labels` field → `"<escaped>" in .labels`
+///   — ARRAY contains-any. `labels` is the ONLY array field (MetadataValue::Labels
+///   is produced solely for key == "labels", see readers::metadata); VSIM stores
+///   it as a JSON array and `"v" in .labels` performs true array membership
+///   (verified on Redis 8.8), whereas scalar `.labels == "v"` could never match an
+///   array. The `in` form is safe here BECAUSE the field is an array — the
+///   substring hazard above only applies to scalar strings.
 /// - numeric element (i64 OR f64) → `.field == <n>` — VSIM coerces numeric
 ///   strings ("1" == 1; numbers are stored as JSON strings on upload).
 /// - OR all representable elements, parenthesized. Empty-string tokens are dropped
@@ -1106,12 +1111,17 @@ fn escape_str(s: &str) -> String {
 ///   IN-set matches NOTHING rather than being dropped (dropping the sole clause
 ///   would leave no FILTER and run over ALL vectors — the inverse of the filter).
 fn build_match_any_clause(field_name: &str, any: &[serde_json::Value]) -> String {
+    // `labels` is the only multi-valued (array) field; it needs `in` for
+    // contains-any membership. All other keyword fields are scalar and use `==`.
+    let is_array_field = field_name == "labels";
     let clauses: Vec<String> = any
         .iter()
         .filter_map(|v| {
             if let Some(s) = v.as_str() {
                 if s.is_empty() {
                     None
+                } else if is_array_field {
+                    Some(format!("\"{}\" in .{}", escape_str(s), field_name))
                 } else {
                     Some(format!(".{} == \"{}\"", field_name, escape_str(s)))
                 }
@@ -1365,6 +1375,39 @@ mod filter_expr_tests {
         assert_eq!(
             build_filter_expression(&cond),
             Some(".color == \"red\"".to_string())
+        );
+    }
+
+    // #121: the multi-valued `labels` field is stored as a JSON ARRAY, so
+    // match_any must use `"v" in .labels` (array contains-any). On a live Redis
+    // 8.8 server `"x" in .labels` performs array membership; scalar
+    // `.labels == "x"` could never match an array.
+    #[test]
+    fn match_any_labels_uses_array_contains_any_in_form() {
+        let cond = json!({"and": [{"labels": {"match": {"any": ["red", "blue"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(\"red\" in .labels or \"blue\" in .labels)".to_string())
+        );
+    }
+
+    #[test]
+    fn match_any_labels_single_value_unwrapped_in_form() {
+        let cond = json!({"and": [{"labels": {"match": {"any": ["red"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("\"red\" in .labels".to_string())
+        );
+    }
+
+    // A SCALAR keyword field (anything but `labels`) keeps EXACT `==`; the `in`
+    // form would do substring matching and break whole-value semantics.
+    #[test]
+    fn match_any_scalar_keyword_unchanged_exact_equality() {
+        let cond = json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]});
+        assert_eq!(
+            build_filter_expression(&cond),
+            Some("(.color == \"red\" or .color == \"blue\")".to_string())
         );
     }
 

@@ -544,6 +544,14 @@ fn build_filter(
                 return Some(serde_json::json!({"match": {field_name: text}}));
             }
             let value = criteria.get("value")?;
+            // Guard non-scalar: an array/object/null under `value` is malformed
+            // input — the canonical model uses `match.any` for lists. Drop the
+            // clause (return None) instead of forwarding
+            // `{"match":{field:[1,2]}}` verbatim, matching qdrant/redis/valkey/
+            // vectorsets.
+            if !(value.is_string() || value.is_number() || value.is_boolean()) {
+                return None;
+            }
             Some(serde_json::json!({"match": {field_name: value}}))
         }
         "range" => {
@@ -1110,6 +1118,29 @@ mod tests {
         assert_eq!(c, serde_json::json!({"match": {"color": "red"}}));
     }
 
+    // #121: a non-scalar `value` (a JSON array) is malformed input — the
+    // canonical model uses `match.any` for lists. It must be dropped (None),
+    // not forwarded verbatim as `{"match":{"n":[1,2]}}`. Matches qdrant/redis/
+    // valkey/vectorsets.
+    #[test]
+    fn test_match_non_scalar_value_dropped() {
+        assert_eq!(
+            build_filter("n", "match", &serde_json::json!({"value": [1, 2]})),
+            None
+        );
+        assert_eq!(
+            build_filter("n", "match", &serde_json::json!({"value": {"x": 1}})),
+            None
+        );
+        assert_eq!(
+            build_filter("n", "match", &serde_json::json!({"value": null})),
+            None
+        );
+        // As the sole clause, the whole filter is dropped (no `bool.must`).
+        let conditions = serde_json::json!({"and": [{"n": {"match": {"value": [1, 2]}}}]});
+        assert_eq!(parse_es_conditions(&conditions), None);
+    }
+
     #[test]
     fn test_id_to_uuid_hex_one() {
         assert_eq!(id_to_uuid_hex(1), "00000000000000000000000000000001");
@@ -1364,12 +1395,13 @@ mod tests {
     }
 
     #[test]
-    fn exact_match_array_value_passes_through_unguarded() {
-        // ES build_filter has no scalar guard: a non-scalar value is forwarded as
-        // the match value (documents behavior; differs from qdrant's None).
+    fn exact_match_array_value_is_none() {
+        // #121: ES build_filter now guards the scalar exact-match arm; a
+        // non-scalar value is dropped (None), matching qdrant/redis/valkey/
+        // vectorsets (was previously forwarded verbatim as `{"match":{"n":[1,2]}}`).
         assert_eq!(
-            build_filter("n", "match", &serde_json::json!({"value":[1,2]})).unwrap(),
-            serde_json::json!({"match":{"n":[1,2]}})
+            build_filter("n", "match", &serde_json::json!({"value":[1,2]})),
+            None
         );
     }
 
