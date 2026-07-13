@@ -3964,6 +3964,7 @@ version = "0.0.0"
 dependencies = [
  "arbitrary",
  "libfuzzer-sys",
+ "redis",
  "serde_json",
  "tempfile",
  "vector_db_benchmark",

@@ -7,6 +7,7 @@
 use redis::Connection;
 use serde_json::{Map, Value as Json};
 use std::collections::HashMap;
+use vector_db_benchmark::parsers::parse_info;
 
 /// Collect reproducibility metadata from a Redis-wire server (Redis, Valkey,
 /// VectorSets, Dragonfly). Returns
@@ -145,41 +146,6 @@ fn redact_config(config: Json) -> Json {
 /// signalling that a fallback command should be issued.
 fn info_reply_empty(s: &str) -> bool {
     s.trim().is_empty()
-}
-
-/// Parse a Redis `INFO` reply into `{ "<section>": { "<key>": "<value>" } }`.
-///
-/// A `# Section` line opens a new section; `key:value` lines populate the
-/// current section; blank and `#`-only lines are skipped. Values are kept as
-/// strings (the first `:` splits key from value, so values may contain colons).
-fn parse_info(info: &str) -> Json {
-    let mut root = Map::new();
-    let mut current = String::from("default");
-    let mut section = Map::new();
-    for raw in info.lines() {
-        let line = raw.trim_end_matches('\r');
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(name) = trimmed.strip_prefix("# ") {
-            if !section.is_empty() {
-                root.insert(current.clone(), Json::Object(std::mem::take(&mut section)));
-            }
-            current = name.trim().to_string();
-            continue;
-        }
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            section.insert(k.to_string(), Json::String(v.to_string()));
-        }
-    }
-    if !section.is_empty() {
-        root.insert(current, Json::Object(section));
-    }
-    Json::Object(root)
 }
 
 /// Pull the server-version keys present in the `Server` section into a compact

@@ -1,0 +1,15 @@
+# libFuzzer dictionary for the Redis INFO text parser.
+# Control bytes use \xHH (libFuzzer supports only \\, \" and \xHH escapes).
+section_server="# Server\x0d\x0a"
+section_memory="# Memory\x0d\x0a"
+section_keyspace="# Keyspace\x0d\x0a"
+hash="#"
+hash_space="# "
+colon=":"
+crlf="\x0d\x0a"
+lf="\x0a"
+k_redis_version="redis_version:"
+k_valkey_version="valkey_version:"
+k_dragonfly_version="dragonfly_version:"
+k_used_memory="used_memory:"
+kv_db0="db0:keys=1,expires=0,avg_ttl=0"

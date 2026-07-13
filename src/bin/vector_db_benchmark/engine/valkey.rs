@@ -34,6 +34,7 @@ use redis::Connection;
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
+use vector_db_benchmark::parsers::datetime_to_epoch_secs;
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
 
 /// Valkey engine configuration
@@ -1567,28 +1568,6 @@ fn prime_field_types(schema: Option<&serde_json::Value>) -> (HashSet<String>, Ha
         }
     }
     (datetime_fields, text_fields)
-}
-
-/// Parse an ISO-8601 / RFC 3339 timestamp to epoch **seconds**. Returns `None`
-/// for non-datetime strings (e.g. a numeric-epoch string), letting callers fall
-/// back to numeric handling.
-fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
-    // RFC-3339 (with offset / `Z`) first.
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt.timestamp() as f64);
-    }
-    // Naive datetime (no offset) → interpret as UTC. Accepts both the `T` and
-    // space separators (upstream tolerates these; RFC-3339 does not).
-    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
-        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
-            return Some(ndt.and_utc().timestamp() as f64);
-        }
-    }
-    // Date only → midnight UTC.
-    if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        return Some(nd.and_hms_opt(0, 0, 0)?.and_utc().timestamp() as f64);
-    }
-    None
 }
 
 // ── Engine trait implementation ──────────────────────────────────────────

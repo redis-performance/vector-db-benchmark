@@ -1,0 +1,11 @@
+# libFuzzer dictionary for the datetime filter-value parser (chrono).
+rfc3339="2021-01-01T00:00:00Z"
+naive_t="2021-01-01T00:00:00"
+naive_space="2021-01-01 00:00:00"
+date_only="2021-01-01"
+offset="+00:00"
+z="Z"
+dash="-"
+colon=":"
+t="T"
+space=" "
