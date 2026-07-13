@@ -1,0 +1,6 @@
+# Server
+redis_version:7.4.0
+os:Linux
+
+# Memory
+used_memory:1048576

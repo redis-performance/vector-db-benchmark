@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod metrics;
+pub mod parsers;
 pub mod readers;
 pub mod redis_client;
 pub mod synthetic;

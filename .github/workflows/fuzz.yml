@@ -22,12 +22,33 @@ jobs:
       # Don't cancel the other targets when one finds a crash.
       fail-fast: false
       matrix:
-        target:
-          - sparse_reader
-          - npy_reader
-          - jsonl_reader
-          - compound_payloads
-          - metadata
+        # Each entry is a fuzz target plus an optional libFuzzer dictionary
+        # (basename under fuzz/dictionaries/, without the .dict suffix).
+        include:
+          - target: sparse_reader
+            dict: csr
+          - target: npy_reader
+            dict: npy
+          - target: jsonl_reader
+            dict: json
+          - target: compound_payloads
+            dict: json
+          - target: metadata
+            dict: json
+          - target: parse_info
+            dict: info
+          - target: datetime
+            dict: datetime
+          - target: ft_search
+            dict: resp
+          - target: compound_queries
+            dict: json
+          - target: compound_data
+            dict: json
+          - target: sparse_roundtrip
+            dict: csr
+          - target: npy_roundtrip
+            dict: npy
     steps:
       - uses: actions/checkout@v4
 
@@ -60,9 +81,13 @@ jobs:
 
       - name: Run fuzzer (high effort)
         run: |
+          DICT_ARG=""
+          if [ -n "${{ matrix.dict }}" ] && [ -f "fuzz/dictionaries/${{ matrix.dict }}.dict" ]; then
+            DICT_ARG="-dict=fuzz/dictionaries/${{ matrix.dict }}.dict"
+          fi
           cargo fuzz run ${{ matrix.target }} -- \
             -max_total_time=${{ github.event.inputs.max_total_time || '600' }} \
-            -rss_limit_mb=4096
+            -rss_limit_mb=4096 $DICT_ARG
 
       # On crash the previous step fails; upload the reproducers before failing.
       - name: Upload crash artifacts

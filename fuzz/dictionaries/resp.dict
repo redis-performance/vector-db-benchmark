@@ -1,0 +1,17 @@
+# libFuzzer dictionary for RESP framing + FT.SEARCH reply shape.
+# Control bytes use \xHH (libFuzzer supports only \\, \" and \xHH escapes).
+simple="+OK\x0d\x0a"
+error="-ERR\x0d\x0a"
+integer=":1\x0d\x0a"
+bulk="$3\x0d\x0afoo\x0d\x0a"
+null_bulk="$-1\x0d\x0a"
+array="*2\x0d\x0a"
+null_array="*-1\x0d\x0a"
+map="%1\x0d\x0a"
+double=",0.5\x0d\x0a"
+crlf="\x0d\x0a"
+# FT.SEARCH RESP3 field names our extractor looks for.
+f_results="results"
+f_id="id"
+f_extra="extra_attributes"
+f_score="vector_score"
