@@ -435,4 +435,30 @@ mod tests {
         // budget → returns the bare base "1 field".
         assert_eq!(format_schema(&json!({"category": "keyword"}), 5), "1 field");
     }
+
+    // `--describe datasets|engines` (smoke-tested by the docker-build job) drives
+    // these two functions over the REAL registries. Asserting Ok pins that every
+    // shipped datasets.json / engine config parses and that the formatting helpers
+    // don't panic on any real entry — a regression the docker smoke would catch
+    // but only in the non-blocking build job.
+    #[test]
+    fn describe_datasets_over_real_registry_is_ok() {
+        assert!(
+            describe_datasets(false).is_ok(),
+            "compact --describe datasets"
+        );
+        assert!(
+            describe_datasets(true).is_ok(),
+            "verbose --describe datasets"
+        );
+    }
+
+    #[test]
+    fn describe_engines_over_real_registry_is_ok() {
+        assert!(
+            describe_engines(false).is_ok(),
+            "compact --describe engines"
+        );
+        assert!(describe_engines(true).is_ok(), "verbose --describe engines");
+    }
 }
