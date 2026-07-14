@@ -87,7 +87,7 @@ jobs:
           fi
           cargo fuzz run ${{ matrix.target }} -- \
             -max_total_time=${{ github.event.inputs.max_total_time || '600' }} \
-            -rss_limit_mb=4096 $DICT_ARG
+            -rss_limit_mb=4096 -timeout=25 $DICT_ARG
 
       # On crash the previous step fails; upload the reproducers before failing.
       - name: Upload crash artifacts
