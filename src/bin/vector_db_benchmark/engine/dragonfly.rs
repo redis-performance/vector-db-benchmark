@@ -87,19 +87,37 @@ impl DragonflyEngine {
         // Dragonfly Search only supports float32; ignore any configured override.
         let data_type = "FLOAT32".to_string();
 
-        let parallel = engine_config
-            .upload_params
-            .as_ref()
-            .and_then(|p| p.get("parallel"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(100) as usize;
+        // Upload concurrency/batch come from the engine config, but each can be
+        // overridden at runtime via env (taking precedence over the config). The
+        // default 100-thread upload burst resets connections on Dragonfly Cloud
+        // for larger-dimensional datasets, so managed-cloud runs set
+        // DRAGONFLY_UPLOAD_PARALLEL=16 without having to edit the shared config;
+        // search throughput is unaffected by upload concurrency.
+        let parallel = std::env::var("DRAGONFLY_UPLOAD_PARALLEL")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .or_else(|| {
+                engine_config
+                    .upload_params
+                    .as_ref()
+                    .and_then(|p| p.get("parallel"))
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as usize)
+            })
+            .unwrap_or(100);
 
-        let batch_size = engine_config
-            .upload_params
-            .as_ref()
-            .and_then(|p| p.get("batch_size"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(64) as usize;
+        let batch_size = std::env::var("DRAGONFLY_UPLOAD_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .or_else(|| {
+                engine_config
+                    .upload_params
+                    .as_ref()
+                    .and_then(|p| p.get("batch_size"))
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as usize)
+            })
+            .unwrap_or(64);
 
         Ok(Self {
             name: engine_config.name.clone(),
