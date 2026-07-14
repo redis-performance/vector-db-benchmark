@@ -4,6 +4,7 @@
 //! Supports HNSW index with configurable M/efConstruction,
 //! multiple distance metrics (L2, IP, COSINE), and schema-based collections.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -330,6 +331,7 @@ impl MilvusEngine {
         ids: &[i64],
         vectors: &[Vec<f32>],
         metadata: &[Option<MetadataItem>],
+        schema_types: &HashMap<String, String>,
     ) -> Result<(), String> {
         let pb = self.create_progress_bar(ids.len());
         let batches: Vec<(usize, usize)> = (0..ids.len())
@@ -380,6 +382,7 @@ impl MilvusEngine {
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
                             &metadata[batch_start..batch_end],
+                            schema_types,
                         ) {
                             *error.lock().unwrap() = Some(e);
                             break;
@@ -400,6 +403,20 @@ impl MilvusEngine {
 }
 
 /// Insert a batch of vectors using Milvus REST API.
+/// Extract `field -> declared-type` from the dataset schema, so uploads keep a
+/// numeric-valued keyword field as a string (the column is declared VarChar).
+fn schema_type_map(dataset: &Dataset) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    if let Some(obj) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+        for (k, v) in obj {
+            if let Some(t) = v.as_str() {
+                m.insert(k.clone(), t.to_string());
+            }
+        }
+    }
+    m
+}
+
 fn insert_batch(
     client: &reqwest::blocking::Client,
     base_url: &str,
@@ -407,6 +424,7 @@ fn insert_batch(
     ids: &[i64],
     vectors: &[Vec<f32>],
     metadata: &[Option<MetadataItem>],
+    schema_types: &HashMap<String, String>,
 ) -> Result<(), String> {
     use vector_db_benchmark::readers::metadata::MetadataValue;
 
@@ -420,7 +438,10 @@ fn insert_batch(
         if let Some(meta) = &metadata[i] {
             let row_obj = row.as_object_mut().unwrap();
             for (k, v) in &meta.fields {
-                let val = match v {
+                // A numeric value under a keyword/text-declared field must stay a
+                // string, or the strict VarChar column rejects the whole batch.
+                let v = v.coerce_for_schema(schema_types.get(k).map(|s| s.as_str()));
+                let val = match v.as_ref() {
                     MetadataValue::String(s) => serde_json::Value::String(s.clone()),
                     MetadataValue::Int(n) => serde_json::Value::from(*n),
                     MetadataValue::Float(f) => serde_json::json!(*f),
@@ -813,7 +834,8 @@ impl Engine for MilvusEngine {
             self.parallel, self.batch_size
         );
         let upload_start = Instant::now();
-        self.upload_parallel(&ids, &vectors, &metadata)?;
+        let schema_types = schema_type_map(dataset);
+        self.upload_parallel(&ids, &vectors, &metadata, &schema_types)?;
         let upload_time = upload_start.elapsed().as_secs_f64();
 
         println!(

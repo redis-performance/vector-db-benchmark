@@ -1142,8 +1142,8 @@ fn escape_str(s: &str) -> String {
 ///   (verified on Redis 8.8), whereas scalar `.labels == "v"` could never match an
 ///   array. The `in` form is safe here BECAUSE the field is an array — the
 ///   substring hazard above only applies to scalar strings.
-/// - numeric element (i64 OR f64) → `.field == <n>` — VSIM coerces numeric
-///   strings ("1" == 1; numbers are stored as JSON strings on upload).
+/// - numeric element (i64 OR f64) → `.field == <n>` — matches the native JSON
+///   number stored on upload (SETATTR emits a real number for Int/Float fields).
 /// - OR all representable elements, parenthesized. Empty-string tokens are dropped
 ///   (they can never match an exact keyword).
 /// - Empty / no representable values → a never-match contradiction so an empty

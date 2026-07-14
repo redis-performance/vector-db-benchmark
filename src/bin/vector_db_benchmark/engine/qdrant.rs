@@ -4,6 +4,7 @@
 //! Wraps async calls with a tokio runtime (block_on) since the
 //! benchmark Engine trait is synchronous.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -502,6 +503,7 @@ impl QdrantEngine {
         ids: &[i64],
         vectors: &[Vec<f32>],
         metadata: &[Option<MetadataItem>],
+        schema_types: &HashMap<String, String>,
     ) -> Result<(), String> {
         use vector_db_benchmark::readers::metadata::MetadataValue;
 
@@ -551,7 +553,13 @@ impl QdrantEngine {
                             let mut payload = Payload::new();
                             if let Some(meta) = &metadata[i] {
                                 for (k, v) in &meta.fields {
-                                    match v {
+                                    // A numeric value under a keyword-declared field
+                                    // must stay a string, or the keyword index won't
+                                    // match it (integer payload vs string condition).
+                                    let v = v.coerce_for_schema(
+                                        schema_types.get(k).map(|s| s.as_str()),
+                                    );
+                                    match v.as_ref() {
                                         MetadataValue::String(s) => {
                                             payload.insert(k.clone(), s.clone());
                                         }
@@ -825,6 +833,20 @@ fn build_quantization(q: &serde_json::Value) -> Result<Option<Quantization>, Str
     }
 }
 
+/// Extract `field -> declared-type` from the dataset schema, so uploads keep a
+/// numeric-valued keyword field as a string (matching its keyword index).
+fn schema_type_map(dataset: &Dataset) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    if let Some(obj) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+        for (k, v) in obj {
+            if let Some(t) = v.as_str() {
+                m.insert(k.clone(), t.to_string());
+            }
+        }
+    }
+    m
+}
+
 fn build_qdrant_filter(
     field_name: &str,
     condition_type: &str,
@@ -981,7 +1003,8 @@ impl Engine for QdrantEngine {
             self.parallel, self.batch_size
         );
         let upload_start = Instant::now();
-        self.upload_parallel(&ids, &vectors, &metadata)?;
+        let schema_types = schema_type_map(dataset);
+        self.upload_parallel(&ids, &vectors, &metadata, &schema_types)?;
         let upload_time = upload_start.elapsed().as_secs_f64();
 
         println!(
