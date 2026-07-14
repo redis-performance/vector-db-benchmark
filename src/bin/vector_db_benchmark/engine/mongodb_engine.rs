@@ -744,6 +744,8 @@ fn metadata_value_to_bson(
                 .unwrap_or_else(|_| mongodb::bson::Bson::String(s.clone())),
             _ => mongodb::bson::Bson::String(s.clone()),
         },
+        MetadataValue::Int(n) => mongodb::bson::Bson::Int64(*n),
+        MetadataValue::Float(f) => mongodb::bson::Bson::Double(*f),
         MetadataValue::Labels(labels) => {
             let arr: Vec<mongodb::bson::Bson> = labels
                 .iter()
@@ -1755,6 +1757,19 @@ mod tests {
         let price =
             metadata_value_to_bson("price", &MetadataValue::String("3.5".to_string()), &schema);
         assert_eq!(price.as_f64(), Some(3.5));
+    }
+
+    // A native numeric MetadataValue (the reader now types JSON numbers, issue
+    // #87) must map to native BSON regardless of the schema hint — the value is
+    // already unambiguous, so `match_any`/range/exact filters see a real number.
+    #[test]
+    fn native_numeric_metadata_stored_as_native_bson() {
+        use vector_db_benchmark::readers::metadata::MetadataValue;
+        let schema = HashMap::new(); // no schema hint needed for typed values
+        let i = metadata_value_to_bson("size", &MetadataValue::Int(2), &schema);
+        assert_eq!(i.as_i64(), Some(2), "Int must store as native Int64");
+        let f = metadata_value_to_bson("price", &MetadataValue::Float(3.5), &schema);
+        assert_eq!(f.as_f64(), Some(3.5), "Float must store as native Double");
     }
 
     #[test]

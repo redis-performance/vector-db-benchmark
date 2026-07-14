@@ -555,6 +555,12 @@ impl QdrantEngine {
                                         MetadataValue::String(s) => {
                                             payload.insert(k.clone(), s.clone());
                                         }
+                                        MetadataValue::Int(n) => {
+                                            payload.insert(k.clone(), *n);
+                                        }
+                                        MetadataValue::Float(f) => {
+                                            payload.insert(k.clone(), *f);
+                                        }
                                         MetadataValue::Labels(labels) => {
                                             let arr: Vec<qdrant_client::qdrant::Value> =
                                                 labels.iter().map(|l| l.clone().into()).collect();

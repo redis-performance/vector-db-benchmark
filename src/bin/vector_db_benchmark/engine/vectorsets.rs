@@ -254,6 +254,12 @@ fn vadd_batch(
                         MetadataValue::String(s) => {
                             map.insert(k.clone(), serde_json::Value::String(s.clone()));
                         }
+                        MetadataValue::Int(n) => {
+                            map.insert(k.clone(), serde_json::Value::from(*n));
+                        }
+                        MetadataValue::Float(f) => {
+                            map.insert(k.clone(), serde_json::json!(*f));
+                        }
                         MetadataValue::Labels(labels) => {
                             map.insert(
                                 k.clone(),
@@ -398,6 +404,12 @@ fn vadd_single(
                 match v {
                     MetadataValue::String(s) => {
                         map.insert(k.clone(), serde_json::Value::String(s.clone()));
+                    }
+                    MetadataValue::Int(n) => {
+                        map.insert(k.clone(), serde_json::Value::from(*n));
+                    }
+                    MetadataValue::Float(f) => {
+                        map.insert(k.clone(), serde_json::json!(*f));
                     }
                     MetadataValue::Labels(labels) => {
                         map.insert(

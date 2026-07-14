@@ -422,6 +422,8 @@ fn insert_batch(
             for (k, v) in &meta.fields {
                 let val = match v {
                     MetadataValue::String(s) => serde_json::Value::String(s.clone()),
+                    MetadataValue::Int(n) => serde_json::Value::from(*n),
+                    MetadataValue::Float(f) => serde_json::json!(*f),
                     MetadataValue::Labels(labels) => {
                         // For VarChar fields, join labels into single string
                         serde_json::Value::String(labels.join(","))

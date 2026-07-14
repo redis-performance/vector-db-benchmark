@@ -453,6 +453,8 @@ fn coerce_metadata_value(
                 .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
             _ => serde_json::Value::String(s.clone()),
         },
+        MetadataValue::Int(n) => serde_json::Value::from(*n),
+        MetadataValue::Float(f) => serde_json::json!(*f),
         MetadataValue::Labels(labels) => serde_json::Value::Array(
             labels
                 .iter()
