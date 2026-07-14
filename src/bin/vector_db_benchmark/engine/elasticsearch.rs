@@ -617,6 +617,8 @@ fn upload_bulk_batch(
             for (k, v) in &meta.fields {
                 let val = match v {
                     MetadataValue::String(s) => serde_json::Value::String(s.clone()),
+                    MetadataValue::Int(n) => serde_json::Value::from(*n),
+                    MetadataValue::Float(f) => serde_json::json!(*f),
                     MetadataValue::Labels(labels) => serde_json::Value::Array(
                         labels
                             .iter()

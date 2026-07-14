@@ -1186,6 +1186,12 @@ fn upload_batch_internal(
                     MetadataValue::String(s) => {
                         fields.push((k.as_bytes().to_vec(), s.as_bytes().to_vec()));
                     }
+                    MetadataValue::Int(n) => {
+                        fields.push((k.as_bytes().to_vec(), n.to_string().into_bytes()));
+                    }
+                    MetadataValue::Float(f) => {
+                        fields.push((k.as_bytes().to_vec(), f.to_string().into_bytes()));
+                    }
                     MetadataValue::Labels(labels) => {
                         fields.push((k.as_bytes().to_vec(), labels.join(";").into_bytes()));
                     }

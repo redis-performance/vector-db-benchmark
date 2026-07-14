@@ -41,6 +41,10 @@ fn copy_field(meta: Option<&MetadataItem>, column: &str) -> String {
     let value = meta.and_then(|m| m.fields.iter().find(|(k, _)| k == column).map(|(_, v)| v));
     match value {
         Some(MetadataValue::String(s)) => escape_copy_text(s),
+        // Numeric columns receive the literal digits; COPY coerces them into the
+        // declared BIGINT/DOUBLE column. No escaping needed (digits/./-/e only).
+        Some(MetadataValue::Int(n)) => n.to_string(),
+        Some(MetadataValue::Float(f)) => f.to_string(),
         Some(MetadataValue::Labels(labels)) => escape_copy_text(&labels.join(";")),
         // geo / missing → NULL (geo isn't a scalar filter column here)
         _ => "\\N".to_string(),
@@ -841,6 +845,20 @@ mod tests {
         assert_eq!(copy_field(Some(&meta), "labels"), "a;b");
         assert_eq!(copy_field(Some(&meta), "missing"), "\\N");
         assert_eq!(copy_field(None, "category"), "\\N");
+    }
+
+    // Native numeric fields (issue #87) must COPY the literal digits into the
+    // BIGINT/DOUBLE column — NOT fall through to the `_ => NULL` arm.
+    #[test]
+    fn copy_field_emits_numeric_literals() {
+        let meta = MetadataItem {
+            fields: vec![
+                ("size".to_string(), MetadataValue::Int(42)),
+                ("price".to_string(), MetadataValue::Float(3.5)),
+            ],
+        };
+        assert_eq!(copy_field(Some(&meta), "size"), "42");
+        assert_eq!(copy_field(Some(&meta), "price"), "3.5");
     }
 
     // Parse with the production base offset ($1 = vector, $2 = LIMIT, filter

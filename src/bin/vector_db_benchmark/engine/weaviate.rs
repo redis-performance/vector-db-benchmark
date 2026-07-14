@@ -441,7 +441,10 @@ fn coerce_metadata_value(
     value: &vector_db_benchmark::readers::metadata::MetadataValue,
 ) -> serde_json::Value {
     use vector_db_benchmark::readers::metadata::MetadataValue;
-    match value {
+    // A numeric value under a keyword/text-declared property must stay a string,
+    // or Weaviate rejects the whole object (the property is declared `text`).
+    let value = value.coerce_for_schema(schema_type);
+    match value.as_ref() {
         MetadataValue::String(s) => match schema_type {
             Some("int") => s
                 .parse::<i64>()
@@ -453,6 +456,8 @@ fn coerce_metadata_value(
                 .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
             _ => serde_json::Value::String(s.clone()),
         },
+        MetadataValue::Int(n) => serde_json::Value::from(*n),
+        MetadataValue::Float(f) => serde_json::json!(*f),
         MetadataValue::Labels(labels) => serde_json::Value::Array(
             labels
                 .iter()

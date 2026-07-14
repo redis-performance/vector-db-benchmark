@@ -180,8 +180,20 @@ mod tests {
 
         assert_eq!(meta.fields.len(), 1);
         match &meta.fields[0].1 {
-            MetadataValue::String(s) => assert_eq!(s, "42"),
-            _ => panic!("Expected String variant for number"),
+            MetadataValue::Int(n) => assert_eq!(*n, 42),
+            other => panic!("Expected Int variant for integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_metadata_parse_float_field() {
+        let json: serde_json::Value = serde_json::json!({"price": 3.5});
+        let meta = parse_metadata_from_json(json).unwrap();
+
+        assert_eq!(meta.fields.len(), 1);
+        match &meta.fields[0].1 {
+            MetadataValue::Float(f) => assert_eq!(*f, 3.5),
+            other => panic!("Expected Float variant for non-integer, got {:?}", other),
         }
     }
 

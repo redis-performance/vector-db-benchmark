@@ -694,6 +694,12 @@ fn upload_batch_internal(
                             encode_string_field(config, k, s).into_bytes(),
                         ));
                     }
+                    MetadataValue::Int(n) => {
+                        fields.push((k.as_bytes().to_vec(), n.to_string().into_bytes()));
+                    }
+                    MetadataValue::Float(f) => {
+                        fields.push((k.as_bytes().to_vec(), f.to_string().into_bytes()));
+                    }
                     MetadataValue::Labels(labels) => {
                         fields.push((k.as_bytes().to_vec(), labels.join(";").into_bytes()));
                     }
@@ -1324,6 +1330,12 @@ fn hset_single(
             match v {
                 MetadataValue::String(s) => {
                     cmd.arg(k.as_str()).arg(encode_string_field(config, k, s));
+                }
+                MetadataValue::Int(n) => {
+                    cmd.arg(k.as_str()).arg(n.to_string());
+                }
+                MetadataValue::Float(f) => {
+                    cmd.arg(k.as_str()).arg(f.to_string());
                 }
                 MetadataValue::Labels(labels) => {
                     cmd.arg(k.as_str()).arg(labels.join(";"));

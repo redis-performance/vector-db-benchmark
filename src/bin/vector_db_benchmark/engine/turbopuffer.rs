@@ -172,6 +172,8 @@ fn metadata_value_to_json(val: &MetadataValue) -> serde_json::Value {
                 serde_json::json!(s)
             }
         }
+        MetadataValue::Int(n) => serde_json::json!(*n),
+        MetadataValue::Float(f) => serde_json::json!(*f),
         MetadataValue::Labels(labels) => serde_json::json!(labels),
         MetadataValue::Geo { lon, lat } => {
             serde_json::json!({"lon": lon, "lat": lat})
