@@ -82,6 +82,34 @@ fn validate_npy_size_bound(path: &str) -> Result<(), String> {
         return Ok(());
     }
     let header = String::from_utf8_lossy(&header);
+
+    // Guard against pathological headers that make the downstream Python-dict
+    // parser (`ndarray-npy`) blow up. A valid NPY header is a flat dict
+    // `{'descr':.., 'fortran_order':.., 'shape':(..)}` that nests at most 2
+    // levels deep (the outer `{}` then the `()` shape tuple). A fuzzed header
+    // like `{{{{{{{{{...` sends the recursive-descent parser into a multi-minute
+    // spin (found by the nightly fuzzer as a 1728s timeout). Reject absurd
+    // nesting cheaply, before handing off. Valid headers (depth <= 2) are
+    // unaffected.
+    let mut depth: u32 = 0;
+    let mut max_depth: u32 = 0;
+    for b in header.bytes() {
+        match b {
+            b'{' | b'[' | b'(' => {
+                depth += 1;
+                max_depth = max_depth.max(depth);
+            }
+            b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if max_depth > 4 {
+        return Err(format!(
+            "malformed NPY header: bracket nesting depth {} exceeds limit (4)",
+            max_depth
+        ));
+    }
+
     if let Some((count, itemsize)) = parse_npy_shape_itemsize(&header) {
         let data_bytes = count
             .checked_mul(itemsize)
@@ -198,6 +226,36 @@ mod tests {
         let f = write_tmp(&b);
         let r = read_npy_vectors(f.path().to_str().unwrap(), false);
         assert!(r.is_err(), "expected Err for oversized shape, got {:?}", r);
+    }
+
+    /// Regression: a fuzzer-found header full of nested `{{{{{...` sent
+    /// `ndarray-npy`'s recursive Python-dict parser into a 1728s spin (nightly
+    /// timeout). The nesting-depth guard must reject it quickly (a real valid
+    /// header nests at most 2 levels), so this test also completes near-instantly.
+    #[test]
+    fn rejects_deeply_nested_npy_header() {
+        // Header length is honest (fits the file), so it passes the size bound;
+        // the excessive brace nesting is what must trip the guard.
+        let mut dict = Vec::new();
+        dict.extend_from_slice(b"{'descr': '<f4', 'shape': (3, 3), ");
+        dict.extend(std::iter::repeat_n(b'{', 40)); // pathological nesting
+        let mut b = Vec::new();
+        b.extend_from_slice(b"\x93NUMPY");
+        b.push(1); // major
+        b.push(0); // minor
+        b.extend_from_slice(&(dict.len() as u16).to_le_bytes());
+        b.extend_from_slice(&dict);
+        let f = write_tmp(&b);
+        let r = read_npy_vectors(f.path().to_str().unwrap(), false);
+        assert!(
+            r.is_err(),
+            "expected Err for deeply nested header, got {:?}",
+            r
+        );
+        assert!(
+            r.unwrap_err().contains("nesting depth"),
+            "expected nesting-depth rejection message"
+        );
     }
 
     /// Valid NPY files must still round-trip identically (hardening must not
