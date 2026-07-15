@@ -692,6 +692,58 @@ fn test_binary_qdrant_match_any() {
     assert!(recall >= 0.9, "qdrant match_any recall {:.3} < 0.9", recall);
 }
 
+/// Control for the multi-valued `labels` fixture (#88). Qdrant already stores
+/// `labels` as a native list payload and matches per element, so it must clear
+/// 0.9 recall. If this fails alongside the Milvus/Weaviate/pgvector labels
+/// tests, the fixture (not an engine fix) is at fault.
+#[test]
+fn test_binary_qdrant_match_any_labels() {
+    wait_for_qdrant();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-mal", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_labels_project(
+        "match-any-labels-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+        common::GtMetric::L2,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-mal",
+            "match-any-labels-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant match_any labels run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "qdrant-mal");
+    println!("qdrant match_any labels recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "qdrant multi-valued labels match_any recall {:.3} < 0.9",
+        recall
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Quantization coverage: SCALAR (int8), BINARY, and PRODUCT quantization all
 // run end-to-end through the real CLI against live qdrant on the SAME

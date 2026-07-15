@@ -471,6 +471,13 @@ fn test_weaviate_full_cycle() {
 /// filter translated into the gRPC `Filters` message. A fresh project (its own
 /// results dir) and class name per call keep the two runs independent.
 fn run_weaviate_match_any(use_graphql: bool) -> (String, f64) {
+    run_weaviate_match_any_impl(use_graphql, false)
+}
+
+/// Shared runner. `labels=true` filters on a MULTI-VALUED keyword field
+/// (`labels`, a `text[]` array property) instead of scalar `color`, exercising
+/// per-element `ContainsAny`/`Equal` semantics over the array (issue #88).
+fn run_weaviate_match_any_impl(use_graphql: bool, labels: bool) -> (String, f64) {
     let dim = 8;
     let configs = serde_json::json!([{
         "name": "weaviate-ma", "engine": "weaviate",
@@ -478,13 +485,18 @@ fn run_weaviate_match_any(use_graphql: bool) -> (String, f64) {
         "search_params": [{"parallel": 1, "vectorIndexConfig": {"ef": 400}}],
         "upload_params": {"parallel": 1, "batch_size": 100}
     }]);
-    let ds_name = if use_graphql {
-        "match-any-graphql"
-    } else {
-        "match-any-grpc"
+    let ds_name = match (labels, use_graphql) {
+        (false, false) => "match-any-grpc",
+        (false, true) => "match-any-graphql",
+        (true, false) => "match-any-labels-grpc",
+        (true, true) => "match-any-labels-graphql",
     };
-    let proj =
-        common::write_match_any_project(ds_name, &serde_json::to_string(&configs).unwrap(), dim);
+    let cfg_json = serde_json::to_string(&configs).unwrap();
+    let proj = if labels {
+        common::write_match_any_labels_project(ds_name, &cfg_json, dim, common::GtMetric::L2)
+    } else {
+        common::write_match_any_project(ds_name, &cfg_json, dim)
+    };
     assert!(
         proj.matching_docs >= proj.top,
         "fixture must have >= top matching docs (got {})",
@@ -492,10 +504,11 @@ fn run_weaviate_match_any(use_graphql: bool) -> (String, f64) {
     );
 
     let port = std::env::var("WEAVIATE_HTTP_PORT").unwrap_or_else(|_| WEAVIATE_PORT.to_string());
-    let class_name = if use_graphql {
-        "BenchMatchanyGql"
-    } else {
-        "BenchMatchanyGrpc"
+    let class_name = match (labels, use_graphql) {
+        (false, false) => "BenchMatchanyGrpc",
+        (false, true) => "BenchMatchanyGql",
+        (true, false) => "BenchMatchanyLabelsGrpc",
+        (true, true) => "BenchMatchanyLabelsGql",
     };
     // Run directly (not common::run_binary) so we always surface the engine's
     // stdout/stderr — the filtered search's per-query errors print to stderr and
@@ -586,6 +599,42 @@ fn test_binary_weaviate_match_any() {
     assert!(
         (grpc_recall - gql_recall).abs() < 1e-6,
         "gRPC vs GraphQL recall differ: {:.6} vs {:.6}",
+        grpc_recall,
+        gql_recall
+    );
+}
+
+/// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88).
+/// `labels` is declared as a `text[]` array property and each doc stores an
+/// array; the OR-of-`Equal` filter matches per element (Weaviate's `Equal` on
+/// an array property is contains). Before the fix `labels` was a scalar `text`
+/// property, which rejected the array insert / could not match one element.
+/// Runs both transports and asserts each clears 0.9 and they agree.
+#[test]
+fn test_binary_weaviate_match_any_labels() {
+    wait_for_weaviate();
+
+    let (grpc_transport, grpc_recall) = run_weaviate_match_any_impl(false, true);
+    let (_gql_transport, gql_recall) = run_weaviate_match_any_impl(true, true);
+
+    println!(
+        "weaviate labels match_any [{}] grpc_recall={:.4} gql_recall={:.4}",
+        grpc_transport, grpc_recall, gql_recall
+    );
+
+    assert!(
+        grpc_recall >= 0.9,
+        "weaviate labels match_any gRPC recall {:.4} < 0.9",
+        grpc_recall
+    );
+    assert!(
+        gql_recall >= 0.9,
+        "weaviate labels match_any GraphQL recall {:.4} < 0.9",
+        gql_recall
+    );
+    assert!(
+        (grpc_recall - gql_recall).abs() < 1e-6,
+        "gRPC vs GraphQL labels recall differ: {:.6} vs {:.6}",
         grpc_recall,
         gql_recall
     );

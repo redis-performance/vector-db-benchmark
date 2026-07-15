@@ -541,6 +541,52 @@ fn test_binary_pgvector_match_any() {
     );
 }
 
+/// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88). The
+/// ';'-joined TEXT column is filtered with array-overlap (`match_any`) and set
+/// membership (exact-match); this exercises the full binary path against a live
+/// Postgres, complementing the direct-SQL overlap test.
+#[test]
+fn test_binary_pgvector_match_any_labels() {
+    wait_for_postgres();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-mal", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_labels_project(
+        "match-any-labels-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+        common::GtMetric::L2,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-mal",
+            "match-any-labels-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")],
+        ),
+        "pgvector match_any labels run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "pg-mal");
+    println!("pgvector match_any labels recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector multi-valued labels match_any recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Direct-SQL correctness for the keyword contains-any clause the `match_any`
 /// filter builder emits. Multi-valued keyword payloads are stored as a
 /// ';'-joined TEXT scalar, so the array-overlap must match a row that contains

@@ -453,3 +453,52 @@ fn test_binary_milvus_match_any() {
     println!("milvus match_any recall={:.3}", recall);
     assert!(recall >= 0.9, "milvus match_any recall {:.3} < 0.9", recall);
 }
+
+/// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88).
+/// Milvus stores it as an Array(VarChar) and filters with
+/// `array_contains_any`; before the fix it was a comma-joined VarChar tested
+/// with whole-string `in`, which cannot match a single element (recall ~0).
+#[test]
+fn test_binary_milvus_match_any_labels() {
+    wait_for_milvus();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-mal", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj = common::write_match_any_labels_project(
+        "match-any-labels-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+        common::GtMetric::L2,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-mal",
+            "match-any-labels-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_matchany_labels"),
+            ],
+        ),
+        "milvus match_any labels run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "milvus-mal");
+    println!("milvus match_any labels recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "milvus multi-valued labels match_any recall {:.3} < 0.9",
+        recall
+    );
+}

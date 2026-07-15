@@ -14,7 +14,9 @@ use postgres::types::ToSql;
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
-use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
+use vector_db_benchmark::readers::metadata::{
+    is_multivalued_keyword_field, MetadataItem, MetadataValue,
+};
 
 /// Map a dataset schema field type to a Postgres column type. Returns None for
 /// types pgvector can't filter on with a plain scalar column (e.g. geo).
@@ -741,7 +743,19 @@ fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Op
                     } else if let Some(value) = criteria.get("value") {
                         if let Some(s) = value.as_str() {
                             let ph = builder.bind(PgValue::Text(s.to_string()));
-                            parts.push(format!("\"{}\" = {}", field_name, ph));
+                            if is_multivalued_keyword_field(field_name) {
+                                // Multi-valued keyword: the ';'-joined column holds
+                                // a set, so exact-match means "contains this value".
+                                // Test set membership, mirroring the match_any arm
+                                // above (issue #88) — a scalar `=` compares the whole
+                                // joined string and never matches one element.
+                                parts.push(format!(
+                                    "{} = ANY(string_to_array(\"{}\", ';'))",
+                                    ph, field_name
+                                ));
+                            } else {
+                                parts.push(format!("\"{}\" = {}", field_name, ph));
+                            }
                         } else if let Some(b) = value.as_bool() {
                             let ph = builder.bind(PgValue::Bool(b));
                             parts.push(format!("\"{}\" = {}", field_name, ph));
@@ -935,6 +949,21 @@ mod tests {
                 "blue".to_string()
             ])]
         );
+    }
+
+    #[test]
+    fn labels_exact_match_uses_set_membership() {
+        // #88: exact-match on the multi-valued `labels` column means "contains
+        // this value" — test set membership, not whole-string equality. A
+        // single-valued keyword (`name`) keeps scalar `=`.
+        let cond = json!({"and": [{"labels": {"match": {"value": "red"}}}]});
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(sql, "($3 = ANY(string_to_array(\"labels\", ';')))");
+        assert_eq!(vals, vec![PgValue::Text("red".to_string())]);
+
+        let (sql_name, _) =
+            parse(&json!({"and": [{"name": {"match": {"value": "red"}}}]})).unwrap();
+        assert_eq!(sql_name, "(\"name\" = $3)");
     }
 
     #[test]

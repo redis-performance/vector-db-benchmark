@@ -401,8 +401,16 @@ impl WeaviateEngine {
 /// FILTERABLE index, so it must be enabled explicitly. `indexSearchable` is
 /// only valid on text-backed properties, so it is set only for those.
 fn weaviate_property(field_name: &str, field_type: &str) -> Option<serde_json::Value> {
+    use vector_db_benchmark::readers::metadata::is_multivalued_keyword_field;
+    // A multi-valued keyword field (`labels`) is a `text[]` array property so
+    // `ContainsAny` matches individual elements; a scalar `text` could only
+    // compare the whole value (issue #88). `field` tokenization (below) still
+    // applies, giving whole-value equality per array element.
+    let multivalued =
+        matches!(field_type, "keyword" | "text") && is_multivalued_keyword_field(field_name);
     let wv_type = match field_type {
         "int" => "int",
+        "keyword" | "text" if multivalued => "text[]",
         "keyword" | "text" => "text",
         "float" => "number",
         "geo" => "geoCoordinates",
@@ -1748,6 +1756,18 @@ mod tests {
         assert_eq!(p["tokenization"], "field");
         assert_eq!(p["indexSearchable"], true);
         assert!(p.get("indexInverted").is_none(), "p={}", p);
+    }
+
+    // #88: the multi-valued keyword field `labels` is a `text[]` array property
+    // (with `field` tokenization for whole-value element equality), so
+    // `ContainsAny`/`Equal` filters match individual elements. A scalar `text`
+    // could only compare the whole value.
+    #[test]
+    fn labels_property_is_text_array() {
+        let p = weaviate_property("labels", "keyword").unwrap();
+        assert_eq!(p["dataType"], json!(["text[]"]));
+        assert_eq!(p["indexFilterable"], true);
+        assert_eq!(p["tokenization"], "field");
     }
 
     #[test]
