@@ -144,6 +144,14 @@ Render a QPS-vs-precision trade-off plot (SVG, no dependencies) from existing `*
 vector-db-benchmark --plot tradeoff.svg --engines '*' --datasets glove-100-angular
 ```
 
+## Client resources & concurrency
+
+**Concurrency model.** A search config's `parallel: N` (and the `--parallels` filter) runs **N OS threads that share a single in-memory copy** of the dataset and query set — not N processes. Raising `parallel` from 1 to 100 adds ~N worker threads and N engine connections (on the order of tens to low-hundreds of MB), **not** N× the dataset. Each worker accumulates only its own small latency/quality samples; nothing per-query is retained beyond scalar metrics.
+
+**Peak client memory ≈ raw dataset size, during upload.** The client loads the whole dataset into RAM for the upload phase — roughly `vector_count × dim × 4 bytes` (e.g. `cohere-768-1M` ≈ 1M × 768 × 4 ≈ 3 GB, plus reader/allocator overhead) — then **frees it before the search phase**. Search holds only the (far smaller) query set plus the per-thread sample buffers, so search-phase memory is largely independent of `parallel`. A client with RAM ≥ ~2× the raw dataset size runs comfortably; increasing search concurrency does not materially change client memory.
+
+> If you saw the client machine hang/OOM specifically when the client count rose (e.g. to 100) — as reported for the original **Python** `vector-db-benchmark`, which used a process-per-client model that copied the dataset into every worker process — this Rust implementation does not reproduce that: workers are threads sharing one copy, and the uploaded vectors are released before searching. Size the client for the upload peak above, not for the client count.
+
 ## Mixed Benchmarks (Update + Search)
 
 The `--update-search-ratio` flag enables mixed workload benchmarks that interleave vector updates with searches. This measures how search performance is affected by concurrent write operations.
