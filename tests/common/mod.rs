@@ -31,20 +31,25 @@ const COLORS: [&str; 4] = ["red", "green", "blue", "dark blue"];
 /// The `match_any` set every query filters on (COLORS indices 0 and 2).
 pub const MATCH_ANY_COLORS: [&str; 2] = ["red", "blue"];
 
-/// Vocabulary for the MULTI-VALUED keyword field `labels` (issue #88). Each doc
-/// carries a 2-element array; the `match_any` filter must match a doc that
-/// shares ANY element with the query set — impossible if the engine stored the
-/// array as one joined scalar, so recall discriminates the fix from the bug.
-const LABEL_VOCAB: [&str; 4] = ["red", "green", "blue", "yellow"];
-/// The `labels` `match_any` set every labels-query filters on.
+/// The `match_any` set every labels-query filters on, for the MULTI-VALUED
+/// keyword field `labels` (issue #88). Each doc carries a 2-element array; the
+/// filter must match a doc that shares ANY element with this set — impossible if
+/// the engine stored the array as one joined scalar, so recall discriminates the
+/// fix from the bug. See [`labels_for`] for the ANY-vs-ALL discrimination.
 pub const MATCH_ANY_LABELS: [&str; 2] = ["red", "blue"];
 
-/// Two DISTINCT tags per doc: `VOCAB[id%4]` and `VOCAB[(id%4+2)%4]`. With the
-/// query set {red, blue}, docs with `id%4 ∈ {0,2}` match (their pair is
-/// {red,blue} or {blue,red}); `id%4 ∈ {1,3}` (green/yellow) do not.
+/// Each MATCHING doc carries exactly ONE query label (`red` XOR `blue`) plus a
+/// non-query tag; non-matching docs carry neither. With the query set
+/// {red, blue}, `id%4 ∈ {0,2}` match; `{1,3}` do not. Because no matching doc
+/// holds BOTH query labels, the fixture distinguishes three behaviors:
+/// contains-ANY (correct → 200 docs), contains-ALL (→ 0 docs, recall 0), and
+/// the joined-scalar bug (whole-string `"red;green" == "red"` → 0, recall 0).
 fn labels_for(id: usize) -> Vec<&'static str> {
-    let a = id % 4;
-    vec![LABEL_VOCAB[a], LABEL_VOCAB[(a + 2) % 4]]
+    match id % 4 {
+        0 => vec!["red", "green"],    // matches via `red` only
+        2 => vec!["blue", "yellow"],  // matches via `blue` only
+        _ => vec!["green", "yellow"], // no query label
+    }
 }
 
 fn matches_labels_filter(id: usize) -> bool {

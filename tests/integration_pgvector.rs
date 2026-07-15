@@ -651,3 +651,64 @@ fn test_pgvector_match_any_overlap_matches_multivalue() {
     conn.execute("DROP TABLE IF EXISTS ma_overlap_test", &[])
         .unwrap();
 }
+
+/// Direct-SQL correctness for the EXACT-MATCH clause on a multi-valued keyword
+/// field (#88). `build_pg_clause` emits `$1 = ANY(string_to_array(col, ';'))`
+/// for a `match.value` on `labels`; this must match a row whose ';'-joined set
+/// CONTAINS the value — the case a scalar `col = $1` (the pre-fix behaviour)
+/// silently drops. Complements the unit test that pins the SQL shape.
+#[test]
+fn test_pgvector_exact_match_labels_set_membership() {
+    wait_for_postgres();
+    let mut conn = connect();
+    conn.execute("DROP TABLE IF EXISTS ma_exact_test", &[])
+        .unwrap();
+    conn.execute(
+        "CREATE TABLE ma_exact_test (id INT PRIMARY KEY, labels TEXT)",
+        &[],
+    )
+    .unwrap();
+    // id 1: multi-valued 'red;green' (contains 'red'); id 2: 'red' (scalar);
+    // id 3: 'blue' (no).
+    conn.execute(
+        "INSERT INTO ma_exact_test VALUES (1,'red;green'),(2,'red'),(3,'blue')",
+        &[],
+    )
+    .unwrap();
+
+    // Exactly the clause build_pg_clause emits for match.value "red" on labels.
+    let member: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_exact_test \
+             WHERE $1 = ANY(string_to_array(\"labels\", ';')) ORDER BY id",
+            &[&"red"],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        member,
+        vec![1, 2],
+        "set-membership must match the multi-valued 'red;green' (via red) and scalar 'red'"
+    );
+
+    // Sanity: the pre-fix scalar `=` misses the multi-valued row.
+    let scalar_eq: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_exact_test WHERE \"labels\" = $1 ORDER BY id",
+            &[&"red"],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        scalar_eq,
+        vec![2],
+        "scalar = drops the multi-valued row (confirms the test discriminates)"
+    );
+
+    conn.execute("DROP TABLE IF EXISTS ma_exact_test", &[])
+        .unwrap();
+}
