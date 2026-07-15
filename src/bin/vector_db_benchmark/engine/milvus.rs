@@ -14,7 +14,7 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
-use vector_db_benchmark::readers::metadata::MetadataItem;
+use vector_db_benchmark::readers::metadata::{is_multivalued_keyword_field, MetadataItem};
 
 const DEFAULT_COLLECTION: &str = "Benchmark";
 
@@ -178,22 +178,38 @@ impl MilvusEngine {
             if let Some(schema_obj) = schema.as_object() {
                 for (field_name, field_type) in schema_obj {
                     let ft = field_type.as_str().unwrap_or("");
-                    let milvus_type = match ft {
-                        "int" => "Int64",
-                        "keyword" | "text" => "VarChar",
-                        "float" => "Double",
-                        _ => continue,
+                    // A multi-valued keyword field (`labels`) is declared as an
+                    // Array of VarChar so `array_contains_any` can match a single
+                    // element; a scalar VarChar could only test whole-string
+                    // equality against the joined value (issue #88).
+                    let field = if (ft == "keyword" || ft == "text")
+                        && is_multivalued_keyword_field(field_name)
+                    {
+                        serde_json::json!({
+                            "fieldName": field_name,
+                            "dataType": "Array",
+                            "elementDataType": "VarChar",
+                            "elementTypeParams": {"max_length": "500", "max_capacity": "128"},
+                        })
+                    } else {
+                        let milvus_type = match ft {
+                            "int" => "Int64",
+                            "keyword" | "text" => "VarChar",
+                            "float" => "Double",
+                            _ => continue,
+                        };
+                        let mut field = serde_json::json!({
+                            "fieldName": field_name,
+                            "dataType": milvus_type,
+                        });
+                        if milvus_type == "VarChar" {
+                            field.as_object_mut().unwrap().insert(
+                                "elementTypeParams".to_string(),
+                                serde_json::json!({"max_length": "500"}),
+                            );
+                        }
+                        field
                     };
-                    let mut field = serde_json::json!({
-                        "fieldName": field_name,
-                        "dataType": milvus_type,
-                    });
-                    if milvus_type == "VarChar" {
-                        field.as_object_mut().unwrap().insert(
-                            "elementTypeParams".to_string(),
-                            serde_json::json!({"max_length": "500"}),
-                        );
-                    }
                     fields.push(field);
                 }
             }
@@ -446,8 +462,14 @@ fn insert_batch(
                     MetadataValue::Int(n) => serde_json::Value::from(*n),
                     MetadataValue::Float(f) => serde_json::json!(*f),
                     MetadataValue::Labels(labels) => {
-                        // For VarChar fields, join labels into single string
-                        serde_json::Value::String(labels.join(","))
+                        // Multi-valued keyword field: store as a native Array so
+                        // `array_contains_any` can match individual elements (#88).
+                        serde_json::Value::Array(
+                            labels
+                                .iter()
+                                .map(|l| serde_json::Value::String(l.clone()))
+                                .collect(),
+                        )
                     }
                     MetadataValue::Geo { lon, lat } => {
                         // Milvus doesn't support geo natively; store as string
@@ -697,31 +719,19 @@ fn build_milvus_filter(
 ) -> Option<String> {
     match condition_type {
         "match" => {
-            // match_any: field value in a list -> Milvus `in [...]` expression,
-            // the OR-of-values semantics that mirror qdrant's
-            // Condition::matches(field, Vec). Strings are quoted/escaped,
-            // numbers inlined; bool/null/nested items are skipped so an invalid
-            // expression is never produced. An empty (or all-skipped) IN-set
-            // matches NOTHING: we still emit `field in []` (a valid
-            // match-nothing expression) rather than dropping the clause, since
-            // dropping the sole clause would leave no filter and silently
-            // return every row (the inverse of the filter).
+            // A multi-valued keyword field (`labels`) is stored as an Array of
+            // VarChar (see create_collection / insert_batch), so it uses Milvus's
+            // array membership functions — `array_contains_any` for `match_any`
+            // and `array_contains` for exact-match — which test per-element
+            // membership. A scalar field uses `in [...]` / `==`. (Issue #88.)
+            let multivalued = is_multivalued_keyword_field(field_name);
+            // match_any: OR-of-values, mirroring qdrant's Condition::matches.
+            // Strings are quoted/escaped, numbers inlined; bool/null/nested items
+            // are skipped so an invalid expression is never produced. An empty
+            // (or all-skipped) IN-set matches NOTHING — we still emit a valid
+            // match-nothing expression rather than dropping the sole clause,
+            // which would leave no filter and return every row (the inverse).
             if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
-                // NOTE: match_any here supports SINGLE-VALUED keyword fields only.
-                // Milvus stores a multi-valued keyword field (MetadataValue::Labels,
-                // only for a field literally named `labels`) as a single
-                // comma-joined VarChar (see insert_batch: `labels.join(",")`), so
-                // `field in ["red","blue"]` tests whole-string set membership and
-                // cannot match a doc stored as `"red,green"`. True contains-any
-                // semantics (as pgvector's array-overlap / mongodb's array $in) would
-                // require changing storage to ARRAY(VarChar) + array_contains_any,
-                // which is out of scope here (no dataset to test against) and tracked
-                // as a follow-up. Strings are quoted/escaped, numbers inlined;
-                // bool/null/nested items are skipped so an invalid expression is
-                // never produced. An empty (or all-skipped) IN-set matches NOTHING:
-                // we still emit `field in []` (a valid match-nothing expression)
-                // rather than dropping the clause, since dropping the sole clause
-                // would leave no filter and silently return every row.
                 let items: Vec<String> = any
                     .iter()
                     .filter_map(|v| {
@@ -734,19 +744,34 @@ fn build_milvus_filter(
                         }
                     })
                     .collect();
+                if multivalued {
+                    return Some(format!(
+                        "array_contains_any({}, [{}])",
+                        field_name,
+                        items.join(", ")
+                    ));
+                }
                 return Some(format!("{} in [{}]", field_name, items.join(", ")));
             }
             let value = criteria.get("value")?;
             if let Some(s) = value.as_str() {
-                Some(format!("{} == {}", field_name, quote_milvus_string(s)))
-            } else if value.is_number() || value.is_boolean() {
+                if multivalued {
+                    Some(format!(
+                        "array_contains({}, {})",
+                        field_name,
+                        quote_milvus_string(s)
+                    ))
+                } else {
+                    Some(format!("{} == {}", field_name, quote_milvus_string(s)))
+                }
+            } else if !multivalued && (value.is_number() || value.is_boolean()) {
                 Some(format!("{} == {}", field_name, value))
             } else {
-                // Non-scalar exact-match value (a JSON array/object/null) is
+                // Non-scalar exact-match value (a JSON array/object/null), or a
+                // numeric/bool value against the string-array `labels` field, is
                 // malformed input — the canonical model uses `match.any` for
-                // lists. Drop the clause (return None) instead of forwarding
-                // `field == [1,2]` verbatim, matching qdrant/redis/valkey/
-                // vectorsets.
+                // lists. Drop the clause (return None) instead of forwarding a
+                // bad expression, matching qdrant/redis/valkey/vectorsets.
                 None
             }
         }
@@ -1124,6 +1149,27 @@ mod tests {
             build_milvus_filter("color", "match", &json!({"value": "red"})).unwrap(),
             r#"color == "red""#
         );
+    }
+
+    // #88: the multi-valued keyword field `labels` is an Array(VarChar), so it
+    // uses array membership functions instead of scalar `in`/`==`.
+    #[test]
+    fn labels_match_any_uses_array_contains_any() {
+        let expr =
+            build_milvus_filter("labels", "match", &json!({"any": ["red", "blue"]})).unwrap();
+        assert_eq!(expr, r#"array_contains_any(labels, ["red", "blue"])"#);
+    }
+
+    #[test]
+    fn labels_exact_value_uses_array_contains() {
+        let expr = build_milvus_filter("labels", "match", &json!({"value": "red"})).unwrap();
+        assert_eq!(expr, r#"array_contains(labels, "red")"#);
+    }
+
+    #[test]
+    fn labels_numeric_value_dropped() {
+        // A numeric exact-match against the string-array `labels` is malformed.
+        assert!(build_milvus_filter("labels", "match", &json!({"value": 5})).is_none());
     }
 
     // #121: a non-scalar `value` (a JSON array/object/null) is malformed input —

@@ -31,6 +31,32 @@ const COLORS: [&str; 4] = ["red", "green", "blue", "dark blue"];
 /// The `match_any` set every query filters on (COLORS indices 0 and 2).
 pub const MATCH_ANY_COLORS: [&str; 2] = ["red", "blue"];
 
+/// The `match_any` set every labels-query filters on, for the MULTI-VALUED
+/// keyword field `labels` (issue #88). Each doc carries a 2-element array; the
+/// filter must match a doc that shares ANY element with this set — impossible if
+/// the engine stored the array as one joined scalar, so recall discriminates the
+/// fix from the bug. See [`labels_for`] for the ANY-vs-ALL discrimination.
+pub const MATCH_ANY_LABELS: [&str; 2] = ["red", "blue"];
+
+/// Each MATCHING doc carries exactly ONE query label (`red` XOR `blue`) plus a
+/// non-query tag; non-matching docs carry neither. With the query set
+/// {red, blue}, `id%4 ∈ {0,2}` match; `{1,3}` do not. Because no matching doc
+/// holds BOTH query labels, the fixture distinguishes three behaviors:
+/// contains-ANY (correct → 200 docs), contains-ALL (→ 0 docs, recall 0), and
+/// the joined-scalar bug (whole-string `"red;green" == "red"` → 0, recall 0).
+fn labels_for(id: usize) -> Vec<&'static str> {
+    match id % 4 {
+        0 => vec!["red", "green"],    // matches via `red` only
+        2 => vec!["blue", "yellow"],  // matches via `blue` only
+        _ => vec!["green", "yellow"], // no query label
+    }
+}
+
+fn matches_labels_filter(id: usize) -> bool {
+    let l = labels_for(id);
+    MATCH_ANY_LABELS.iter().any(|q| l.contains(q))
+}
+
 const N_DOCS: usize = 400;
 const N_QUERIES: usize = 10;
 const TOP: usize = 10;
@@ -254,6 +280,98 @@ fn write_match_any_project_metric(
         dataset_name: dataset_name.to_string(),
         top: TOP,
         matching_docs: (0..N_DOCS).filter(|id| matches_filter(*id)).count(),
+    }
+}
+
+/// Like [`write_match_any_project`], but the `match_any` filter is on a
+/// MULTI-VALUED keyword field (`labels`, a per-doc 2-element array) instead of a
+/// scalar `color`. Proves contains-any array semantics end-to-end: an engine
+/// that stores the array as a joined scalar (the pre-#88 Milvus/Weaviate bug)
+/// tests whole-value equality and scores ~0 recall. `metric` follows the engine
+/// (L2 for most; cosine for VectorSets).
+pub fn write_match_any_labels_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+    metric: GtMetric,
+) -> MatchAnyProject {
+    let mut rng = StdRng::seed_from_u64(0xB0BA);
+    let gen_vec =
+        |rng: &mut StdRng| -> Vec<f32> { (0..dim).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
+    let vectors: Vec<Vec<f32>> = (0..N_DOCS).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..N_QUERIES).map(|_| gen_vec(&mut rng)).collect();
+
+    // Ground truth over ONLY the docs whose labels array intersects the set.
+    let filtered_gt = |q: &[f32]| -> Vec<i64> {
+        let mut scored: Vec<(i64, f64)> = (0..N_DOCS)
+            .filter(|id| matches_labels_filter(*id))
+            .map(|id| (id as i64, metric.dist(q, &vectors[id])))
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        scored.iter().take(TOP).map(|(id, _)| *id).collect()
+    };
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+
+    let ds_dir = root.join("datasets").join(dataset_name);
+    fs::create_dir_all(&ds_dir).unwrap();
+    fs::create_dir_all(root.join("experiments/configurations")).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+
+    write_npy_vectors(ds_dir.join("vectors.npy").to_str().unwrap(), &vectors).unwrap();
+
+    // Per-document metadata -> payloads.jsonl (multi-valued keyword `labels`).
+    let payloads: String = (0..N_DOCS)
+        .map(|id| serde_json::json!({ "labels": labels_for(id) }).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("payloads.jsonl"), payloads).unwrap();
+
+    let any_vals: Vec<serde_json::Value> = MATCH_ANY_LABELS
+        .iter()
+        .map(|c| serde_json::json!(c))
+        .collect();
+    let tests: String = queries
+        .iter()
+        .map(|q| {
+            serde_json::json!({
+                "query": q.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+                "conditions": { "and": [ { "labels": { "match": { "any": any_vals } } } ] },
+                "closest_ids": filtered_gt(q),
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(ds_dir.join("tests.jsonl"), tests).unwrap();
+
+    let datasets_json = serde_json::json!([{
+        "name": dataset_name,
+        "type": "tar",
+        "path": format!("{}/", dataset_name),
+        "distance": metric.name(),
+        "vector_size": dim,
+        "vector_count": N_DOCS,
+        "schema": { "labels": "keyword" },
+    }]);
+    fs::write(
+        root.join("datasets/datasets.json"),
+        serde_json::to_string_pretty(&datasets_json).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("experiments/configurations/test.json"),
+        engine_configs_json,
+    )
+    .unwrap();
+
+    MatchAnyProject {
+        root,
+        dataset_name: dataset_name.to_string(),
+        top: TOP,
+        matching_docs: (0..N_DOCS).filter(|id| matches_labels_filter(*id)).count(),
     }
 }
 

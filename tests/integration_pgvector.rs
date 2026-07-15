@@ -541,6 +541,52 @@ fn test_binary_pgvector_match_any() {
     );
 }
 
+/// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88). The
+/// ';'-joined TEXT column is filtered with array-overlap (`match_any`) and set
+/// membership (exact-match); this exercises the full binary path against a live
+/// Postgres, complementing the direct-SQL overlap test.
+#[test]
+fn test_binary_pgvector_match_any_labels() {
+    wait_for_postgres();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-mal", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_match_any_labels_project(
+        "match-any-labels-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+        common::GtMetric::L2,
+    );
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-mal",
+            "match-any-labels-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")],
+        ),
+        "pgvector match_any labels run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "pg-mal");
+    println!("pgvector match_any labels recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector multi-valued labels match_any recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Direct-SQL correctness for the keyword contains-any clause the `match_any`
 /// filter builder emits. Multi-valued keyword payloads are stored as a
 /// ';'-joined TEXT scalar, so the array-overlap must match a row that contains
@@ -603,5 +649,66 @@ fn test_pgvector_match_any_overlap_matches_multivalue() {
     );
 
     conn.execute("DROP TABLE IF EXISTS ma_overlap_test", &[])
+        .unwrap();
+}
+
+/// Direct-SQL correctness for the EXACT-MATCH clause on a multi-valued keyword
+/// field (#88). `build_pg_clause` emits `$1 = ANY(string_to_array(col, ';'))`
+/// for a `match.value` on `labels`; this must match a row whose ';'-joined set
+/// CONTAINS the value — the case a scalar `col = $1` (the pre-fix behaviour)
+/// silently drops. Complements the unit test that pins the SQL shape.
+#[test]
+fn test_pgvector_exact_match_labels_set_membership() {
+    wait_for_postgres();
+    let mut conn = connect();
+    conn.execute("DROP TABLE IF EXISTS ma_exact_test", &[])
+        .unwrap();
+    conn.execute(
+        "CREATE TABLE ma_exact_test (id INT PRIMARY KEY, labels TEXT)",
+        &[],
+    )
+    .unwrap();
+    // id 1: multi-valued 'red;green' (contains 'red'); id 2: 'red' (scalar);
+    // id 3: 'blue' (no).
+    conn.execute(
+        "INSERT INTO ma_exact_test VALUES (1,'red;green'),(2,'red'),(3,'blue')",
+        &[],
+    )
+    .unwrap();
+
+    // Exactly the clause build_pg_clause emits for match.value "red" on labels.
+    let member: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_exact_test \
+             WHERE $1 = ANY(string_to_array(\"labels\", ';')) ORDER BY id",
+            &[&"red"],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        member,
+        vec![1, 2],
+        "set-membership must match the multi-valued 'red;green' (via red) and scalar 'red'"
+    );
+
+    // Sanity: the pre-fix scalar `=` misses the multi-valued row.
+    let scalar_eq: Vec<i32> = conn
+        .query(
+            "SELECT id FROM ma_exact_test WHERE \"labels\" = $1 ORDER BY id",
+            &[&"red"],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<_, i32>(0))
+        .collect();
+    assert_eq!(
+        scalar_eq,
+        vec![2],
+        "scalar = drops the multi-valued row (confirms the test discriminates)"
+    );
+
+    conn.execute("DROP TABLE IF EXISTS ma_exact_test", &[])
         .unwrap();
 }

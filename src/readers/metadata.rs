@@ -8,6 +8,17 @@ pub struct MetadataItem {
     pub fields: Vec<(String, MetadataValue)>,
 }
 
+/// Whether a schema field holds a MULTI-VALUED keyword array rather than a
+/// scalar keyword. By convention (matching [`parse_metadata_from_json`], which
+/// only builds [`MetadataValue::Labels`] for a field literally named `labels`)
+/// the sole multi-valued keyword field is `labels`. Engines with typed columns
+/// (Milvus, Weaviate, pgvector) consult this at schema-creation time to declare
+/// an array column and apply array contains-any semantics, so a query like
+/// `match_any ["a","b"]` matches a doc whose `labels` is `["a","c"]`.
+pub fn is_multivalued_keyword_field(field_name: &str) -> bool {
+    field_name == "labels"
+}
+
 #[derive(Clone, Debug)]
 pub enum MetadataValue {
     String(String),
