@@ -837,10 +837,9 @@ fn where_json_to_grpc_filters(node: &serde_json::Value) -> Option<Filters> {
         filters::TestValue::ValueInt(v.as_i64()?)
     } else if let Some(v) = obj.get("valueNumber") {
         filters::TestValue::ValueNumber(v.as_f64()?)
-    } else if let Some(v) = obj.get("valueBoolean") {
-        filters::TestValue::ValueBoolean(v.as_bool()?)
     } else {
-        return None;
+        let v = obj.get("valueBoolean")?;
+        filters::TestValue::ValueBoolean(v.as_bool()?)
     };
 
     Some(Filters {

@@ -18,6 +18,7 @@ mod redis_utils;
 mod turbopuffer;
 mod valkey;
 mod vectorsets;
+mod vertex;
 mod weaviate;
 mod weaviate_grpc;
 
@@ -35,6 +36,7 @@ pub use redis::RedisEngine;
 pub use turbopuffer::TurbopufferEngine;
 pub use valkey::ValkeyEngine;
 pub use vectorsets::VectorSetsEngine;
+pub use vertex::VertexEngine;
 pub use weaviate::WeaviateEngine;
 
 /// Upload statistics
@@ -307,8 +309,9 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
         "valkey" => Ok(Box::new(ValkeyEngine::new(engine_config, host)?)),
         "turbopuffer" => Ok(Box::new(TurbopufferEngine::new(engine_config, host)?)),
         "dragonfly" => Ok(Box::new(DragonflyEngine::new(engine_config, host)?)),
+        "vertex" => Ok(Box::new(VertexEngine::new(engine_config, host)?)),
         other => Err(format!(
-            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer', 'dragonfly'.",
+            "Unsupported engine type: '{}'. Supported: 'redis', 'vectorsets', 'elasticsearch', 'opensearch', 'qdrant', 'weaviate', 'pgvector', 'milvus', 'mongodb', 'valkey', 'turbopuffer', 'dragonfly', 'vertex'.",
             other
         )),
     }

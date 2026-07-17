@@ -60,6 +60,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "valkey",
         "turbopuffer",
         "dragonfly",
+        "vertex",
     ];
     let mut engines: Vec<_> = engine_configs
         .iter()
