@@ -59,6 +59,12 @@ pub struct SearchParams {
     pub search_params: Option<InnerSearchParams>,
     pub top: Option<i64>,
     pub num_candidates: Option<i64>,
+    /// Fixed offered rate for an open-loop run. None keeps closed-loop behavior.
+    pub target_qps: Option<f64>,
+    /// Open-loop measurement duration. Queries recycle when the dataset is shorter.
+    pub duration_seconds: Option<f64>,
+    /// Requests dispatched later than this are dropped and counted.
+    pub max_lateness_ms: Option<f64>,
     /// Calibration: name of the search param to tune (e.g., "ef")
     pub calibration_param: Option<String>,
     /// Calibration: target precision to achieve

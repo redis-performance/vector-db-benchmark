@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -17,7 +17,9 @@ use redis::Connection;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
+use crate::engine::{
+    attach_open_loop_metrics, Engine, OpenLoopPlan, SearchResults, UpdateSearchRatio, UploadStats,
+};
 use crate::metrics::compute_metrics;
 use vector_db_benchmark::parsers::{datetime_to_epoch_secs, parse_ft_search_response};
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
@@ -1523,6 +1525,9 @@ impl Engine for RedisEngine {
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
+        if queries.is_empty() {
+            return Err("dataset contains no search queries".to_string());
+        }
 
         // Parse all conditions up front (before timing begins)
         let parsed_filters: Vec<Option<ParsedFilter>> = conditions
@@ -1534,11 +1539,14 @@ impl Engine for RedisEngine {
         // When not set, use per-query ground truth count (matches Python v0 behavior
         // where top defaults to len(query.expected_result) per query).
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
-        let num_to_run = if num_queries > 0 {
-            (num_queries as usize).min(queries.len())
-        } else {
-            queries.len()
-        };
+        let open_loop = OpenLoopPlan::from_params(params)?;
+        let num_to_run = open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
+            if num_queries > 0 {
+                (num_queries as usize).min(queries.len())
+            } else {
+                queries.len()
+            }
+        });
 
         // Precompute all client-side request construction BEFORE the timed
         // region so the per-query timed window wraps ONLY the RPC round-trip +
@@ -1567,13 +1575,24 @@ impl Engine for RedisEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
+        // Give workers time to establish their connections before the first
+        // independent arrival; setup is outside the measured open-loop window.
+        let start_time = if open_loop.is_some() {
+            Instant::now() + Duration::from_millis(500)
+        } else {
+            Instant::now()
+        };
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut mrs: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut nds: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut schedule_delays: Vec<f64> = Vec::new();
+        let mut end_to_end_latencies: Vec<f64> = Vec::new();
+        let mut dropped_queries = 0usize;
+        let mut late_queries = 0usize;
+        let query_count = queries.len();
 
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(parallel);
@@ -1596,15 +1615,19 @@ impl Engine for RedisEngine {
                     let mut r = Vec::new();
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
+                    let mut sd = Vec::new();
+                    let mut e2e = Vec::new();
+                    let mut dropped = 0usize;
+                    let mut late = 0usize;
                     let mut pb_pending: u64 = 0;
 
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => return (t, p, r, mr, nd, sd, e2e, dropped, late),
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => return (t, p, r, mr, nd, sd, e2e, dropped, late),
                     };
 
                     loop {
@@ -1612,11 +1635,33 @@ impl Engine for RedisEngine {
                         if idx >= num_to_run {
                             break;
                         }
+                        let query_pos = idx % query_count;
+
+                        let scheduled_at = open_loop.map(|plan| {
+                            let delay = plan.wait_for_slot(start_time, idx);
+                            sd.push(delay.as_secs_f64());
+                            if plan.is_late(delay) {
+                                late += 1;
+                            }
+                            (
+                                plan.scheduled_at(start_time, idx),
+                                delay > plan.max_lateness,
+                            )
+                        });
+                        if scheduled_at.map(|(_, drop)| drop).unwrap_or(false) {
+                            dropped += 1;
+                            pb_pending += 1;
+                            if pb_pending >= 256 {
+                                pb.inc(pb_pending);
+                                pb_pending = 0;
+                            }
+                            continue;
+                        }
 
                         // Per-query top: use explicit top if set, otherwise
                         // use ground truth count (matches Python v0 behavior)
                         let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
+                            let n = neighbors[query_pos].len();
                             if n > 0 {
                                 n
                             } else {
@@ -1629,16 +1674,17 @@ impl Engine for RedisEngine {
                         let query_start = Instant::now();
                         let results = ft_search_knn(
                             &mut conn,
-                            &encoded_queries[idx],
-                            &query_strs[idx],
+                            &encoded_queries[query_pos],
+                            &query_strs[query_pos],
                             top,
                             ef,
                             &algorithm,
                             &hybrid_policy,
                             query_timeout,
-                            parsed_filters[idx].as_ref(),
+                            parsed_filters[query_pos].as_ref(),
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
+                        let completion = Instant::now();
 
                         // Record latency + quality only for successful queries. A
                         // failed query is surfaced and counted (as num_to_run minus
@@ -1648,12 +1694,19 @@ impl Engine for RedisEngine {
                             Ok(result_ids) => {
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                let m = compute_metrics(&ordered_ids, &neighbors[query_pos], top);
                                 t.push(query_time);
                                 p.push(m.precision);
                                 r.push(m.recall);
                                 mr.push(m.mrr);
                                 nd.push(m.ndcg);
+                                if let Some((scheduled, _)) = scheduled_at {
+                                    e2e.push(
+                                        completion
+                                            .saturating_duration_since(scheduled)
+                                            .as_secs_f64(),
+                                    );
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1670,17 +1723,21 @@ impl Engine for RedisEngine {
                     if pb_pending > 0 {
                         pb.inc(pb_pending);
                     }
-                    (t, p, r, mr, nd)
+                    (t, p, r, mr, nd, sd, e2e, dropped, late)
                 }));
             }
 
             for h in handles {
-                let (t, p, r, mr, nd) = h.join().unwrap();
+                let (t, p, r, mr, nd, sd, e2e, dropped, late) = h.join().unwrap();
                 times.extend(t);
                 precs.extend(p);
                 recs.extend(r);
                 mrs.extend(mr);
                 nds.extend(nd);
+                schedule_delays.extend(sd);
+                end_to_end_latencies.extend(e2e);
+                dropped_queries += dropped;
+                late_queries += late;
             }
         });
 
@@ -1701,9 +1758,30 @@ impl Engine for RedisEngine {
         )?;
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
-        crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrs, &nds, total_time, top, parallel, num_to_run,
-        )
+        let attempted_queries = num_to_run.saturating_sub(dropped_queries);
+        let mut results = crate::engine::compute_search_stats(
+            &times,
+            &precs,
+            &recs,
+            &mrs,
+            &nds,
+            total_time,
+            top,
+            parallel,
+            attempted_queries,
+        )?;
+        // In open-loop mode, drops are distinct from attempted request failures.
+        if let Some(plan) = open_loop {
+            attach_open_loop_metrics(
+                &mut results,
+                plan,
+                &schedule_delays,
+                &end_to_end_latencies,
+                dropped_queries,
+                late_queries,
+            );
+        }
+        Ok(results)
     }
 
     fn search_mixed(

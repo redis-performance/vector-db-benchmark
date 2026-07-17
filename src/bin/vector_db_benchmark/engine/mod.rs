@@ -24,6 +24,7 @@ mod weaviate_grpc;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
+use std::time::{Duration, Instant};
 
 pub use dragonfly::DragonflyEngine;
 pub use elasticsearch::ElasticsearchEngine;
@@ -98,6 +99,17 @@ pub struct SearchResults {
     pub system_cpu_pct: Option<f64>,
     pub client_saturated: bool,
     pub saturation_reason: String,
+    // Open-loop offered-load coverage. None/empty in the original closed-loop mode.
+    pub target_qps: Option<f64>,
+    pub offered_queries: Option<usize>,
+    pub dropped_queries: usize,
+    pub late_queries: usize,
+    pub schedule_delay_p50_time: Option<f64>,
+    pub schedule_delay_p95_time: Option<f64>,
+    pub schedule_delay_p99_time: Option<f64>,
+    pub end_to_end_p50_time: Option<f64>,
+    pub end_to_end_p95_time: Option<f64>,
+    pub end_to_end_p99_time: Option<f64>,
     // Mixed benchmark update metrics (None when search-only)
     pub update_count: Option<usize>,
     pub update_rps: Option<f64>,
@@ -107,6 +119,100 @@ pub struct SearchResults {
     pub update_p99_time: Option<f64>,
     pub update_latencies: Option<Vec<f64>>,
     pub update_search_ratio: Option<String>,
+}
+
+/// Deterministic arrival schedule for fixed-rate, open-loop search.
+#[derive(Debug, Clone, Copy)]
+pub struct OpenLoopPlan {
+    pub target_qps: f64,
+    pub total_requests: usize,
+    pub max_lateness: Duration,
+    late_threshold: Duration,
+}
+
+impl OpenLoopPlan {
+    /// Build a plan from search parameters. Returns None for legacy closed-loop runs.
+    pub fn from_params(params: &SearchParams) -> Result<Option<Self>, String> {
+        let Some(target_qps) = params.target_qps else {
+            return Ok(None);
+        };
+        let duration_seconds = params
+            .duration_seconds
+            .ok_or("open-loop search requires duration_seconds (use --search-duration)")?;
+        let max_lateness_ms = params.max_lateness_ms.unwrap_or(1000.0);
+        if !target_qps.is_finite() || target_qps <= 0.0 {
+            return Err("target_qps must be finite and greater than zero".to_string());
+        }
+        if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+            return Err("duration_seconds must be finite and greater than zero".to_string());
+        }
+        if !max_lateness_ms.is_finite() || max_lateness_ms < 0.0 {
+            return Err("max_lateness_ms must be finite and non-negative".to_string());
+        }
+        let total_f = (target_qps * duration_seconds).round();
+        if !total_f.is_finite() || total_f < 1.0 || total_f > usize::MAX as f64 {
+            return Err("target_qps * duration_seconds is outside the supported range".to_string());
+        }
+        // A request is reported as late after two arrival intervals, with a 1 ms
+        // floor to avoid treating normal scheduler jitter as overload.
+        let late_threshold = Duration::from_secs_f64((2.0 / target_qps).max(0.001));
+        Ok(Some(Self {
+            target_qps,
+            total_requests: total_f as usize,
+            max_lateness: Duration::from_secs_f64(max_lateness_ms / 1000.0),
+            late_threshold,
+        }))
+    }
+
+    pub fn scheduled_at(&self, start: Instant, ordinal: usize) -> Instant {
+        start + Duration::from_secs_f64(ordinal as f64 / self.target_qps)
+    }
+
+    /// Wait until this request's independent arrival time and return dispatch delay.
+    pub fn wait_for_slot(&self, start: Instant, ordinal: usize) -> Duration {
+        let scheduled = self.scheduled_at(start, ordinal);
+        let now = Instant::now();
+        if now < scheduled {
+            std::thread::sleep(scheduled.duration_since(now));
+        }
+        Instant::now().saturating_duration_since(scheduled)
+    }
+
+    pub fn is_late(&self, delay: Duration) -> bool {
+        delay > self.late_threshold
+    }
+}
+
+/// Add open-loop queueing/arrival metrics without changing closed-loop statistics.
+pub fn attach_open_loop_metrics(
+    results: &mut SearchResults,
+    plan: OpenLoopPlan,
+    schedule_delays: &[f64],
+    end_to_end_latencies: &[f64],
+    dropped_queries: usize,
+    late_queries: usize,
+) {
+    let percentiles = |values: &[f64]| -> (f64, f64, f64) {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        (
+            percentile_linear(&sorted, 0.50),
+            percentile_linear(&sorted, 0.95),
+            percentile_linear(&sorted, 0.99),
+        )
+    };
+    let (sd50, sd95, sd99) = percentiles(schedule_delays);
+    let (e2e50, e2e95, e2e99) = percentiles(end_to_end_latencies);
+    results.target_qps = Some(plan.target_qps);
+    results.offered_queries = Some(plan.total_requests);
+    results.dropped_queries = dropped_queries;
+    results.late_queries = late_queries;
+    results.schedule_delay_p50_time = Some(sd50);
+    results.schedule_delay_p95_time = Some(sd95);
+    results.schedule_delay_p99_time = Some(sd99);
+    results.end_to_end_p50_time = Some(e2e50);
+    results.end_to_end_p95_time = Some(e2e95);
+    results.end_to_end_p99_time = Some(e2e99);
 }
 
 /// `numpy.percentile` with linear interpolation — the method v0 uses
@@ -319,7 +425,8 @@ pub fn create_engine(engine_config: &EngineConfig, host: &str) -> Result<Box<dyn
 
 #[cfg(test)]
 mod stats_tests {
-    use super::compute_search_stats;
+    use super::{attach_open_loop_metrics, compute_search_stats, OpenLoopPlan};
+    use crate::config::SearchParams;
 
     #[test]
     fn empty_times_errors() {
@@ -393,5 +500,55 @@ mod stats_tests {
         assert!((r.p95_time - 95.05).abs() < 1e-9, "p95={}", r.p95_time);
         assert!((r.p50_time - 50.5).abs() < 1e-9, "p50={}", r.p50_time);
         assert!(r.p99_time < 100.0, "p99={} must be below max", r.p99_time);
+    }
+
+    #[test]
+    fn open_loop_plan_validates_and_counts_arrivals() {
+        let params: SearchParams = serde_json::from_value(serde_json::json!({
+            "parallel": 32,
+            "target_qps": 1500.0,
+            "duration_seconds": 2.0,
+            "max_lateness_ms": 250.0
+        }))
+        .unwrap();
+        let plan = OpenLoopPlan::from_params(&params).unwrap().unwrap();
+        assert_eq!(plan.total_requests, 3000);
+        assert_eq!(plan.target_qps, 1500.0);
+        assert_eq!(plan.max_lateness.as_millis(), 250);
+
+        let missing_duration: SearchParams = serde_json::from_value(serde_json::json!({
+            "target_qps": 100.0
+        }))
+        .unwrap();
+        assert!(OpenLoopPlan::from_params(&missing_duration).is_err());
+    }
+
+    #[test]
+    fn open_loop_metrics_preserve_service_latency_and_add_queueing() {
+        let params: SearchParams = serde_json::from_value(serde_json::json!({
+            "target_qps": 10.0,
+            "duration_seconds": 1.0
+        }))
+        .unwrap();
+        let plan = OpenLoopPlan::from_params(&params).unwrap().unwrap();
+        let ones = vec![1.0, 1.0];
+        let mut results =
+            compute_search_stats(&[0.010, 0.020], &ones, &ones, &ones, &ones, 1.0, 10, 2, 2)
+                .unwrap();
+        attach_open_loop_metrics(
+            &mut results,
+            plan,
+            &[0.001, 0.003, 0.5],
+            &[0.011, 0.023],
+            1,
+            1,
+        );
+        assert_eq!(results.target_qps, Some(10.0));
+        assert_eq!(results.offered_queries, Some(10));
+        assert_eq!(results.dropped_queries, 1);
+        assert_eq!(results.late_queries, 1);
+        assert_eq!(results.p50_time, 0.015);
+        assert!(results.schedule_delay_p95_time.unwrap() > 0.4);
+        assert_eq!(results.end_to_end_p50_time, Some(0.017));
     }
 }

@@ -30,6 +30,31 @@ fn results_dir() -> PathBuf {
 pub fn run(args: &Args) -> Result<(), String> {
     println!("vector-db-benchmark v{}", env!("CARGO_PKG_VERSION"));
 
+    if args.target_qps != 0.0 {
+        if !args.target_qps.is_finite() || args.target_qps <= 0.0 {
+            return Err("--target-qps must be finite and greater than zero".to_string());
+        }
+        if !args.search_duration.is_finite() || args.search_duration <= 0.0 {
+            return Err(
+                "--search-duration is required and must be greater than zero with --target-qps"
+                    .to_string(),
+            );
+        }
+        if !args.warmup_seconds.is_finite() || args.warmup_seconds < 0.0 {
+            return Err("--warmup-seconds must be finite and non-negative".to_string());
+        }
+        if !args.max_lateness_ms.is_finite() || args.max_lateness_ms < 0.0 {
+            return Err("--max-lateness-ms must be finite and non-negative".to_string());
+        }
+        if args.skip_vector_index || !args.update_search_ratio.is_empty() {
+            return Err(
+                "--target-qps currently supports search-only vector benchmarks".to_string(),
+            );
+        }
+    } else if args.search_duration != 0.0 || args.warmup_seconds != 0.0 {
+        return Err("--search-duration/--warmup-seconds require --target-qps".to_string());
+    }
+
     let dataset_configs = read_dataset_configs()?;
     let engine_configs = read_engine_configs()?;
 
@@ -77,6 +102,22 @@ pub fn run(args: &Args) -> Result<(), String> {
             args.engines.join(", "),
             supported_engines
         ));
+    }
+
+    if args.target_qps > 0.0 {
+        let unsupported: Vec<_> = engines
+            .iter()
+            .filter_map(|(name, config)| {
+                let engine_type = config.engine.as_deref().unwrap_or("unknown");
+                (!matches!(engine_type, "redis" | "vertex")).then_some(name.as_str())
+            })
+            .collect();
+        if !unsupported.is_empty() {
+            return Err(format!(
+                "--target-qps currently supports Redis and Vertex only; unsupported: {}",
+                unsupported.join(", ")
+            ));
+        }
     }
 
     // --skip-vector-index: deduplicate engine configs by engine type.
@@ -433,7 +474,14 @@ fn run_single_experiment(
                     None
                 };
 
-                let effective_params = calibrated_params.as_ref().unwrap_or(search_params);
+                let base_params = calibrated_params.as_ref().unwrap_or(search_params);
+                let mut runtime_params = base_params.clone();
+                if args.target_qps > 0.0 {
+                    runtime_params.target_qps = Some(args.target_qps);
+                    runtime_params.duration_seconds = Some(args.search_duration);
+                    runtime_params.max_lateness_ms = Some(args.max_lateness_ms);
+                }
+                let effective_params = &runtime_params;
                 let effective_ef = if skip_vector_index {
                     "n/a".to_string()
                 } else {
@@ -455,6 +503,18 @@ fn run_single_experiment(
                         "\tRunning search {}: ef={}, parallel={}",
                         search_id, effective_ef, parallel
                     );
+                }
+
+                if args.target_qps > 0.0 && args.warmup_seconds > 0.0 {
+                    let mut warmup_params = effective_params.clone();
+                    warmup_params.duration_seconds = Some(args.warmup_seconds);
+                    println!(
+                        "\tOpen-loop warm-up: {:.1} QPS for {:.1}s",
+                        args.target_qps, args.warmup_seconds
+                    );
+                    engine
+                        .search(dataset, &warmup_params, args.queries)
+                        .map_err(|e| format!("open-loop warm-up failed: {}", e))?;
                 }
 
                 // Run the measured search `repetitions` times and keep the
@@ -535,6 +595,22 @@ fn run_single_experiment(
                                 results.requested_queries,
                                 results.num_queries,
                             );
+                        }
+                        if let Some(target_qps) = results.target_qps {
+                            println!(
+                                "\t  offered {:.1} QPS; dropped {}; late {}; schedule p95 {:.3} ms; end-to-end p95 {:.3} ms",
+                                target_qps,
+                                results.dropped_queries,
+                                results.late_queries,
+                                results.schedule_delay_p95_time.unwrap_or_default() * 1000.0,
+                                results.end_to_end_p95_time.unwrap_or_default() * 1000.0,
+                            );
+                            if results.dropped_queries > 0 {
+                                eprintln!(
+                                    "\t⚠ WARNING: {} offered requests were dropped after exceeding the dispatch-lateness limit",
+                                    results.dropped_queries
+                                );
+                            }
                         }
                         // Flag client-side saturation: when the benchmark client is
                         // the bottleneck the QPS/latency above are not clean
@@ -721,6 +797,9 @@ fn save_search_results(
             "parallel": search_params.parallel.unwrap_or(1),
             "top": results.top,
             "search_params": search_params.search_params,
+            "target_qps": search_params.target_qps,
+            "duration_seconds": search_params.duration_seconds,
+            "max_lateness_ms": search_params.max_lateness_ms,
         },
         "results": {
             "total_time": results.total_time,
@@ -743,6 +822,16 @@ fn save_search_results(
             "system_cpu_pct": results.system_cpu_pct,
             "client_saturated": results.client_saturated,
             "saturation_reason": results.saturation_reason,
+            "target_qps": results.target_qps,
+            "offered_queries": results.offered_queries,
+            "dropped_queries": results.dropped_queries,
+            "late_queries": results.late_queries,
+            "schedule_delay_p50_time": results.schedule_delay_p50_time,
+            "schedule_delay_p95_time": results.schedule_delay_p95_time,
+            "schedule_delay_p99_time": results.schedule_delay_p99_time,
+            "end_to_end_p50_time": results.end_to_end_p50_time,
+            "end_to_end_p95_time": results.end_to_end_p95_time,
+            "end_to_end_p99_time": results.end_to_end_p99_time,
             "mean_precisions": results.mean_precision,
             "mean_recall": results.mean_recall,
             "mean_mrr": results.mean_mrr,

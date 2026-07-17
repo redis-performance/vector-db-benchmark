@@ -21,14 +21,14 @@
 //! start of each phase (and once before the timed search region).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::{Engine, SearchResults, UploadStats};
+use crate::engine::{attach_open_loop_metrics, Engine, OpenLoopPlan, SearchResults, UploadStats};
 
 const DEFAULT_REGION: &str = "us-central1";
 const DEFAULT_MACHINE_TYPE: &str = "e2-standard-16";
@@ -170,6 +170,29 @@ fn parse_find_neighbors_response(resp: &serde_json::Value) -> Vec<i64> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn execute_find_neighbors(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<Vec<i64>, String> {
+    let resp = client
+        .post(url)
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "{}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    Ok(parse_find_neighbors_response(&json))
 }
 
 /// Inspect a long-running-operation reply: `Ok(Some(response))` when done,
@@ -650,20 +673,26 @@ impl Engine for VertexEngine {
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, _conditions) = dataset.read_queries()?;
+        if queries.is_empty() {
+            return Err("dataset contains no search queries".to_string());
+        }
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
-        let num_to_run = if num_queries > 0 {
-            (num_queries as usize).min(queries.len())
-        } else {
-            queries.len()
-        };
+        let open_loop = OpenLoopPlan::from_params(params)?;
+        let num_to_run = open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
+            if num_queries > 0 {
+                (num_queries as usize).min(queries.len())
+            } else {
+                queries.len()
+            }
+        });
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
 
-        if neighbors.len() < num_to_run {
+        if neighbors.len() < queries.len() {
             return Err(format!(
-                "dataset misaligned: {} neighbor lists for {} queries to run",
+                "dataset misaligned: {} neighbor lists for {} dataset queries",
                 neighbors.len(),
-                num_to_run
+                queries.len()
             ));
         }
 
@@ -695,7 +724,9 @@ impl Engine for VertexEngine {
         let workers = parallel.min(num_to_run.max(1));
         let query_idx = Arc::new(AtomicUsize::new(0));
         let pb = self.create_progress_bar(num_to_run);
-        let total_start = Instant::now();
+        let closed_loop_start = Instant::now();
+        let open_loop_start = Arc::new(OnceLock::<Instant>::new());
+        let worker_ready = Arc::new(Barrier::new(workers + 1));
 
         let queries = &queries;
         let neighbors = &neighbors;
@@ -707,18 +738,29 @@ impl Engine for VertexEngine {
         let mut recalls: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut mrrs: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut ndcgs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let mut schedule_delays: Vec<f64> = Vec::new();
+        let mut end_to_end_latencies: Vec<f64> = Vec::new();
+        let mut dropped_queries = 0usize;
+        let mut late_queries = 0usize;
 
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(workers);
-            for _ in 0..workers {
+            for worker_id in 0..workers {
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
+                let open_loop_start = Arc::clone(&open_loop_start);
+                let worker_ready = Arc::clone(&worker_ready);
                 handles.push(s.spawn(move || {
                     let mut t = Vec::new();
                     let mut p = Vec::new();
                     let mut r = Vec::new();
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
+                    let mut sd = Vec::new();
+                    let mut e2e = Vec::new();
+                    let mut dropped = 0usize;
+                    let mut late = 0usize;
+                    let mut pb_pending: u64 = 0;
 
                     let client = match reqwest::blocking::Client::builder()
                         .timeout(Duration::from_secs(60))
@@ -727,8 +769,39 @@ impl Engine for VertexEngine {
                         Ok(c) => c,
                         Err(e) => {
                             eprintln!("Vertex worker client build failed: {}", e);
-                            return (t, p, r, mr, nd);
+                            if open_loop.is_some() {
+                                worker_ready.wait();
+                            }
+                            return (t, p, r, mr, nd, sd, e2e, dropped, late);
                         }
+                    };
+
+                    // reqwest establishes TCP/TLS lazily on first use. Prime each
+                    // persistent worker connection before starting the shared
+                    // arrival clock so setup cannot masquerade as queueing delay.
+                    if open_loop.is_some() {
+                        let prime_pos = worker_id % queries.len();
+                        let prime_body = build_find_neighbors_body(
+                            deployed_index_id,
+                            &queries[prime_pos],
+                            top,
+                            fraction_leaf_override,
+                        );
+                        if let Err(e) = execute_find_neighbors(&client, url, token, &prime_body) {
+                            eprintln!("Vertex worker connection prime failed: {}", e);
+                        }
+                        worker_ready.wait();
+                    }
+
+                    let schedule_start = if open_loop.is_some() {
+                        loop {
+                            if let Some(start) = open_loop_start.get() {
+                                break *start;
+                            }
+                            std::thread::yield_now();
+                        }
+                    } else {
+                        closed_loop_start
                     };
 
                     loop {
@@ -736,41 +809,48 @@ impl Engine for VertexEngine {
                         if idx >= num_to_run {
                             break;
                         }
+                        let query_pos = idx % queries.len();
                         let body = build_find_neighbors_body(
                             deployed_index_id,
-                            &queries[idx],
+                            &queries[query_pos],
                             top,
                             fraction_leaf_override,
                         );
+
+                        let scheduled_at = open_loop.map(|plan| {
+                            let delay = plan.wait_for_slot(schedule_start, idx);
+                            sd.push(delay.as_secs_f64());
+                            if plan.is_late(delay) {
+                                late += 1;
+                            }
+                            (
+                                plan.scheduled_at(schedule_start, idx),
+                                delay > plan.max_lateness,
+                            )
+                        });
+                        if scheduled_at.map(|(_, drop)| drop).unwrap_or(false) {
+                            dropped += 1;
+                            pb_pending += 1;
+                            if pb_pending >= 256 {
+                                pb.inc(pb_pending);
+                                pb_pending = 0;
+                            }
+                            continue;
+                        }
 
                         // Timed window: RPC round-trip + reply parse only. The
                         // request body is built above (client-side work), matching
                         // the other engines' boundary.
                         let start = Instant::now();
-                        let outcome: Result<Vec<i64>, String> = (|| {
-                            let resp = client
-                                .post(url)
-                                .bearer_auth(token)
-                                .json(&body)
-                                .send()
-                                .map_err(|e| e.to_string())?;
-                            if !resp.status().is_success() {
-                                return Err(format!(
-                                    "{}: {}",
-                                    resp.status(),
-                                    resp.text().unwrap_or_default()
-                                ));
-                            }
-                            let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-                            Ok(parse_find_neighbors_response(&json))
-                        })();
+                        let outcome = execute_find_neighbors(&client, url, token, &body);
                         let elapsed = start.elapsed().as_secs_f64();
+                        let completion = Instant::now();
 
                         match outcome {
                             Ok(result_ids) => {
                                 let m = crate::metrics::compute_metrics(
                                     &result_ids,
-                                    &neighbors[idx],
+                                    &neighbors[query_pos],
                                     top,
                                 );
                                 t.push(elapsed);
@@ -778,37 +858,64 @@ impl Engine for VertexEngine {
                                 r.push(m.recall);
                                 mr.push(m.mrr);
                                 nd.push(m.ndcg);
+                                if let Some((scheduled, _)) = scheduled_at {
+                                    e2e.push(
+                                        completion
+                                            .saturating_duration_since(scheduled)
+                                            .as_secs_f64(),
+                                    );
+                                }
                             }
                             Err(e) => eprintln!("Search query {} failed: {}", idx, e),
                         }
-                        pb.inc(1);
+                        pb_pending += 1;
+                        if pb_pending >= 256 {
+                            pb.inc(pb_pending);
+                            pb_pending = 0;
+                        }
                     }
-                    (t, p, r, mr, nd)
+                    if pb_pending > 0 {
+                        pb.inc(pb_pending);
+                    }
+                    (t, p, r, mr, nd, sd, e2e, dropped, late)
                 }));
             }
+            if open_loop.is_some() {
+                worker_ready.wait();
+                let _ = open_loop_start.set(Instant::now() + Duration::from_millis(100));
+            }
             for h in handles {
-                let (t, p, r, mr, nd) = h.join().unwrap();
+                let (t, p, r, mr, nd, sd, e2e, dropped, late) = h.join().unwrap();
                 latencies.extend(t);
                 precisions.extend(p);
                 recalls.extend(r);
                 mrrs.extend(mr);
                 ndcgs.extend(nd);
+                schedule_delays.extend(sd);
+                end_to_end_latencies.extend(e2e);
+                dropped_queries += dropped;
+                late_queries += late;
             }
         });
 
         pb.finish_and_clear();
+        let total_start = open_loop_start.get().copied().unwrap_or(closed_loop_start);
         let total_time = total_start.elapsed().as_secs_f64();
 
         let succeeded = latencies.len();
         if succeeded == 0 {
             return Err("No searches completed (all queries failed)".to_string());
         }
-        let failed = num_to_run - succeeded;
+        let attempted_queries = num_to_run.saturating_sub(dropped_queries);
+        let failed = attempted_queries - succeeded;
         if failed > 0 {
-            eprintln!("WARNING: {} of {} queries failed", failed, num_to_run);
+            eprintln!(
+                "WARNING: {} of {} attempted queries failed",
+                failed, attempted_queries
+            );
         }
 
-        crate::engine::compute_search_stats(
+        let mut results = crate::engine::compute_search_stats(
             &latencies,
             &precisions,
             &recalls,
@@ -817,8 +924,19 @@ impl Engine for VertexEngine {
             total_time,
             top,
             parallel,
-            num_to_run,
-        )
+            attempted_queries,
+        )?;
+        if let Some(plan) = open_loop {
+            attach_open_loop_metrics(
+                &mut results,
+                plan,
+                &schedule_delays,
+                &end_to_end_latencies,
+                dropped_queries,
+                late_queries,
+            );
+        }
+        Ok(results)
     }
 
     fn delete(&mut self) -> Result<(), String> {
