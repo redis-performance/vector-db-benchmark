@@ -32,6 +32,38 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 <a id="vertex-note"></a>
 \*\*\*\* **Vertex AI note:** Uses **Vertex AI Vector Search** (Google Cloud) via the REST API — a STREAM_UPDATE tree-AH index streamed with `upsertDatapoints`, queried with `findNeighbors` against a public index endpoint. This engine implements **pure vector KNN only** — no metadata filters, no mixed workload. Cloud-only (no local server), like Turbopuffer. Required: `VERTEX_PROJECT`; auth is `VERTEX_ACCESS_TOKEN` if set, else `gcloud auth print-access-token`. Optional: `VERTEX_REGION` (default `us-central1`), `VERTEX_MACHINE_TYPE` (default `e2-standard-16`), `VERTEX_DEPLOY_TIMEOUT_SECS` (default `3600`), and index-tuning knobs `VERTEX_APPROX_NEIGHBORS` / `VERTEX_LEAF_EMBEDDING_COUNT` / `VERTEX_LEAF_SEARCH_PERCENT`. **Deploying an index takes tens of minutes**; to skip the create+deploy step, point at an already-deployed index with `VERTEX_INDEX`, `VERTEX_INDEX_ENDPOINT`, and `VERTEX_DEPLOYED_INDEX_ID` (in that case the tool leaves those resources in place on cleanup). Query-time recall/latency is tuned per search config via `search_params.fraction_leaf_nodes_to_search_override` (0..1). Upload streams `upsertDatapoints` concurrently (`upload_params.parallel`); each `upsertDatapoints` request is bounded by payload size, so **very wide datasets may need a smaller `batch_size`** than the default 1000 to stay under the request limit.
 
+<details>
+<summary><b>Runbook: benchmarking against Vertex AI</b></summary>
+
+```bash
+# 1. Auth + enable the API (once per project).
+gcloud config set project <your-project>
+gcloud services enable aiplatform.googleapis.com
+export VERTEX_PROJECT=<your-project>
+export VERTEX_REGION=us-central1
+# VERTEX_MACHINE_TYPE defaults to e2-standard-16 (the smallest type the default
+# shard size accepts — e2-standard-2 is rejected at deploy).
+
+# 2. Full run — creates + DEPLOYS a fresh index (slow, ~30-40 min), uploads,
+#    searches, then tears the resources back down.
+vector-db-benchmark --engines vertex-default --datasets random-100 --skip-if-exists false
+
+# 3. Fast iteration — reuse an already-deployed index and skip the deploy.
+#    (grab the ids the first run printed; cleanup then LEAVES them in place)
+export VERTEX_INDEX=projects/P/locations/us-central1/indexes/ID
+export VERTEX_INDEX_ENDPOINT=projects/P/locations/us-central1/indexEndpoints/EID
+export VERTEX_DEPLOYED_INDEX_ID=vdb_benchmark_deployed
+vector-db-benchmark --engines vertex-default --datasets random-100 --skip-if-exists false
+```
+
+The gated `integration_vertex` test drives this same flow and asserts a recall floor; it self-skips unless `VERTEX_PROJECT` is set:
+
+```bash
+VERTEX_PROJECT=<your-project> \
+  cargo test --test integration_vertex --release -- --nocapture
+```
+</details>
+
 ```
 docker run --rm --network=host redis/vector-db-benchmark:latest \
   --host localhost --engines 'redis-single*' --datasets glove-25-angular

@@ -62,7 +62,10 @@ fn vertex_distance_measure(distance: &str) -> &'static str {
     }
 }
 
-/// Body for `indexes.create` — a STREAM_UPDATE tree-AH index.
+/// Body for `indexes.create` — a STREAM_UPDATE tree-AH index. `shard_size`
+/// (e.g. `SHARD_SIZE_SMALL`) constrains which deploy machine types are valid:
+/// the default `SHARD_SIZE_MEDIUM` requires `e2-standard-16`+, while
+/// `SHARD_SIZE_SMALL` allows smaller machines. Omitted when `None`.
 fn build_index_body(
     display_name: &str,
     dimensions: i64,
@@ -70,23 +73,26 @@ fn build_index_body(
     approx_neighbors: i64,
     leaf_embedding_count: i64,
     leaf_search_percent: i64,
+    shard_size: Option<&str>,
 ) -> serde_json::Value {
+    let mut config = serde_json::json!({
+        "dimensions": dimensions,
+        "approximateNeighborsCount": approx_neighbors,
+        "distanceMeasureType": distance_measure,
+        "algorithmConfig": {
+            "treeAhConfig": {
+                "leafNodeEmbeddingCount": leaf_embedding_count.to_string(),
+                "leafNodesToSearchPercent": leaf_search_percent,
+            }
+        }
+    });
+    if let Some(shard) = shard_size {
+        config["shardSize"] = serde_json::json!(shard);
+    }
     serde_json::json!({
         "displayName": display_name,
         "indexUpdateMethod": "STREAM_UPDATE",
-        "metadata": {
-            "config": {
-                "dimensions": dimensions,
-                "approximateNeighborsCount": approx_neighbors,
-                "distanceMeasureType": distance_measure,
-                "algorithmConfig": {
-                    "treeAhConfig": {
-                        "leafNodeEmbeddingCount": leaf_embedding_count.to_string(),
-                        "leafNodesToSearchPercent": leaf_search_percent,
-                    }
-                }
-            }
-        }
+        "metadata": { "config": config },
     })
 }
 
@@ -199,6 +205,7 @@ pub struct VertexEngine {
     approx_neighbors: i64,
     leaf_embedding_count: i64,
     leaf_search_percent: i64,
+    shard_size: Option<String>,
     // Populated during configure().
     index_name: String,
     index_endpoint_name: String,
@@ -267,6 +274,9 @@ impl VertexEngine {
                 DEFAULT_LEAF_EMBEDDING_COUNT,
             ),
             leaf_search_percent: env_i64("VERTEX_LEAF_SEARCH_PERCENT", DEFAULT_LEAF_SEARCH_PERCENT),
+            shard_size: std::env::var("VERTEX_SHARD_SIZE")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
             index_name: String::new(),
             index_endpoint_name: String::new(),
             deployed_index_id: String::new(),
@@ -419,6 +429,7 @@ impl Engine for VertexEngine {
                 self.approx_neighbors,
                 self.leaf_embedding_count,
                 self.leaf_search_percent,
+                self.shard_size.as_deref(),
             );
             let op = self.post_json(
                 &format!("{}/{}/indexes", self.base_url(), self.parent()),
@@ -895,7 +906,7 @@ mod tests {
 
     #[test]
     fn index_body_is_stream_update_tree_ah() {
-        let b = build_index_body("bench", 768, "COSINE_DISTANCE", 150, 500, 7);
+        let b = build_index_body("bench", 768, "COSINE_DISTANCE", 150, 500, 7, None);
         assert_eq!(b["indexUpdateMethod"], "STREAM_UPDATE");
         let cfg = &b["metadata"]["config"];
         assert_eq!(cfg["dimensions"], 768);
@@ -910,6 +921,18 @@ mod tests {
             cfg["algorithmConfig"]["treeAhConfig"]["leafNodesToSearchPercent"],
             7
         );
+        // shardSize omitted when None, set when Some.
+        assert!(cfg.get("shardSize").is_none());
+        let b2 = build_index_body(
+            "bench",
+            8,
+            "COSINE_DISTANCE",
+            150,
+            500,
+            7,
+            Some("SHARD_SIZE_SMALL"),
+        );
+        assert_eq!(b2["metadata"]["config"]["shardSize"], "SHARD_SIZE_SMALL");
     }
 
     #[test]
