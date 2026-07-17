@@ -137,10 +137,14 @@ fn build_find_neighbors_body(
     query: &[f32],
     top: usize,
     fraction_leaf_override: Option<f64>,
+    approximate_neighbor_count: Option<i64>,
 ) -> serde_json::Value {
     let mut datapoint = serde_json::json!({ "datapoint": { "featureVector": query } });
     if let Some(frac) = fraction_leaf_override {
         datapoint["fractionLeafNodesToSearchOverride"] = serde_json::json!(frac);
+    }
+    if let Some(count) = approximate_neighbor_count {
+        datapoint["approximateNeighborCount"] = serde_json::json!(count);
     }
     datapoint["neighborCount"] = serde_json::json!(top);
     serde_json::json!({
@@ -674,6 +678,7 @@ impl Engine for VertexEngine {
             .and_then(|sp| sp.extra.as_ref())
             .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
             .and_then(|v| v.as_f64());
+        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(1));
 
         println!(
             "\tRunning {} queries (top={}, parallel={})...",
@@ -741,6 +746,7 @@ impl Engine for VertexEngine {
                             &queries[idx],
                             top,
                             fraction_leaf_override,
+                            approximate_neighbor_count,
                         );
 
                         // Timed window: RPC round-trip + reply parse only. The
@@ -1005,16 +1011,18 @@ mod tests {
 
     #[test]
     fn find_neighbors_body_sets_count_and_optional_override() {
-        let b = build_find_neighbors_body("dep", &[1.0, 2.0], 10, None);
+        let b = build_find_neighbors_body("dep", &[1.0, 2.0], 10, None, None);
         assert_eq!(b["deployedIndexId"], "dep");
         assert_eq!(b["returnFullDatapoint"], false);
         let q = &b["queries"][0];
         assert_eq!(q["neighborCount"], 10);
         assert_eq!(q["datapoint"]["featureVector"], json!([1.0, 2.0]));
         assert!(q.get("fractionLeafNodesToSearchOverride").is_none());
+        assert!(q.get("approximateNeighborCount").is_none());
 
-        let b2 = build_find_neighbors_body("dep", &[1.0], 5, Some(0.2));
+        let b2 = build_find_neighbors_body("dep", &[1.0], 5, Some(0.2), Some(500));
         assert_eq!(b2["queries"][0]["fractionLeafNodesToSearchOverride"], 0.2);
+        assert_eq!(b2["queries"][0]["approximateNeighborCount"], 500);
     }
 
     #[test]
