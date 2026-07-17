@@ -866,6 +866,64 @@ impl Engine for VertexEngine {
         println!("Vertex resources deleted");
         Ok(())
     }
+
+    /// Post-upload footprint telemetry. Vertex is managed, so there is no
+    /// client-visible memory figure; instead report the index's stats (vector
+    /// count, shard count) from a describe. Best-effort, outside any timed
+    /// window; `None` before the index exists or if the describe fails.
+    fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
+        if self.index_name.is_empty() {
+            return None;
+        }
+        let token = self.access_token().ok()?;
+        let idx = self
+            .get_json(&format!("{}/{}", self.base_url(), self.index_name), &token)
+            .ok()?;
+        let stats = idx
+            .get("indexStats")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        Some(serde_json::json!({ "index_stats": stats }))
+    }
+
+    /// Reproducibility metadata: the deployment configuration (region, machine
+    /// type, shard size, distance measure, tree-AH params) and, once the index
+    /// exists, its resource names + a live describe (config + stats + deployment
+    /// state). Called before upload (resources still empty → static config only)
+    /// and after search. Telemetry only — captured outside every timed window.
+    fn server_metadata(&mut self) -> Option<serde_json::Value> {
+        let mut meta = serde_json::json!({
+            "engine": "vertex_ai_vector_search",
+            "project": self.project,
+            "region": self.region,
+            "machine_type": self.machine_type,
+            "shard_size": self.shard_size,
+            "distance_measure": self.distance_measure,
+            "index_algorithm": "tree_ah",
+            "approximate_neighbors_count": self.approx_neighbors,
+            "leaf_node_embedding_count": self.leaf_embedding_count,
+            "leaf_nodes_to_search_percent": self.leaf_search_percent,
+            "display_name": self.display_name,
+            "index": self.index_name,
+            "index_endpoint": self.index_endpoint_name,
+            "deployed_index_id": self.deployed_index_id,
+            "public_endpoint_domain": self.public_endpoint_domain,
+        });
+        // Enrich with a live index describe once the index exists (config +
+        // indexStats + deployedIndexes). Best-effort.
+        if !self.index_name.is_empty() {
+            if let Ok(token) = self.access_token() {
+                if let Ok(idx) =
+                    self.get_json(&format!("{}/{}", self.base_url(), self.index_name), &token)
+                {
+                    if let Some(obj) = meta.as_object_mut() {
+                        obj.insert("index_resource".to_string(), idx);
+                    }
+                }
+            }
+        }
+        Some(meta)
+    }
 }
 
 impl VertexEngine {
