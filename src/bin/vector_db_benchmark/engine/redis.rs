@@ -18,11 +18,16 @@ use redis::Connection;
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{
-    attach_open_loop_metrics, Engine, OpenLoopPlan, SearchResults, UpdateSearchRatio, UploadStats,
+    attach_open_loop_metrics, closed_loop_duration, Engine, OpenLoopPlan, SearchResults,
+    UpdateSearchRatio, UploadStats,
 };
 use crate::metrics::compute_metrics;
 use vector_db_benchmark::parsers::{datetime_to_epoch_secs, parse_ft_search_response};
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
+
+fn configured_index_name() -> String {
+    std::env::var("REDIS_INDEX_NAME").unwrap_or_else(|_| "idx".to_string())
+}
 
 /// Redis engine configuration
 #[derive(Clone)]
@@ -118,7 +123,7 @@ impl RedisEngine {
 
         // Drop existing index if any
         let _ = redis::cmd("FT.DROPINDEX")
-            .arg("idx")
+            .arg(configured_index_name())
             .arg("DD")
             .query::<()>(conn);
 
@@ -127,7 +132,7 @@ impl RedisEngine {
 
         // Build FT.CREATE command
         let mut cmd = redis::cmd("FT.CREATE");
-        cmd.arg("idx")
+        cmd.arg(configured_index_name())
             .arg("ON")
             .arg("HASH")
             .arg("PREFIX")
@@ -309,7 +314,7 @@ impl RedisEngine {
 
         loop {
             let info: redis::Value = redis::cmd("FT.INFO")
-                .arg("idx")
+                .arg(configured_index_name())
                 .query(&mut conn)
                 .map_err(|e| format!("FT.INFO error: {}", e))?;
 
@@ -1153,7 +1158,7 @@ fn ft_search_filter_only(
     let (filter_expr, params) = filter;
 
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(configured_index_name())
         .arg(filter_expr.as_str())
         .arg("LIMIT")
         .arg(0)
@@ -1254,7 +1259,7 @@ fn ft_search_knn(
 ) -> Result<Vec<(i64, f64)>, String> {
     // Build FT.SEARCH command
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(configured_index_name())
         .arg(query_str)
         .arg("SORTBY")
         .arg("vector_score")
@@ -1540,13 +1545,18 @@ impl Engine for RedisEngine {
         // where top defaults to len(query.expected_result) per query).
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let open_loop = OpenLoopPlan::from_params(params)?;
-        let num_to_run = open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
-            if num_queries > 0 {
-                (num_queries as usize).min(queries.len())
-            } else {
-                queries.len()
-            }
-        });
+        let closed_loop_duration = closed_loop_duration(params)?;
+        let num_to_run = if closed_loop_duration.is_some() {
+            usize::MAX
+        } else {
+            open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
+                if num_queries > 0 {
+                    (num_queries as usize).min(queries.len())
+                } else {
+                    queries.len()
+                }
+            })
+        };
 
         // Precompute all client-side request construction BEFORE the timed
         // region so the per-query timed window wraps ONLY the RPC round-trip +
@@ -1574,7 +1584,11 @@ impl Engine for RedisEngine {
         // (only its own monotonicity matters, not ordering against other memory).
         let query_idx = Arc::new(AtomicUsize::new(0));
 
-        let pb = self.create_progress_bar(num_to_run);
+        let pb = self.create_progress_bar(if closed_loop_duration.is_some() {
+            0
+        } else {
+            num_to_run
+        });
         // Give workers time to establish their connections before the first
         // independent arrival; setup is outside the measured open-loop window.
         let start_time = if open_loop.is_some() {
@@ -1583,11 +1597,16 @@ impl Engine for RedisEngine {
             Instant::now()
         };
 
-        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut mrs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut nds: Vec<f64> = Vec::with_capacity(num_to_run);
+        let sample_capacity = if closed_loop_duration.is_some() {
+            queries.len()
+        } else {
+            num_to_run
+        };
+        let mut times: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut precs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut recs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut mrs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut nds: Vec<f64> = Vec::with_capacity(sample_capacity);
         let mut schedule_delays: Vec<f64> = Vec::new();
         let mut end_to_end_latencies: Vec<f64> = Vec::new();
         let mut dropped_queries = 0usize;
@@ -1631,6 +1650,12 @@ impl Engine for RedisEngine {
                     };
 
                     loop {
+                        if closed_loop_duration
+                            .map(|duration| Instant::now() >= start_time + duration)
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
@@ -1758,7 +1783,10 @@ impl Engine for RedisEngine {
         )?;
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
-        let attempted_queries = num_to_run.saturating_sub(dropped_queries);
+        let attempted_queries = query_idx
+            .load(Ordering::Relaxed)
+            .min(num_to_run)
+            .saturating_sub(dropped_queries);
         let mut results = crate::engine::compute_search_stats(
             &times,
             &precs,
@@ -2052,7 +2080,7 @@ impl Engine for RedisEngine {
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
         let _ = redis::cmd("FT.DROPINDEX")
-            .arg("idx")
+            .arg(configured_index_name())
             .arg("DD")
             .query::<()>(&mut conn);
         Ok(())
@@ -2067,7 +2095,7 @@ impl Engine for RedisEngine {
 
         // Get FT.INFO for index stats
         let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
-            .arg("idx")
+            .arg(configured_index_name())
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));
@@ -2084,7 +2112,7 @@ impl Engine for RedisEngine {
         // Vector index stats (HNSW M/EF, num_docs, index memory, ...). Errors on
         // the BEFORE snapshot (index not yet created) → index_info: null.
         let ft_info = redis::cmd("FT.INFO")
-            .arg("idx")
+            .arg(configured_index_name())
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));

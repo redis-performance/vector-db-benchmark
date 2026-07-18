@@ -38,6 +38,10 @@ pub struct Args {
     #[arg(long, default_value = "false")]
     pub skip_search: bool,
 
+    /// Keep the configured index and uploaded data after the experiment
+    #[arg(long, default_value = "false")]
+    pub keep_data: bool,
+
     /// Skip if results already exist (accepts an optional value, e.g.
     /// `--skip-if-exists false`; bare `--skip-if-exists` means true)
     #[arg(
@@ -82,7 +86,8 @@ pub struct Args {
     #[arg(long, default_value = "0.0")]
     pub target_qps: f64,
 
-    /// Measured open-loop duration in seconds. Required with --target-qps.
+    /// Measured search duration in seconds. With --target-qps this is open-loop;
+    /// without it Redis and Vertex run unrestricted closed-loop for this long.
     #[arg(long, default_value = "0.0")]
     pub search_duration: f64,
 

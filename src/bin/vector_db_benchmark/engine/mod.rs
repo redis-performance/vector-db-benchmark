@@ -19,6 +19,7 @@ mod turbopuffer;
 mod valkey;
 mod vectorsets;
 mod vertex;
+mod vertex_grpc;
 mod weaviate;
 mod weaviate_grpc;
 
@@ -181,6 +182,22 @@ impl OpenLoopPlan {
     pub fn is_late(&self, delay: Duration) -> bool {
         delay > self.late_threshold
     }
+}
+
+/// Return the duration for an unrestricted closed-loop run, if requested.
+pub fn closed_loop_duration(params: &SearchParams) -> Result<Option<Duration>, String> {
+    if params.target_qps.is_some() {
+        return Ok(None);
+    }
+    let Some(seconds) = params.duration_seconds else {
+        return Ok(None);
+    };
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(
+            "closed-loop duration_seconds must be finite and greater than zero".to_string(),
+        );
+    }
+    Ok(Some(Duration::from_secs_f64(seconds)))
 }
 
 /// Add open-loop queueing/arrival metrics without changing closed-loop statistics.

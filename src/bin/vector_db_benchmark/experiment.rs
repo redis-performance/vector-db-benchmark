@@ -51,8 +51,13 @@ pub fn run(args: &Args) -> Result<(), String> {
                 "--target-qps currently supports search-only vector benchmarks".to_string(),
             );
         }
-    } else if args.search_duration != 0.0 || args.warmup_seconds != 0.0 {
-        return Err("--search-duration/--warmup-seconds require --target-qps".to_string());
+    } else {
+        if !args.search_duration.is_finite() || args.search_duration < 0.0 {
+            return Err("--search-duration must be finite and non-negative".to_string());
+        }
+        if args.warmup_seconds != 0.0 {
+            return Err("--warmup-seconds requires --target-qps".to_string());
+        }
     }
 
     let dataset_configs = read_dataset_configs()?;
@@ -104,7 +109,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         ));
     }
 
-    if args.target_qps > 0.0 {
+    if args.target_qps > 0.0 || args.search_duration > 0.0 {
         let unsupported: Vec<_> = engines
             .iter()
             .filter_map(|(name, config)| {
@@ -114,7 +119,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             .collect();
         if !unsupported.is_empty() {
             return Err(format!(
-                "--target-qps currently supports Redis and Vertex only; unsupported: {}",
+                "duration-bounded search currently supports Redis and Vertex only; unsupported: {}",
                 unsupported.join(", ")
             ));
         }
@@ -356,8 +361,12 @@ fn run_single_experiment(
                      skipping search (no filter conditions possible)",
                     dataset.config.name
                 );
-                println!("Experiment stage: Cleanup (deleting index and data)");
-                engine.delete()?;
+                if args.keep_data {
+                    println!("Experiment stage: Keep data (cleanup skipped)");
+                } else {
+                    println!("Experiment stage: Cleanup (deleting index and data)");
+                    engine.delete()?;
+                }
                 println!("Experiment stage: Done");
                 return Ok(());
             }
@@ -476,9 +485,11 @@ fn run_single_experiment(
 
                 let base_params = calibrated_params.as_ref().unwrap_or(search_params);
                 let mut runtime_params = base_params.clone();
+                if args.search_duration > 0.0 {
+                    runtime_params.duration_seconds = Some(args.search_duration);
+                }
                 if args.target_qps > 0.0 {
                     runtime_params.target_qps = Some(args.target_qps);
-                    runtime_params.duration_seconds = Some(args.search_duration);
                     runtime_params.max_lateness_ms = Some(args.max_lateness_ms);
                 }
                 let effective_params = &runtime_params;
@@ -680,9 +691,13 @@ fn run_single_experiment(
         )?;
     }
 
-    // Cleanup
-    println!("Experiment stage: Cleanup (deleting index and data)");
-    engine.delete()?;
+    // Cleanup unless the caller wants to reuse the populated index.
+    if args.keep_data {
+        println!("Experiment stage: Keep data (cleanup skipped)");
+    } else {
+        println!("Experiment stage: Cleanup (deleting index and data)");
+        engine.delete()?;
+    }
 
     println!("Experiment stage: Done");
     Ok(())

@@ -28,7 +28,11 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::{attach_open_loop_metrics, Engine, OpenLoopPlan, SearchResults, UploadStats};
+use crate::engine::vertex_grpc::{VertexGrpcRequest, VertexGrpcWorker};
+use crate::engine::{
+    attach_open_loop_metrics, closed_loop_duration, Engine, OpenLoopPlan, SearchResults,
+    UploadStats,
+};
 
 const DEFAULT_REGION: &str = "us-central1";
 const DEFAULT_MACHINE_TYPE: &str = "e2-standard-16";
@@ -36,6 +40,31 @@ const DEFAULT_DISPLAY_NAME: &str = "vdb_benchmark";
 const DEFAULT_APPROX_NEIGHBORS: i64 = 150;
 const DEFAULT_LEAF_EMBEDDING_COUNT: i64 = 500;
 const DEFAULT_LEAF_SEARCH_PERCENT: i64 = 7;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VertexQueryTransport {
+    Rest,
+    PublicGrpc,
+    PrivateGrpc,
+}
+
+impl VertexQueryTransport {
+    fn from_env() -> Result<Self, String> {
+        match std::env::var("VERTEX_QUERY_TRANSPORT")
+            .unwrap_or_else(|_| "rest".to_string())
+            .to_ascii_lowercase()
+            .replace('_', "-")
+            .as_str()
+        {
+            "rest" => Ok(Self::Rest),
+            "grpc" | "public-grpc" => Ok(Self::PublicGrpc),
+            "private-grpc" | "psc-grpc" => Ok(Self::PrivateGrpc),
+            value => Err(format!(
+                "unsupported VERTEX_QUERY_TRANSPORT={value}; use rest, public-grpc, or private-grpc"
+            )),
+        }
+    }
+}
 
 /// The three env vars that point the engine at an ALREADY-deployed index, in
 /// which case `configure` skips create+deploy and `delete` skips teardown (so
@@ -137,10 +166,14 @@ fn build_find_neighbors_body(
     query: &[f32],
     top: usize,
     fraction_leaf_override: Option<f64>,
+    approximate_neighbor_count: Option<i64>,
 ) -> serde_json::Value {
     let mut datapoint = serde_json::json!({ "datapoint": { "featureVector": query } });
     if let Some(frac) = fraction_leaf_override {
         datapoint["fractionLeafNodesToSearchOverride"] = serde_json::json!(frac);
+    }
+    if let Some(count) = approximate_neighbor_count {
+        datapoint["approximateNeighborCount"] = serde_json::json!(count);
     }
     datapoint["neighborCount"] = serde_json::json!(top);
     serde_json::json!({
@@ -195,6 +228,97 @@ fn execute_find_neighbors(
     Ok(parse_find_neighbors_response(&json))
 }
 
+enum VertexWorkerRequest {
+    Rest(serde_json::Value),
+    Grpc(VertexGrpcRequest),
+}
+
+enum VertexWorker {
+    Rest {
+        client: reqwest::blocking::Client,
+        url: String,
+        token: String,
+    },
+    Grpc(VertexGrpcWorker),
+}
+
+struct VertexWorkerConfig<'a> {
+    transport: VertexQueryTransport,
+    public_domain: &'a str,
+    private_address: Option<&'a str>,
+    token: &'a str,
+    index_endpoint: &'a str,
+    deployed_index_id: &'a str,
+}
+
+impl VertexWorker {
+    fn new(config: VertexWorkerConfig<'_>) -> Result<Self, String> {
+        match config.transport {
+            VertexQueryTransport::Rest => {
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(60))
+                    .build()
+                    .map_err(|e| format!("Vertex REST worker client build failed: {e}"))?;
+                Ok(Self::Rest {
+                    client,
+                    url: format!(
+                        "https://{}/v1/{}:findNeighbors",
+                        config.public_domain, config.index_endpoint
+                    ),
+                    token: config.token.to_string(),
+                })
+            }
+            VertexQueryTransport::PublicGrpc => Ok(Self::Grpc(VertexGrpcWorker::public(
+                config.public_domain,
+                config.token,
+                config.index_endpoint,
+                config.deployed_index_id,
+            )?)),
+            VertexQueryTransport::PrivateGrpc => Ok(Self::Grpc(VertexGrpcWorker::private(
+                config
+                    .private_address
+                    .ok_or("VERTEX_GRPC_ADDRESS is required for private-grpc transport")?,
+                config.deployed_index_id,
+            )?)),
+        }
+    }
+
+    fn request(
+        &self,
+        deployed_index_id: &str,
+        vector: &[f32],
+        top: usize,
+        fraction_leaf_override: Option<f64>,
+        approximate_neighbor_count: Option<i64>,
+    ) -> VertexWorkerRequest {
+        match self {
+            Self::Rest { .. } => VertexWorkerRequest::Rest(build_find_neighbors_body(
+                deployed_index_id,
+                vector,
+                top,
+                fraction_leaf_override,
+                approximate_neighbor_count,
+            )),
+            Self::Grpc(worker) => VertexWorkerRequest::Grpc(worker.request(
+                vector,
+                top,
+                fraction_leaf_override,
+                approximate_neighbor_count,
+            )),
+        }
+    }
+
+    fn execute(&mut self, request: VertexWorkerRequest) -> Result<Vec<i64>, String> {
+        match (self, request) {
+            (Self::Rest { client, url, token }, VertexWorkerRequest::Rest(body)) => {
+                execute_find_neighbors(client, url, token, &body)
+            }
+            (Self::Grpc(worker), VertexWorkerRequest::Grpc(message)) => worker.execute(message),
+            _ => Err("Vertex worker/request transport mismatch".to_string()),
+        }
+    }
+}
+
 /// Inspect a long-running-operation reply: `Ok(Some(response))` when done,
 /// `Ok(None)` while still running, `Err` when the operation reported an error.
 fn parse_lro(resp: &serde_json::Value) -> Result<Option<serde_json::Value>, String> {
@@ -229,6 +353,8 @@ pub struct VertexEngine {
     leaf_embedding_count: i64,
     leaf_search_percent: i64,
     shard_size: Option<String>,
+    query_transport: VertexQueryTransport,
+    grpc_address: Option<String>,
     // Populated during configure().
     index_name: String,
     index_endpoint_name: String,
@@ -298,6 +424,10 @@ impl VertexEngine {
             ),
             leaf_search_percent: env_i64("VERTEX_LEAF_SEARCH_PERCENT", DEFAULT_LEAF_SEARCH_PERCENT),
             shard_size: std::env::var("VERTEX_SHARD_SIZE")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            query_transport: VertexQueryTransport::from_env()?,
+            grpc_address: std::env::var("VERTEX_GRPC_ADDRESS")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             index_name: String::new(),
@@ -523,20 +653,32 @@ impl Engine for VertexEngine {
             self.poll_operation(&op_name, self.deploy_timeout, "index deployment")?;
         }
 
-        // Resolve the public endpoint domain used by findNeighbors.
+        // Resolve the public endpoint domain used by REST/public gRPC. Private
+        // gRPC connects directly to the PSC/VPC match address instead.
         let token = self.access_token()?;
         let ep = self.get_json(
             &format!("{}/{}", self.base_url(), self.index_endpoint_name),
             &token,
         )?;
-        self.public_endpoint_domain = ep
-            .get("publicEndpointDomainName")
-            .and_then(|d| d.as_str())
-            .ok_or(
-                "index endpoint has no publicEndpointDomainName (is a public endpoint enabled?)",
-            )?
-            .to_string();
-        println!("Vertex endpoint ready at {}", self.public_endpoint_domain);
+        if self.query_transport == VertexQueryTransport::PrivateGrpc {
+            let address = self
+                .grpc_address
+                .as_deref()
+                .ok_or("VERTEX_GRPC_ADDRESS is required for private-grpc transport")?;
+            println!("Vertex private gRPC endpoint ready at {address}");
+        } else {
+            self.public_endpoint_domain = ep
+                .get("publicEndpointDomainName")
+                .and_then(|d| d.as_str())
+                .ok_or(
+                    "index endpoint has no publicEndpointDomainName (is a public endpoint enabled?)",
+                )?
+                .to_string();
+            println!(
+                "Vertex {:?} endpoint ready at {}",
+                self.query_transport, self.public_endpoint_domain
+            );
+        }
         Ok(())
     }
 
@@ -619,20 +761,55 @@ impl Engine for VertexEngine {
                         }
                         let (start, end) = batches[idx];
                         let body = build_upsert_body(&ids[start..end], &vectors[start..end]);
-                        match client.post(url).bearer_auth(&token).json(&body).send() {
-                            Ok(r) if r.status().is_success() => {}
-                            Ok(r) => {
-                                *error.lock().unwrap() = Some(format!(
-                                    "{}: {}",
-                                    r.status(),
-                                    r.text().unwrap_or_default()
-                                ));
-                                break;
+                        let mut quota_retries = 0usize;
+                        loop {
+                            match client.post(url).bearer_auth(&token).json(&body).send() {
+                                Ok(r) if r.status().is_success() => break,
+                                Ok(r)
+                                    if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                                        && quota_retries < 30 =>
+                                {
+                                    quota_retries += 1;
+                                    let retry_after = r
+                                        .headers()
+                                        .get(reqwest::header::RETRY_AFTER)
+                                        .and_then(|value| value.to_str().ok())
+                                        .and_then(|value| value.parse::<u64>().ok())
+                                        .unwrap_or(60);
+                                    eprintln!(
+                                        "Vertex stream-update quota reached; retrying batch {} in {}s (attempt {}/30)",
+                                        idx, retry_after, quota_retries
+                                    );
+                                    std::thread::sleep(Duration::from_secs(retry_after));
+                                    if token_at.elapsed() > TOKEN_REFRESH_AFTER {
+                                        match engine.access_token() {
+                                            Ok(t) => {
+                                                token = t;
+                                                token_at = Instant::now();
+                                            }
+                                            Err(e) => {
+                                                *error.lock().unwrap() = Some(e);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(r) => {
+                                    *error.lock().unwrap() = Some(format!(
+                                        "{}: {}",
+                                        r.status(),
+                                        r.text().unwrap_or_default()
+                                    ));
+                                    break;
+                                }
+                                Err(e) => {
+                                    *error.lock().unwrap() = Some(e.to_string());
+                                    break;
+                                }
                             }
-                            Err(e) => {
-                                *error.lock().unwrap() = Some(e.to_string());
-                                break;
-                            }
+                        }
+                        if error.lock().unwrap().is_some() {
+                            break;
                         }
                         pb.inc((end - start) as u64);
                     }
@@ -668,6 +845,35 @@ impl Engine for VertexEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        self.distance_measure = vertex_distance_measure(dataset.distance()).to_string();
+
+        if self.index_name.is_empty()
+            || self.index_endpoint_name.is_empty()
+            || self.deployed_index_id.is_empty()
+        {
+            let (index, endpoint, deployed) = reuse_index_ids().ok_or(
+                "Vertex search with --skip-upload requires VERTEX_INDEX, VERTEX_INDEX_ENDPOINT, and VERTEX_DEPLOYED_INDEX_ID",
+            )?;
+            self.index_name = index;
+            self.index_endpoint_name = endpoint;
+            self.deployed_index_id = deployed;
+        }
+
+        if self.public_endpoint_domain.is_empty()
+            && self.query_transport != VertexQueryTransport::PrivateGrpc
+        {
+            let token = self.access_token()?;
+            let ep = self.get_json(
+                &format!("{}/{}", self.base_url(), self.index_endpoint_name),
+                &token,
+            )?;
+            self.public_endpoint_domain = ep
+                .get("publicEndpointDomainName")
+                .and_then(|d| d.as_str())
+                .ok_or("index endpoint has no publicEndpointDomainName")?
+                .to_string();
+        }
+
         let parallel = params.parallel.unwrap_or(1).max(1) as usize;
 
         let query_path = dataset.get_path()?;
@@ -679,13 +885,18 @@ impl Engine for VertexEngine {
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let open_loop = OpenLoopPlan::from_params(params)?;
-        let num_to_run = open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
-            if num_queries > 0 {
-                (num_queries as usize).min(queries.len())
-            } else {
-                queries.len()
-            }
-        });
+        let closed_loop_duration = closed_loop_duration(params)?;
+        let num_to_run = if closed_loop_duration.is_some() {
+            usize::MAX
+        } else {
+            open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
+                if num_queries > 0 {
+                    (num_queries as usize).min(queries.len())
+                } else {
+                    queries.len()
+                }
+            })
+        };
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
 
         if neighbors.len() < queries.len() {
@@ -703,41 +914,60 @@ impl Engine for VertexEngine {
             .and_then(|sp| sp.extra.as_ref())
             .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
             .and_then(|v| v.as_f64());
+        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(1));
 
-        println!(
-            "\tRunning {} queries (top={}, parallel={})...",
-            HumanCount(num_to_run as u64),
-            top,
-            parallel
-        );
+        if let Some(duration) = closed_loop_duration {
+            println!(
+                "\tRunning unrestricted closed-loop for {:.1}s (top={}, parallel={})...",
+                duration.as_secs_f64(),
+                top,
+                parallel
+            );
+        } else {
+            println!(
+                "\tRunning {} queries (top={}, parallel={})...",
+                HumanCount(num_to_run as u64),
+                top,
+                parallel
+            );
+        }
 
         // One access token for the whole timed region (avoids a gcloud shell-out
         // in the hot loop). Each worker builds its own blocking client so no
         // connection pool is shared across threads.
         let token = self.access_token()?;
-        let url = format!(
-            "https://{}/v1/{}:findNeighbors",
-            self.public_endpoint_domain, self.index_endpoint_name
-        );
         let deployed_index_id = self.deployed_index_id.as_str();
+        let query_transport = self.query_transport;
+        let public_endpoint_domain = self.public_endpoint_domain.as_str();
+        let private_address = self.grpc_address.as_deref();
+        let index_endpoint_name = self.index_endpoint_name.as_str();
 
         let workers = parallel.min(num_to_run.max(1));
         let query_idx = Arc::new(AtomicUsize::new(0));
-        let pb = self.create_progress_bar(num_to_run);
+        let pb = self.create_progress_bar(if closed_loop_duration.is_some() {
+            0
+        } else {
+            num_to_run
+        });
         let closed_loop_start = Instant::now();
         let open_loop_start = Arc::new(OnceLock::<Instant>::new());
         let worker_ready = Arc::new(Barrier::new(workers + 1));
+        let timed_mode = open_loop.is_some() || closed_loop_duration.is_some();
 
         let queries = &queries;
         let neighbors = &neighbors;
-        let url = url.as_str();
         let token = token.as_str();
 
-        let mut latencies: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut precisions: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut recalls: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut mrrs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut ndcgs: Vec<f64> = Vec::with_capacity(num_to_run);
+        let sample_capacity = if closed_loop_duration.is_some() {
+            queries.len()
+        } else {
+            num_to_run
+        };
+        let mut latencies: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut precisions: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut recalls: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut mrrs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut ndcgs: Vec<f64> = Vec::with_capacity(sample_capacity);
         let mut schedule_delays: Vec<f64> = Vec::new();
         let mut end_to_end_latencies: Vec<f64> = Vec::new();
         let mut dropped_queries = 0usize;
@@ -762,38 +992,40 @@ impl Engine for VertexEngine {
                     let mut late = 0usize;
                     let mut pb_pending: u64 = 0;
 
-                    let client = match reqwest::blocking::Client::builder()
-                        .timeout(Duration::from_secs(60))
-                        .build()
-                    {
+                    let mut client = match VertexWorker::new(VertexWorkerConfig {
+                        transport: query_transport,
+                        public_domain: public_endpoint_domain,
+                        private_address,
+                        token,
+                        index_endpoint: index_endpoint_name,
+                        deployed_index_id,
+                    }) {
                         Ok(c) => c,
                         Err(e) => {
                             eprintln!("Vertex worker client build failed: {}", e);
-                            if open_loop.is_some() {
+                            if timed_mode {
                                 worker_ready.wait();
                             }
                             return (t, p, r, mr, nd, sd, e2e, dropped, late);
                         }
                     };
 
-                    // reqwest establishes TCP/TLS lazily on first use. Prime each
-                    // persistent worker connection before starting the shared
-                    // arrival clock so setup cannot masquerade as queueing delay.
-                    if open_loop.is_some() {
+                    if timed_mode {
                         let prime_pos = worker_id % queries.len();
-                        let prime_body = build_find_neighbors_body(
+                        let prime_request = client.request(
                             deployed_index_id,
                             &queries[prime_pos],
                             top,
                             fraction_leaf_override,
+                            approximate_neighbor_count,
                         );
-                        if let Err(e) = execute_find_neighbors(&client, url, token, &prime_body) {
+                        if let Err(e) = client.execute(prime_request) {
                             eprintln!("Vertex worker connection prime failed: {}", e);
                         }
                         worker_ready.wait();
                     }
 
-                    let schedule_start = if open_loop.is_some() {
+                    let schedule_start = if timed_mode {
                         loop {
                             if let Some(start) = open_loop_start.get() {
                                 break *start;
@@ -805,16 +1037,23 @@ impl Engine for VertexEngine {
                     };
 
                     loop {
+                        if closed_loop_duration
+                            .map(|duration| Instant::now() >= schedule_start + duration)
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
                         }
                         let query_pos = idx % queries.len();
-                        let body = build_find_neighbors_body(
+                        let request = client.request(
                             deployed_index_id,
                             &queries[query_pos],
                             top,
                             fraction_leaf_override,
+                            approximate_neighbor_count,
                         );
 
                         let scheduled_at = open_loop.map(|plan| {
@@ -842,7 +1081,7 @@ impl Engine for VertexEngine {
                         // request body is built above (client-side work), matching
                         // the other engines' boundary.
                         let start = Instant::now();
-                        let outcome = execute_find_neighbors(&client, url, token, &body);
+                        let outcome = client.execute(request);
                         let elapsed = start.elapsed().as_secs_f64();
                         let completion = Instant::now();
 
@@ -880,9 +1119,14 @@ impl Engine for VertexEngine {
                     (t, p, r, mr, nd, sd, e2e, dropped, late)
                 }));
             }
-            if open_loop.is_some() {
+            if timed_mode {
                 worker_ready.wait();
-                let _ = open_loop_start.set(Instant::now() + Duration::from_millis(100));
+                let measurement_start = if open_loop.is_some() {
+                    Instant::now() + Duration::from_millis(100)
+                } else {
+                    Instant::now()
+                };
+                let _ = open_loop_start.set(measurement_start);
             }
             for h in handles {
                 let (t, p, r, mr, nd, sd, e2e, dropped, late) = h.join().unwrap();
@@ -906,8 +1150,11 @@ impl Engine for VertexEngine {
         if succeeded == 0 {
             return Err("No searches completed (all queries failed)".to_string());
         }
-        let attempted_queries = num_to_run.saturating_sub(dropped_queries);
-        let failed = attempted_queries - succeeded;
+        let attempted_queries = query_idx
+            .load(Ordering::Relaxed)
+            .min(num_to_run)
+            .saturating_sub(dropped_queries);
+        let failed = attempted_queries.saturating_sub(succeeded);
         if failed > 0 {
             eprintln!(
                 "WARNING: {} of {} attempted queries failed",
@@ -1123,7 +1370,7 @@ mod tests {
 
     #[test]
     fn find_neighbors_body_sets_count_and_optional_override() {
-        let b = build_find_neighbors_body("dep", &[1.0, 2.0], 10, None);
+        let b = build_find_neighbors_body("dep", &[1.0, 2.0], 10, None, None);
         assert_eq!(b["deployedIndexId"], "dep");
         assert_eq!(b["returnFullDatapoint"], false);
         let q = &b["queries"][0];
@@ -1131,7 +1378,7 @@ mod tests {
         assert_eq!(q["datapoint"]["featureVector"], json!([1.0, 2.0]));
         assert!(q.get("fractionLeafNodesToSearchOverride").is_none());
 
-        let b2 = build_find_neighbors_body("dep", &[1.0], 5, Some(0.2));
+        let b2 = build_find_neighbors_body("dep", &[1.0], 5, Some(0.2), Some(500));
         assert_eq!(b2["queries"][0]["fractionLeafNodesToSearchOverride"], 0.2);
     }
 
