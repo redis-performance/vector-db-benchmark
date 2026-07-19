@@ -30,8 +30,8 @@ use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::vertex_grpc::{VertexGrpcRequest, VertexGrpcWorker};
 use crate::engine::{
-    attach_open_loop_metrics, closed_loop_duration, Engine, OpenLoopPlan, SearchResults,
-    UploadStats,
+    attach_open_loop_metrics, closed_loop_duration, zero_search_results, Engine, OpenLoopPlan,
+    SearchResults, UploadStats,
 };
 
 const DEFAULT_REGION: &str = "us-central1";
@@ -914,7 +914,9 @@ impl Engine for VertexEngine {
             .and_then(|sp| sp.extra.as_ref())
             .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
             .and_then(|v| v.as_f64());
-        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(1));
+        // Vertex requires approximateNeighborCount >= neighborCount (= top);
+        // a smaller value is rejected, so clamp the floor to the effective top.
+        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(top as i64));
 
         if let Some(duration) = closed_loop_duration {
             println!(
@@ -1058,14 +1060,21 @@ impl Engine for VertexEngine {
 
                         let scheduled_at = open_loop.map(|plan| {
                             let delay = plan.wait_for_slot(schedule_start, idx);
-                            sd.push(delay.as_secs_f64());
-                            if plan.is_late(delay) {
-                                late += 1;
+                            let will_drop = delay > plan.max_lateness;
+                            // Count schedule-delay + lateness for DISPATCHED
+                            // requests only. A dropped (never-run) request must not
+                            // push its delay into schedule_delays nor increment
+                            // `late`, or late_queries >= dropped_queries always and
+                            // the schedule-delay percentiles are inflated by
+                            // requests that never dispatched. It is accounted
+                            // solely as `dropped` below.
+                            if !will_drop {
+                                sd.push(delay.as_secs_f64());
+                                if plan.is_late(delay) {
+                                    late += 1;
+                                }
                             }
-                            (
-                                plan.scheduled_at(schedule_start, idx),
-                                delay > plan.max_lateness,
-                            )
+                            (plan.scheduled_at(schedule_start, idx), will_drop)
                         });
                         if scheduled_at.map(|(_, drop)| drop).unwrap_or(false) {
                             dropped += 1;
@@ -1147,13 +1156,30 @@ impl Engine for VertexEngine {
         let total_time = total_start.elapsed().as_secs_f64();
 
         let succeeded = latencies.len();
-        if succeeded == 0 {
-            return Err("No searches completed (all queries failed)".to_string());
-        }
         let attempted_queries = query_idx
             .load(Ordering::Relaxed)
             .min(num_to_run)
             .saturating_sub(dropped_queries);
+        if succeeded == 0 {
+            // Genuinely zero attempts is an error; an overload-shed / all-failed
+            // run that DID attempt work is a real data point — report rps=0 with
+            // the drop accounting instead of erroring.
+            if attempted_queries == 0 && dropped_queries == 0 {
+                return Err("No searches completed (all queries failed)".to_string());
+            }
+            let mut results = zero_search_results(total_time, top, parallel, attempted_queries);
+            if let Some(plan) = open_loop {
+                attach_open_loop_metrics(
+                    &mut results,
+                    plan,
+                    &schedule_delays,
+                    &end_to_end_latencies,
+                    dropped_queries,
+                    late_queries,
+                );
+            }
+            return Ok(results);
+        }
         let failed = attempted_queries.saturating_sub(succeeded);
         if failed > 0 {
             eprintln!(

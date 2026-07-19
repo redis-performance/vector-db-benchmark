@@ -55,8 +55,11 @@ pub fn run(args: &Args) -> Result<(), String> {
         if !args.search_duration.is_finite() || args.search_duration < 0.0 {
             return Err("--search-duration must be finite and non-negative".to_string());
         }
-        if args.warmup_seconds != 0.0 {
-            return Err("--warmup-seconds requires --target-qps".to_string());
+        // Warm-up is now allowed in closed-loop-duration mode too (natural
+        // peak-throughput path: --search-duration without --target-qps), so the
+        // measured window doesn't run against a cold Redis while Vertex primes.
+        if args.warmup_seconds != 0.0 && args.search_duration <= 0.0 {
+            return Err("--warmup-seconds requires --target-qps or --search-duration".to_string());
         }
     }
 
@@ -526,6 +529,18 @@ fn run_single_experiment(
                     engine
                         .search(dataset, &warmup_params, args.queries)
                         .map_err(|e| format!("open-loop warm-up failed: {}", e))?;
+                } else if args.search_duration > 0.0 && args.warmup_seconds > 0.0 {
+                    // Closed-loop-duration warm-up: a discarded search phase so the
+                    // measured window sees a warm server for BOTH engines (Vertex
+                    // primes per-connection; this warms Redis caches). No target_qps
+                    // here, so this is a closed-loop run bounded by warmup_seconds.
+                    let mut warmup_params = effective_params.clone();
+                    warmup_params.duration_seconds = Some(args.warmup_seconds);
+                    warmup_params.target_qps = None;
+                    println!("\tClosed-loop warm-up: {:.1}s", args.warmup_seconds);
+                    engine
+                        .search(dataset, &warmup_params, args.queries)
+                        .map_err(|e| format!("closed-loop warm-up failed: {}", e))?;
                 }
 
                 // Run the measured search `repetitions` times and keep the
@@ -540,6 +555,17 @@ fn run_single_experiment(
                 for rep in 0..repetitions {
                     // Sample client CPU around the search so we can flag runs where
                     // the benchmark client — not the database — was the bottleneck.
+                    //
+                    // CAVEAT: this bracket wraps the WHOLE engine.search() call —
+                    // read_queries(), connection setup, the per-connection prime,
+                    // and the barrier/scheduling waits — not just the steady-state
+                    // measured loop. The setup phase is dominated by idle waits
+                    // (barrier + open-loop sleeps), which DILUTE the CPU fraction
+                    // downward, so `client_cpu_cores_used` here is a CONSERVATIVE
+                    // lower bound on steady-state client CPU: it can under-report
+                    // saturation but will not falsely flag a run as client-bound.
+                    // A window-scoped sample would require the Engine trait to
+                    // return the measured-loop CPU, which is deliberately avoided.
                     let cpu_before = crate::proc_cpu::sample();
                     let search_result = match phase {
                         Some(ratio) => {
@@ -572,7 +598,26 @@ fn run_single_experiment(
                                     results.rps
                                 );
                             }
-                            if best.as_ref().map(|b| results.rps > b.rps).unwrap_or(true) {
+                            // Representative-rep selection. In closed-loop mode the
+                            // best-RPS run is the warm figure we want. In open-loop
+                            // mode rps is pinned to target_qps, so max-rps is noise;
+                            // instead keep the rep that shed the FEWEST requests,
+                            // breaking ties by the lower tail (end-to-end p95).
+                            let is_open_loop = args.target_qps > 0.0;
+                            let better = match best.as_ref() {
+                                None => true,
+                                Some(b) if is_open_loop => {
+                                    (
+                                        results.dropped_queries,
+                                        results.end_to_end_p95_time.unwrap_or(f64::INFINITY),
+                                    ) < (
+                                        b.dropped_queries,
+                                        b.end_to_end_p95_time.unwrap_or(f64::INFINITY),
+                                    )
+                                }
+                                Some(b) => results.rps > b.rps,
+                            };
+                            if better {
                                 best = Some(results);
                             }
                         }

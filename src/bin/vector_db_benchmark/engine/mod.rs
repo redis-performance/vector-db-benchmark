@@ -144,11 +144,17 @@ impl OpenLoopPlan {
         if !target_qps.is_finite() || target_qps <= 0.0 {
             return Err("target_qps must be finite and greater than zero".to_string());
         }
-        if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
-            return Err("duration_seconds must be finite and greater than zero".to_string());
+        // Upper-bound the durations too: `Duration::from_secs_f64` panics on
+        // non-finite / out-of-range inputs, so reject absurd CLI values (> 1e9 s)
+        // with a clear error instead of aborting.
+        if !duration_seconds.is_finite() || duration_seconds <= 0.0 || duration_seconds > 1e9 {
+            return Err(
+                "duration_seconds must be finite, greater than zero, and <= 1e9 seconds"
+                    .to_string(),
+            );
         }
-        if !max_lateness_ms.is_finite() || max_lateness_ms < 0.0 {
-            return Err("max_lateness_ms must be finite and non-negative".to_string());
+        if !max_lateness_ms.is_finite() || !(0.0..=1e12).contains(&max_lateness_ms) {
+            return Err("max_lateness_ms must be finite, non-negative, and <= 1e12 ms".to_string());
         }
         let total_f = (target_qps * duration_seconds).round();
         if !total_f.is_finite() || total_f < 1.0 || total_f > usize::MAX as f64 {
@@ -192,9 +198,10 @@ pub fn closed_loop_duration(params: &SearchParams) -> Result<Option<Duration>, S
     let Some(seconds) = params.duration_seconds else {
         return Ok(None);
     };
-    if !seconds.is_finite() || seconds <= 0.0 {
+    if !seconds.is_finite() || seconds <= 0.0 || seconds > 1e9 {
         return Err(
-            "closed-loop duration_seconds must be finite and greater than zero".to_string(),
+            "closed-loop duration_seconds must be finite, greater than zero, and <= 1e9 seconds"
+                .to_string(),
         );
     }
     Ok(Some(Duration::from_secs_f64(seconds)))
@@ -327,6 +334,34 @@ pub fn compute_search_stats(
         parallel,
         ..Default::default()
     })
+}
+
+/// Build a zero-throughput `SearchResults` for a run that made attempts but
+/// completed with NO successful queries (e.g. an overloaded open-loop run that
+/// shed every request, or a duration run whose every query errored/timed out).
+///
+/// Returning this instead of an error preserves the strongest overload signal:
+/// rps=0 with the full drop/late/failure accounting attached (open-loop metrics
+/// are layered on afterwards by the caller via `attach_open_loop_metrics`).
+/// `attempted` is the number of dispatched requests; all of them count as
+/// failed. Callers should still return a genuine error when there were zero
+/// attempts at all (no queries offered).
+pub fn zero_search_results(
+    total_time: f64,
+    top: usize,
+    parallel: usize,
+    attempted: usize,
+) -> SearchResults {
+    SearchResults {
+        total_time,
+        rps: 0.0,
+        top,
+        num_queries: 0,
+        requested_queries: attempted,
+        failed_queries: attempted,
+        parallel,
+        ..Default::default()
+    }
 }
 
 /// Engine trait - equivalent to Python BaseClient
