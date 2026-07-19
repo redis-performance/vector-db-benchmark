@@ -20,6 +20,7 @@
 //! print-access-token`. Tokens are short-lived; the token is re-fetched at the
 //! start of each phase (and once before the timed search region).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -28,11 +29,15 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::vertex_grpc::{VertexGrpcRequest, VertexGrpcWorker};
+use crate::engine::vertex_grpc::{
+    NumericOp, NumericRestrict, NumericValue, Restrict, VertexFilter, VertexGrpcRequest,
+    VertexGrpcWorker,
+};
 use crate::engine::{
     attach_open_loop_metrics, closed_loop_duration, zero_search_results, Engine, OpenLoopPlan,
     SearchResults, UploadStats,
 };
+use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
 
 const DEFAULT_REGION: &str = "us-central1";
 const DEFAULT_MACHINE_TYPE: &str = "e2-standard-16";
@@ -145,15 +150,270 @@ fn build_deploy_body(
 }
 
 /// Body for `indexes.upsertDatapoints` — ids are stringified row indices.
-fn build_upsert_body(ids: &[i64], vectors: &[Vec<f32>]) -> serde_json::Value {
+/// Map a datapoint's stored metadata to Vertex restrictions for upsert: string
+/// and `labels` fields become categorical `restricts`; int/float fields become
+/// `numericRestricts` (no operator — a stored value carries none). Geo is not
+/// filterable in Vertex and is skipped.
+/// Pick the Vertex numeric type for `field`'s value. Vertex compares numeric
+/// restrictions by type, so a stored `valueInt` never matches a query
+/// `valueDouble` (and vice-versa). The dataset schema is the source of truth:
+/// a `float`-declared field is always `Double`, an `int` field always `Int`.
+/// Without a schema hint we fall back to an int-first heuristic (whole numbers
+/// are `Int`), which keeps integer datasets self-consistent.
+fn typed_numeric(
+    field: &str,
+    i: Option<i64>,
+    f: Option<f64>,
+    schema: &HashMap<String, String>,
+) -> NumericValue {
+    match schema.get(field).map(|s| s.as_str()) {
+        Some("float") => NumericValue::Double(f.or_else(|| i.map(|n| n as f64)).unwrap_or(0.0)),
+        Some("int") => NumericValue::Int(i.or_else(|| f.map(|x| x as i64)).unwrap_or(0)),
+        _ => match i {
+            Some(n) => NumericValue::Int(n),
+            None => NumericValue::Double(f.unwrap_or(0.0)),
+        },
+    }
+}
+
+/// Map a datapoint's stored metadata to Vertex restrictions for upsert: string
+/// and `labels` fields become categorical `restricts`; int/float fields become
+/// `numericRestricts` (no operator — a stored value carries none), typed by the
+/// dataset schema so query restrictions of the same field match. Geo is not
+/// filterable in Vertex and is skipped.
+fn metadata_to_filter(meta: &MetadataItem, schema: &HashMap<String, String>) -> VertexFilter {
+    let mut filter = VertexFilter::default();
+    for (key, value) in &meta.fields {
+        match value {
+            MetadataValue::String(s) => filter.restricts.push(Restrict {
+                namespace: key.clone(),
+                allow_list: vec![s.clone()],
+            }),
+            MetadataValue::Labels(labels) => filter.restricts.push(Restrict {
+                namespace: key.clone(),
+                allow_list: labels.clone(),
+            }),
+            MetadataValue::Int(n) => filter.numeric_restricts.push(NumericRestrict {
+                namespace: key.clone(),
+                op: None,
+                value: typed_numeric(key, Some(*n), None, schema),
+            }),
+            MetadataValue::Float(f) => filter.numeric_restricts.push(NumericRestrict {
+                namespace: key.clone(),
+                op: None,
+                value: typed_numeric(key, None, Some(*f), schema),
+            }),
+            MetadataValue::Geo { .. } => {}
+        }
+    }
+    filter
+}
+
+/// Parse the benchmark's query `conditions` into a Vertex query filter. Vertex
+/// restrictions AND across namespaces and OR within a namespace's `allowList`,
+/// so an `and` of per-field conditions maps cleanly. Anything Vertex cannot
+/// express is a hard error (per the engine's "no silent partial filter" policy):
+/// cross-field `or`, nested boolean, numeric `match_any` (an IN-list can't be a
+/// single numeric restriction), and geo.
+fn parse_vertex_filter(
+    conditions: &serde_json::Value,
+    schema: &HashMap<String, String>,
+) -> Result<VertexFilter, String> {
+    let mut filter = VertexFilter::default();
+    // A missing or explicitly-null condition is "no filter" (unrestricted query),
+    // not an error.
+    if conditions.is_null() {
+        return Ok(filter);
+    }
+    // Accept `{ "and": [ {field: spec}, ... ] }`, or a bare object of field->spec
+    // (treated as an implicit AND). Reject top-level `or`.
+    let clauses: Vec<&serde_json::Value> =
+        if let Some(and) = conditions.get("and").and_then(|v| v.as_array()) {
+            and.iter().collect()
+        } else if conditions.get("or").is_some() {
+            return Err("Vertex filters cannot express cross-field OR (`or`)".to_string());
+        } else if conditions.is_object() {
+            vec![conditions]
+        } else {
+            return Err("unsupported filter conditions shape".to_string());
+        };
+
+    for clause in clauses {
+        let obj = clause
+            .as_object()
+            .ok_or("filter clause must be an object")?;
+        for (field, spec) in obj {
+            if field == "and" || field == "or" {
+                return Err("Vertex filters cannot express nested boolean logic".to_string());
+            }
+            let spec = spec
+                .as_object()
+                .ok_or_else(|| format!("filter for `{field}` must be an object"))?;
+            for (op, criteria) in spec {
+                match op.as_str() {
+                    "match" => parse_match(field, criteria, &mut filter, schema)?,
+                    "range" => parse_range(field, criteria, &mut filter, schema)?,
+                    "geo_radius" | "geo_bounding_box" => {
+                        return Err(format!("Vertex cannot filter geo field `{field}`"));
+                    }
+                    other => return Err(format!("unsupported filter operator `{other}`")),
+                }
+            }
+        }
+    }
+    Ok(filter)
+}
+
+fn parse_match(
+    field: &str,
+    criteria: &serde_json::Value,
+    filter: &mut VertexFilter,
+    schema: &HashMap<String, String>,
+) -> Result<(), String> {
+    if let Some(any) = criteria.get("any").and_then(|v| v.as_array()) {
+        // Categorical contains-any → allowList. A numeric IN-list can't be one
+        // numeric restriction (multiple numeric restricts AND, not OR), so it is
+        // rejected rather than silently mis-applied.
+        if any.iter().any(|v| v.is_number()) {
+            return Err(format!(
+                "Vertex cannot express a numeric `match_any` (IN-list) on `{field}`"
+            ));
+        }
+        let allow_list: Vec<String> = any
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        filter.restricts.push(Restrict {
+            namespace: field.to_string(),
+            allow_list,
+        });
+        Ok(())
+    } else if let Some(value) = criteria.get("value") {
+        if let Some(s) = value.as_str() {
+            filter.restricts.push(Restrict {
+                namespace: field.to_string(),
+                allow_list: vec![s.to_string()],
+            });
+        } else if value.is_number() {
+            filter.numeric_restricts.push(NumericRestrict {
+                namespace: field.to_string(),
+                op: Some(NumericOp::Equal),
+                value: typed_numeric(field, value.as_i64(), value.as_f64(), schema),
+            });
+        } else {
+            return Err(format!("unsupported match value for `{field}`"));
+        }
+        Ok(())
+    } else {
+        Err(format!("empty match filter for `{field}`"))
+    }
+}
+
+fn parse_range(
+    field: &str,
+    criteria: &serde_json::Value,
+    filter: &mut VertexFilter,
+    schema: &HashMap<String, String>,
+) -> Result<(), String> {
+    let obj = criteria
+        .as_object()
+        .ok_or_else(|| format!("range for `{field}` must be an object"))?;
+    for (bound, val) in obj {
+        if val.is_null() {
+            continue;
+        }
+        let op = match bound.as_str() {
+            "lt" => NumericOp::Less,
+            "lte" => NumericOp::LessEqual,
+            "gt" => NumericOp::Greater,
+            "gte" => NumericOp::GreaterEqual,
+            other => return Err(format!("unsupported range bound `{other}` on `{field}`")),
+        };
+        if !val.is_number() {
+            return Err(format!("non-numeric range bound on `{field}`"));
+        }
+        filter.numeric_restricts.push(NumericRestrict {
+            namespace: field.to_string(),
+            op: Some(op),
+            value: typed_numeric(field, val.as_i64(), val.as_f64(), schema),
+        });
+    }
+    Ok(())
+}
+
+/// Extract `field -> declared-type` from the dataset schema (used to type
+/// numeric restrictions consistently between upload and query).
+fn schema_type_map(dataset: &Dataset) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    if let Some(obj) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+        for (k, v) in obj {
+            if let Some(t) = v.as_str() {
+                m.insert(k.clone(), t.to_string());
+            }
+        }
+    }
+    m
+}
+
+/// Serialize a filter to REST JSON `restricts` / `numericRestricts`. Datapoint
+/// restrictions omit `op`; query restrictions include it.
+fn filter_to_rest(filter: &VertexFilter) -> (serde_json::Value, serde_json::Value) {
+    let restricts: Vec<serde_json::Value> = filter
+        .restricts
+        .iter()
+        .map(|r| serde_json::json!({ "namespace": r.namespace, "allowList": r.allow_list }))
+        .collect();
+    let numeric: Vec<serde_json::Value> = filter
+        .numeric_restricts
+        .iter()
+        .map(|n| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("namespace".to_string(), serde_json::json!(n.namespace));
+            match n.value {
+                NumericValue::Int(i) => {
+                    obj.insert("valueInt".to_string(), serde_json::json!(i));
+                }
+                NumericValue::Double(d) => {
+                    obj.insert("valueDouble".to_string(), serde_json::json!(d));
+                }
+            }
+            if let Some(op) = n.op {
+                obj.insert("op".to_string(), serde_json::json!(op.as_rest()));
+            }
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+    (serde_json::json!(restricts), serde_json::json!(numeric))
+}
+
+fn build_upsert_body(
+    ids: &[i64],
+    vectors: &[Vec<f32>],
+    metadata: &[Option<MetadataItem>],
+    schema: &HashMap<String, String>,
+) -> serde_json::Value {
     let datapoints: Vec<serde_json::Value> = ids
         .iter()
         .zip(vectors.iter())
-        .map(|(id, v)| {
-            serde_json::json!({
+        .enumerate()
+        .map(|(i, (id, v))| {
+            let mut dp = serde_json::json!({
                 "datapointId": id.to_string(),
                 "featureVector": v,
-            })
+            });
+            if let Some(Some(meta)) = metadata.get(i) {
+                let filter = metadata_to_filter(meta, schema);
+                if !filter.is_empty() {
+                    let (restricts, numeric) = filter_to_rest(&filter);
+                    if !filter.restricts.is_empty() {
+                        dp["restricts"] = restricts;
+                    }
+                    if !filter.numeric_restricts.is_empty() {
+                        dp["numericRestricts"] = numeric;
+                    }
+                }
+            }
+            dp
         })
         .collect();
     serde_json::json!({ "datapoints": datapoints })
@@ -167,8 +427,20 @@ fn build_find_neighbors_body(
     top: usize,
     fraction_leaf_override: Option<f64>,
     approximate_neighbor_count: Option<i64>,
+    filter: Option<&VertexFilter>,
 ) -> serde_json::Value {
     let mut datapoint = serde_json::json!({ "datapoint": { "featureVector": query } });
+    if let Some(f) = filter {
+        if !f.is_empty() {
+            let (restricts, numeric) = filter_to_rest(f);
+            if !f.restricts.is_empty() {
+                datapoint["datapoint"]["restricts"] = restricts;
+            }
+            if !f.numeric_restricts.is_empty() {
+                datapoint["datapoint"]["numericRestricts"] = numeric;
+            }
+        }
+    }
     if let Some(frac) = fraction_leaf_override {
         datapoint["fractionLeafNodesToSearchOverride"] = serde_json::json!(frac);
     }
@@ -290,6 +562,7 @@ impl VertexWorker {
         top: usize,
         fraction_leaf_override: Option<f64>,
         approximate_neighbor_count: Option<i64>,
+        filter: Option<&VertexFilter>,
     ) -> VertexWorkerRequest {
         match self {
             Self::Rest { .. } => VertexWorkerRequest::Rest(build_find_neighbors_body(
@@ -298,12 +571,14 @@ impl VertexWorker {
                 top,
                 fraction_leaf_override,
                 approximate_neighbor_count,
+                filter,
             )),
             Self::Grpc(worker) => VertexWorkerRequest::Grpc(worker.request(
                 vector,
                 top,
                 fraction_leaf_override,
                 approximate_neighbor_count,
+                filter,
             )),
         }
     }
@@ -687,7 +962,7 @@ impl Engine for VertexEngine {
         let dataset_path = dataset.get_path()?;
         println!("Reading dataset from {}...", dataset_path.display());
         let read_start = Instant::now();
-        let (ids, vectors, _metadata) = dataset.read_vectors(normalize)?;
+        let (ids, vectors, metadata) = dataset.read_vectors(normalize)?;
         let read_time = read_start.elapsed().as_secs_f64();
         println!(
             "Read {} vectors ({}d) in {:.3}s",
@@ -697,6 +972,7 @@ impl Engine for VertexEngine {
         );
 
         let url = format!("{}/{}:upsertDatapoints", self.base_url(), self.index_name);
+        let schema = schema_type_map(dataset);
         let batch_size = self.batch_size.max(1);
         let batches: Vec<(usize, usize)> = (0..ids.len())
             .step_by(batch_size)
@@ -713,6 +989,8 @@ impl Engine for VertexEngine {
         let engine = &*self;
         let ids = &ids;
         let vectors = &vectors;
+        let metadata = &metadata;
+        let schema = &schema;
         let batches = &batches;
         let url = url.as_str();
 
@@ -760,7 +1038,12 @@ impl Engine for VertexEngine {
                             }
                         }
                         let (start, end) = batches[idx];
-                        let body = build_upsert_body(&ids[start..end], &vectors[start..end]);
+                        let body = build_upsert_body(
+                            &ids[start..end],
+                            &vectors[start..end],
+                            &metadata[start..end],
+                            schema,
+                        );
                         let mut quota_retries = 0usize;
                         loop {
                             match client.post(url).bearer_auth(&token).json(&body).send() {
@@ -878,10 +1161,24 @@ impl Engine for VertexEngine {
 
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
-        let (queries, neighbors, _conditions) = dataset.read_queries()?;
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
         if queries.is_empty() {
             return Err("dataset contains no search queries".to_string());
         }
+
+        // Parse per-query filter conditions up front (outside the timed window).
+        // A condition Vertex cannot express is a hard error rather than a silent
+        // partial filter (which would inflate recall against filtered ground
+        // truth).
+        let schema = schema_type_map(dataset);
+        let parsed_filters: Vec<Option<VertexFilter>> = conditions
+            .iter()
+            .map(|c| {
+                c.as_ref()
+                    .map(|v| parse_vertex_filter(v, &schema))
+                    .transpose()
+            })
+            .collect::<Result<_, _>>()?;
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let open_loop = OpenLoopPlan::from_params(params)?;
@@ -958,6 +1255,7 @@ impl Engine for VertexEngine {
 
         let queries = &queries;
         let neighbors = &neighbors;
+        let parsed_filters = &parsed_filters;
         let token = token.as_str();
 
         let sample_capacity = if closed_loop_duration.is_some() {
@@ -1020,6 +1318,7 @@ impl Engine for VertexEngine {
                             top,
                             fraction_leaf_override,
                             approximate_neighbor_count,
+                            parsed_filters[prime_pos].as_ref(),
                         );
                         if let Err(e) = client.execute(prime_request) {
                             eprintln!("Vertex worker connection prime failed: {}", e);
@@ -1056,6 +1355,7 @@ impl Engine for VertexEngine {
                             top,
                             fraction_leaf_override,
                             approximate_neighbor_count,
+                            parsed_filters[query_pos].as_ref(),
                         );
 
                         let scheduled_at = open_loop.map(|plan| {
@@ -1386,7 +1686,12 @@ mod tests {
 
     #[test]
     fn upsert_body_stringifies_ids_and_keeps_vectors() {
-        let b = build_upsert_body(&[0, 42], &[vec![1.0, 2.0], vec![3.0, 4.0]]);
+        let b = build_upsert_body(
+            &[0, 42],
+            &[vec![1.0, 2.0], vec![3.0, 4.0]],
+            &[None, None],
+            &HashMap::new(),
+        );
         let dps = b["datapoints"].as_array().unwrap();
         assert_eq!(dps.len(), 2);
         assert_eq!(dps[0]["datapointId"], "0");
@@ -1396,7 +1701,7 @@ mod tests {
 
     #[test]
     fn find_neighbors_body_sets_count_and_optional_override() {
-        let b = build_find_neighbors_body("dep", &[1.0, 2.0], 10, None, None);
+        let b = build_find_neighbors_body("dep", &[1.0, 2.0], 10, None, None, None);
         assert_eq!(b["deployedIndexId"], "dep");
         assert_eq!(b["returnFullDatapoint"], false);
         let q = &b["queries"][0];
@@ -1404,8 +1709,159 @@ mod tests {
         assert_eq!(q["datapoint"]["featureVector"], json!([1.0, 2.0]));
         assert!(q.get("fractionLeafNodesToSearchOverride").is_none());
 
-        let b2 = build_find_neighbors_body("dep", &[1.0], 5, Some(0.2), Some(500));
+        let b2 = build_find_neighbors_body("dep", &[1.0], 5, Some(0.2), Some(500), None);
         assert_eq!(b2["queries"][0]["fractionLeafNodesToSearchOverride"], 0.2);
+    }
+
+    // ── Metadata filters ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_filter_keyword_match_any_becomes_allowlist() {
+        let f = parse_vertex_filter(
+            &json!({"and": [{"color": {"match": {"any": ["red", "blue"]}}}]}),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(f.restricts.len(), 1);
+        assert_eq!(f.restricts[0].namespace, "color");
+        assert_eq!(f.restricts[0].allow_list, vec!["red", "blue"]);
+        assert!(f.numeric_restricts.is_empty());
+    }
+
+    #[test]
+    fn parse_filter_numeric_range_becomes_two_ops() {
+        let f = parse_vertex_filter(
+            &json!({"and": [{"size": {"range": {"gte": 3, "lte": 7}}}]}),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(f.numeric_restricts.len(), 2);
+        let ops: Vec<_> = f
+            .numeric_restricts
+            .iter()
+            .map(|n| (n.op, n.value))
+            .collect();
+        assert!(ops.contains(&(Some(NumericOp::GreaterEqual), NumericValue::Int(3))));
+        assert!(ops.contains(&(Some(NumericOp::LessEqual), NumericValue::Int(7))));
+    }
+
+    #[test]
+    fn parse_filter_exact_value_typed_by_json() {
+        let sf = parse_vertex_filter(
+            &json!({"and": [{"c": {"match": {"value": "x"}}}]}),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(sf.restricts[0].allow_list, vec!["x"]);
+        let nf = parse_vertex_filter(
+            &json!({"and": [{"n": {"match": {"value": 5}}}]}),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(nf.numeric_restricts[0].op, Some(NumericOp::Equal));
+        assert_eq!(nf.numeric_restricts[0].value, NumericValue::Int(5));
+    }
+
+    #[test]
+    fn parse_filter_rejects_unexpressible_shapes() {
+        // Cross-field OR, nested boolean, numeric IN-list, and geo are hard errors.
+        assert!(parse_vertex_filter(
+            &json!({"or": [{"a": {"match": {"value": "x"}}}]}),
+            &HashMap::new()
+        )
+        .is_err());
+        assert!(parse_vertex_filter(
+            &json!({"and": [{"n": {"match": {"any": [1, 2]}}}]}),
+            &HashMap::new()
+        )
+        .is_err());
+        assert!(parse_vertex_filter(
+            &json!({"and": [{"loc": {"geo_radius": {"lat": 1.0, "lon": 2.0, "radius": 5.0}}}]}),
+            &HashMap::new(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn schema_forces_numeric_type_consistency() {
+        // A `float`-declared field must serialize as Double on BOTH the stored
+        // side (even a whole-number value) and the query side (even an integer
+        // bound), so Vertex's type-strict numeric compare matches.
+        let schema = HashMap::from([("price".to_string(), "float".to_string())]);
+        let stored = metadata_to_filter(
+            &MetadataItem {
+                fields: vec![("price".into(), MetadataValue::Int(3))],
+            },
+            &schema,
+        );
+        assert_eq!(stored.numeric_restricts[0].value, NumericValue::Double(3.0));
+        let q = parse_vertex_filter(&json!({"and": [{"price": {"range": {"gte": 5}}}]}), &schema)
+            .unwrap();
+        assert_eq!(q.numeric_restricts[0].value, NumericValue::Double(5.0));
+    }
+
+    #[test]
+    fn null_conditions_are_no_filter() {
+        let f = parse_vertex_filter(&serde_json::Value::Null, &HashMap::new()).unwrap();
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn metadata_maps_to_restricts_by_variant() {
+        let meta = MetadataItem {
+            fields: vec![
+                ("color".into(), MetadataValue::String("red".into())),
+                (
+                    "labels".into(),
+                    MetadataValue::Labels(vec!["a".into(), "b".into()]),
+                ),
+                ("size".into(), MetadataValue::Int(7)),
+                ("price".into(), MetadataValue::Float(3.5)),
+            ],
+        };
+        let f = metadata_to_filter(&meta, &HashMap::new());
+        assert_eq!(f.restricts.len(), 2); // color + labels
+        assert_eq!(f.numeric_restricts.len(), 2); // size + price
+                                                  // A stored datapoint value carries no operator.
+        assert!(f.numeric_restricts.iter().all(|n| n.op.is_none()));
+    }
+
+    #[test]
+    fn upsert_body_carries_restricts_from_metadata() {
+        let meta = vec![Some(MetadataItem {
+            fields: vec![
+                ("color".into(), MetadataValue::String("red".into())),
+                ("size".into(), MetadataValue::Int(7)),
+            ],
+        })];
+        let b = build_upsert_body(&[0], &[vec![1.0]], &meta, &HashMap::new());
+        let dp = &b["datapoints"][0];
+        assert_eq!(dp["restricts"][0]["namespace"], "color");
+        assert_eq!(dp["restricts"][0]["allowList"][0], "red");
+        assert_eq!(dp["numericRestricts"][0]["namespace"], "size");
+        assert_eq!(dp["numericRestricts"][0]["valueInt"], 7);
+        // Stored value has no op.
+        assert!(dp["numericRestricts"][0].get("op").is_none());
+    }
+
+    #[test]
+    fn find_neighbors_body_carries_query_filter() {
+        let filter = VertexFilter {
+            restricts: vec![Restrict {
+                namespace: "color".into(),
+                allow_list: vec!["red".into(), "blue".into()],
+            }],
+            numeric_restricts: vec![NumericRestrict {
+                namespace: "size".into(),
+                op: Some(NumericOp::GreaterEqual),
+                value: NumericValue::Int(3),
+            }],
+        };
+        let b = build_find_neighbors_body("dep", &[1.0], 10, None, None, Some(&filter));
+        let dp = &b["queries"][0]["datapoint"];
+        assert_eq!(dp["restricts"][0]["allowList"][1], "blue");
+        assert_eq!(dp["numericRestricts"][0]["op"], "GREATER_EQUAL");
+        assert_eq!(dp["numericRestricts"][0]["valueInt"], 3);
     }
 
     #[test]
