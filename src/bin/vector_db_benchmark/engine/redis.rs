@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -17,10 +17,17 @@ use redis::Connection;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
-use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
+use crate::engine::{
+    attach_open_loop_metrics, closed_loop_duration, zero_search_results, Engine, OpenLoopPlan,
+    SearchResults, UpdateSearchRatio, UploadStats,
+};
 use crate::metrics::compute_metrics;
 use vector_db_benchmark::parsers::{datetime_to_epoch_secs, parse_ft_search_response};
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
+
+fn configured_index_name() -> String {
+    std::env::var("REDIS_INDEX_NAME").unwrap_or_else(|_| "idx".to_string())
+}
 
 /// Redis engine configuration
 #[derive(Clone)]
@@ -116,7 +123,7 @@ impl RedisEngine {
 
         // Drop existing index if any
         let _ = redis::cmd("FT.DROPINDEX")
-            .arg("idx")
+            .arg(configured_index_name())
             .arg("DD")
             .query::<()>(conn);
 
@@ -125,7 +132,7 @@ impl RedisEngine {
 
         // Build FT.CREATE command
         let mut cmd = redis::cmd("FT.CREATE");
-        cmd.arg("idx")
+        cmd.arg(configured_index_name())
             .arg("ON")
             .arg("HASH")
             .arg("PREFIX")
@@ -307,7 +314,7 @@ impl RedisEngine {
 
         loop {
             let info: redis::Value = redis::cmd("FT.INFO")
-                .arg("idx")
+                .arg(configured_index_name())
                 .query(&mut conn)
                 .map_err(|e| format!("FT.INFO error: {}", e))?;
 
@@ -480,6 +487,9 @@ impl RedisEngine {
         let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let query_idx = Arc::new(AtomicUsize::new(0));
 
+        // Resolve the index name once (env lookup) instead of per query.
+        let index_name = configured_index_name();
+
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
 
@@ -494,6 +504,7 @@ impl RedisEngine {
                 let neighbors = &neighbors;
                 let errors = Arc::clone(&errors);
                 let query_idx = Arc::clone(&query_idx);
+                let index_name = index_name.as_str();
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -531,6 +542,7 @@ impl RedisEngine {
                         let query_start = Instant::now();
                         let result = ft_search_filter_only(
                             &mut conn,
+                            index_name,
                             top,
                             query_timeout,
                             parsed_filters[idx].as_ref().unwrap(),
@@ -1144,6 +1156,7 @@ fn build_condition(
 /// Execute filter-only FT.SEARCH (no KNN vector query).
 fn ft_search_filter_only(
     conn: &mut Connection,
+    index_name: &str,
     top: usize,
     query_timeout: i64,
     filter: &ParsedFilter,
@@ -1151,7 +1164,7 @@ fn ft_search_filter_only(
     let (filter_expr, params) = filter;
 
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(index_name)
         .arg(filter_expr.as_str())
         .arg("LIMIT")
         .arg(0)
@@ -1232,15 +1245,18 @@ fn build_knn_query_str(
     )
 }
 
-/// Execute FT.SEARCH KNN query with optional prefilter, return (id, score) pairs.
+/// Build the FT.SEARCH KNN `redis::Cmd` — PURE client-side request construction
+/// (arg assembly, `top`/`ef` stringification, PARAMS binding), no I/O.
 ///
-/// `vec_bytes` (the encoded query blob) and `query_str` are precomputed by the
-/// caller BEFORE the timed window — this function performs only the cheap arg
-/// binding, the `cmd.query` RPC round-trip, and the reply parse (all legitimate
-/// server latency).
+/// This is deliberately kept OUT of the per-query timed window: the caller
+/// builds the `Cmd` before starting the latency timer and times only the RPC +
+/// reply parse (via `exec_ft_search`), so the measured latency wraps only
+/// legitimate server latency, matching the Vertex boundary. `index_name` is
+/// resolved ONCE by the caller (not re-read from the environment per query);
+/// `vec_bytes` (the encoded query blob) and `query_str` are precomputed too.
 #[allow(clippy::too_many_arguments)]
-fn ft_search_knn(
-    conn: &mut Connection,
+fn build_ft_search_cmd(
+    index_name: &str,
     vec_bytes: &[u8],
     query_str: &str,
     top: usize,
@@ -1249,10 +1265,9 @@ fn ft_search_knn(
     hybrid_policy: &str,
     query_timeout: i64,
     filter: Option<&ParsedFilter>,
-) -> Result<Vec<(i64, f64)>, String> {
-    // Build FT.SEARCH command
+) -> redis::Cmd {
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(index_name)
         .arg(query_str)
         .arg("SORTBY")
         .arg("vector_score")
@@ -1302,6 +1317,13 @@ fn ft_search_knn(
         }
     }
 
+    cmd
+}
+
+/// Execute a prebuilt FT.SEARCH `Cmd` and parse the reply → (id, score) pairs.
+/// This is the ONLY part that belongs in the timed window: the RPC round-trip
+/// plus reply parse.
+fn exec_ft_search(conn: &mut Connection, cmd: &redis::Cmd) -> Result<Vec<(i64, f64)>, String> {
     // Query the raw Value (not Vec<Value>) so both a RESP2 array and a RESP3 map
     // deserialize; parse_ft_search_response dispatches on the shape.
     let response: redis::Value = cmd
@@ -1309,6 +1331,39 @@ fn ft_search_knn(
         .map_err(|e| format!("FT.SEARCH error: {}", e))?;
 
     parse_ft_search_response(&response)
+}
+
+/// Execute an FT.SEARCH KNN query with optional prefilter (build + exec).
+///
+/// Convenience wrapper used by the mixed (search+update) path, which
+/// intentionally builds inside its timed window. The pure-KNN `search()` path
+/// instead calls `build_ft_search_cmd` before the timer and `exec_ft_search`
+/// inside it, so construction is not timed.
+#[allow(clippy::too_many_arguments)]
+fn ft_search_knn(
+    conn: &mut Connection,
+    index_name: &str,
+    vec_bytes: &[u8],
+    query_str: &str,
+    top: usize,
+    ef: i64,
+    algorithm: &str,
+    hybrid_policy: &str,
+    query_timeout: i64,
+    filter: Option<&ParsedFilter>,
+) -> Result<Vec<(i64, f64)>, String> {
+    let cmd = build_ft_search_cmd(
+        index_name,
+        vec_bytes,
+        query_str,
+        top,
+        ef,
+        algorithm,
+        hybrid_policy,
+        query_timeout,
+        filter,
+    );
+    exec_ft_search(conn, &cmd)
 }
 
 /// Single-record HSET update (for mixed benchmark).
@@ -1523,6 +1578,9 @@ impl Engine for RedisEngine {
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         let (queries, neighbors, conditions) = dataset.read_queries()?;
+        if queries.is_empty() {
+            return Err("dataset contains no search queries".to_string());
+        }
 
         // Parse all conditions up front (before timing begins)
         let parsed_filters: Vec<Option<ParsedFilter>> = conditions
@@ -1534,10 +1592,18 @@ impl Engine for RedisEngine {
         // When not set, use per-query ground truth count (matches Python v0 behavior
         // where top defaults to len(query.expected_result) per query).
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
-        let num_to_run = if num_queries > 0 {
-            (num_queries as usize).min(queries.len())
+        let open_loop = OpenLoopPlan::from_params(params)?;
+        let closed_loop_duration = closed_loop_duration(params)?;
+        let num_to_run = if closed_loop_duration.is_some() {
+            usize::MAX
         } else {
-            queries.len()
+            open_loop.map(|p| p.total_requests).unwrap_or_else(|| {
+                if num_queries > 0 {
+                    (num_queries as usize).min(queries.len())
+                } else {
+                    queries.len()
+                }
+            })
         };
 
         // Precompute all client-side request construction BEFORE the timed
@@ -1566,14 +1632,49 @@ impl Engine for RedisEngine {
         // (only its own monotonicity matters, not ordering against other memory).
         let query_idx = Arc::new(AtomicUsize::new(0));
 
-        let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
+        let pb = self.create_progress_bar(if closed_loop_duration.is_some() {
+            0
+        } else {
+            num_to_run
+        });
+        // Resolve the index name ONCE (env lookup) so it is not re-read from the
+        // environment inside the per-query timed window.
+        let index_name = configured_index_name();
 
-        let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut recs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut mrs: Vec<f64> = Vec::with_capacity(num_to_run);
-        let mut nds: Vec<f64> = Vec::with_capacity(num_to_run);
+        // Barrier-synchronized start so connection setup AND the cold first query
+        // fall OUTSIDE the measured window — for open-loop and closed-loop-duration
+        // alike (mirrors the Vertex engine). Every worker connects + primes, then
+        // blocks on `ready`; the main thread stamps the shared start instant into
+        // `start_cell` and releases `go`, so the measurement clock starts only once
+        // all workers are warm and poised. A worker that fails to connect MUST
+        // still pass both barriers before returning, or the run would deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
+
+        let sample_capacity = if closed_loop_duration.is_some() {
+            queries.len()
+        } else {
+            num_to_run
+        };
+        let mut times: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut precs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut recs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut mrs: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut nds: Vec<f64> = Vec::with_capacity(sample_capacity);
+        let mut schedule_delays: Vec<f64> = Vec::new();
+        let mut end_to_end_latencies: Vec<f64> = Vec::new();
+        let mut dropped_queries = 0usize;
+        let mut late_queries = 0usize;
+        let query_count = queries.len();
+
+        // Workers recycle queries with `query_pos = idx % query_count` and index
+        // `neighbors[query_pos]` in lock-step; a ground-truth set shorter than the
+        // query set would panic a worker (aborting the whole run via
+        // `h.join().unwrap()`). Validate once up front for a clean error instead.
+        if neighbors.len() < queries.len() {
+            return Err("dataset ground-truth shorter than query set".into());
+        }
 
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(parallel);
@@ -1586,6 +1687,10 @@ impl Engine for RedisEngine {
                 let encoded_queries = &encoded_queries;
                 let query_strs = &query_strs;
                 let query_idx = Arc::clone(&query_idx);
+                let index_name = index_name.as_str();
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
+                let start_cell = Arc::clone(&start_cell);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1596,27 +1701,105 @@ impl Engine for RedisEngine {
                     let mut r = Vec::new();
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
+                    let mut sd = Vec::new();
+                    let mut e2e = Vec::new();
+                    let mut dropped = 0usize;
+                    let mut late = 0usize;
                     let mut pb_pending: u64 = 0;
 
                     let client = match redis::Client::open(redis_url.as_str()) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd, sd, e2e, dropped, late);
+                        }
                     };
                     let mut conn = match client.get_connection() {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd, sd, e2e, dropped, late);
+                        }
                     };
+                    // Bound a blackholed endpoint to a finite wait instead of the
+                    // kernel TCP-retransmit budget (minutes). Kept above the 90s
+                    // server-side FT.SEARCH TIMEOUT so it never preempts it.
+                    conn.set_read_timeout(Some(Duration::from_secs(120))).ok();
+                    conn.set_write_timeout(Some(Duration::from_secs(120))).ok();
+
+                    // Prime this connection with ONE discarded query so the cold
+                    // first round-trip is not inside the measured window. Best
+                    // effort: errors are ignored and its sample is NOT recorded.
+                    {
+                        let prime_top = explicit_top.unwrap_or(10);
+                        let prime_cmd = build_ft_search_cmd(
+                            index_name,
+                            &encoded_queries[0],
+                            &query_strs[0],
+                            prime_top,
+                            ef,
+                            &algorithm,
+                            &hybrid_policy,
+                            query_timeout,
+                            parsed_filters[0].as_ref(),
+                        );
+                        let _ = exec_ft_search(&mut conn, &prime_cmd);
+                    }
+
+                    // Signal "connected + primed", then block until the main thread
+                    // stamps the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
+                    let start_time = *start_cell.get().unwrap();
 
                     loop {
+                        if closed_loop_duration
+                            .map(|duration| Instant::now() >= start_time + duration)
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                         if idx >= num_to_run {
                             break;
+                        }
+                        let query_pos = idx % query_count;
+
+                        let scheduled_at = open_loop.map(|plan| {
+                            let delay = plan.wait_for_slot(start_time, idx);
+                            let will_drop = delay > plan.max_lateness;
+                            // Count schedule-delay + lateness for DISPATCHED
+                            // requests only. A dropped (never-run) request must not
+                            // push its delay into schedule_delays nor increment
+                            // `late`, or late_queries >= dropped_queries always and
+                            // the schedule-delay percentiles are inflated by
+                            // requests that never dispatched. It is accounted
+                            // solely as `dropped` below.
+                            if !will_drop {
+                                sd.push(delay.as_secs_f64());
+                                if plan.is_late(delay) {
+                                    late += 1;
+                                }
+                            }
+                            (plan.scheduled_at(start_time, idx), will_drop)
+                        });
+                        if scheduled_at.map(|(_, drop)| drop).unwrap_or(false) {
+                            dropped += 1;
+                            pb_pending += 1;
+                            if pb_pending >= 256 {
+                                pb.inc(pb_pending);
+                                pb_pending = 0;
+                            }
+                            continue;
                         }
 
                         // Per-query top: use explicit top if set, otherwise
                         // use ground truth count (matches Python v0 behavior)
                         let top = explicit_top.unwrap_or_else(|| {
-                            let n = neighbors[idx].len();
+                            let n = neighbors[query_pos].len();
                             if n > 0 {
                                 n
                             } else {
@@ -1624,21 +1807,27 @@ impl Engine for RedisEngine {
                             }
                         });
 
-                        // Timed window: precomputed blob + query string are passed
-                        // in, so this wraps only the RPC round-trip and reply parse.
-                        let query_start = Instant::now();
-                        let results = ft_search_knn(
-                            &mut conn,
-                            &encoded_queries[idx],
-                            &query_strs[idx],
+                        // Build the FT.SEARCH command OUTSIDE the timer — pure
+                        // client-side arg assembly on precomputed inputs (blob,
+                        // query string, resolved index name). `top` is known here.
+                        let cmd = build_ft_search_cmd(
+                            index_name,
+                            &encoded_queries[query_pos],
+                            &query_strs[query_pos],
                             top,
                             ef,
                             &algorithm,
                             &hybrid_policy,
                             query_timeout,
-                            parsed_filters[idx].as_ref(),
+                            parsed_filters[query_pos].as_ref(),
                         );
+
+                        // Timed window: ONLY the RPC round-trip + reply parse,
+                        // matching the Vertex engine's boundary.
+                        let query_start = Instant::now();
+                        let results = exec_ft_search(&mut conn, &cmd);
                         let query_time = query_start.elapsed().as_secs_f64();
+                        let completion = Instant::now();
 
                         // Record latency + quality only for successful queries. A
                         // failed query is surfaced and counted (as num_to_run minus
@@ -1648,12 +1837,19 @@ impl Engine for RedisEngine {
                             Ok(result_ids) => {
                                 let ordered_ids: Vec<i64> =
                                     result_ids.iter().map(|(id, _)| *id).collect();
-                                let m = compute_metrics(&ordered_ids, &neighbors[idx], top);
+                                let m = compute_metrics(&ordered_ids, &neighbors[query_pos], top);
                                 t.push(query_time);
                                 p.push(m.precision);
                                 r.push(m.recall);
                                 mr.push(m.mrr);
                                 nd.push(m.ndcg);
+                                if let Some((scheduled, _)) = scheduled_at {
+                                    e2e.push(
+                                        completion
+                                            .saturating_duration_since(scheduled)
+                                            .as_secs_f64(),
+                                    );
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Search query {} failed: {}", idx, e);
@@ -1670,25 +1866,66 @@ impl Engine for RedisEngine {
                     if pb_pending > 0 {
                         pb.inc(pb_pending);
                     }
-                    (t, p, r, mr, nd)
+                    (t, p, r, mr, nd, sd, e2e, dropped, late)
                 }));
             }
 
+            // All workers are connected + primed and blocked on `go`. Stamp the
+            // shared measurement start and release them simultaneously. No arrival
+            // offset is needed now — the cold setup is already behind the barrier.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
-                let (t, p, r, mr, nd) = h.join().unwrap();
+                let (t, p, r, mr, nd, sd, e2e, dropped, late) = h.join().unwrap();
                 times.extend(t);
                 precs.extend(p);
                 recs.extend(r);
                 mrs.extend(mr);
                 nds.extend(nd);
+                schedule_delays.extend(sd);
+                end_to_end_latencies.extend(e2e);
+                dropped_queries += dropped;
+                late_queries += late;
             }
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // Measure from the post-barrier start stamp (workers already primed), so
+        // total_time excludes connection setup and the cold first query.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+
+        let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
+        let attempted_queries = query_idx
+            .load(Ordering::Relaxed)
+            .min(num_to_run)
+            .saturating_sub(dropped_queries);
 
         if times.is_empty() {
-            return Err("No searches completed".to_string());
+            // Genuinely zero attempts (no queries offered/dispatched) is an error.
+            // But an overload-shed run that DID dispatch/drop work is a real,
+            // informative data point: report rps=0 with the drop accounting rather
+            // than collapsing the strongest overload signal into an error.
+            if attempted_queries == 0 && dropped_queries == 0 {
+                return Err("No searches completed".to_string());
+            }
+            let mut results = zero_search_results(total_time, top, parallel, attempted_queries);
+            if let Some(plan) = open_loop {
+                attach_open_loop_metrics(
+                    &mut results,
+                    plan,
+                    &schedule_delays,
+                    &end_to_end_latencies,
+                    dropped_queries,
+                    late_queries,
+                );
+            }
+            return Ok(results);
         }
 
         // Verify no FT.SEARCH failures occurred
@@ -1700,10 +1937,29 @@ impl Engine for RedisEngine {
             self.commandstats_baseline.as_ref(),
         )?;
 
-        let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
-        crate::engine::compute_search_stats(
-            &times, &precs, &recs, &mrs, &nds, total_time, top, parallel, num_to_run,
-        )
+        let mut results = crate::engine::compute_search_stats(
+            &times,
+            &precs,
+            &recs,
+            &mrs,
+            &nds,
+            total_time,
+            top,
+            parallel,
+            attempted_queries,
+        )?;
+        // In open-loop mode, drops are distinct from attempted request failures.
+        if let Some(plan) = open_loop {
+            attach_open_loop_metrics(
+                &mut results,
+                plan,
+                &schedule_delays,
+                &end_to_end_latencies,
+                dropped_queries,
+                late_queries,
+            );
+        }
+        Ok(results)
     }
 
     fn search_mixed(
@@ -1760,6 +2016,9 @@ impl Engine for RedisEngine {
         let search_idx = Arc::new(AtomicUsize::new(0));
         let update_idx = Arc::new(AtomicUsize::new(0));
 
+        // Resolve the index name once (env lookup) rather than per query.
+        let index_name = configured_index_name();
+
         let ratio_searches = ratio.searches as usize;
         let ratio_updates = ratio.updates as usize;
         let update_seq_len = update_seq.len();
@@ -1797,6 +2056,7 @@ impl Engine for RedisEngine {
                 let update_seq = &update_seq;
                 let search_idx = Arc::clone(&search_idx);
                 let update_idx = Arc::clone(&update_idx);
+                let index_name = index_name.as_str();
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1848,6 +2108,7 @@ impl Engine for RedisEngine {
                             );
                             let results = ft_search_knn(
                                 &mut conn,
+                                index_name,
                                 &vec_bytes,
                                 &query_str,
                                 top,
@@ -1974,7 +2235,7 @@ impl Engine for RedisEngine {
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
         let _ = redis::cmd("FT.DROPINDEX")
-            .arg("idx")
+            .arg(configured_index_name())
             .arg("DD")
             .query::<()>(&mut conn);
         Ok(())
@@ -1989,7 +2250,7 @@ impl Engine for RedisEngine {
 
         // Get FT.INFO for index stats
         let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
-            .arg("idx")
+            .arg(configured_index_name())
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));
@@ -2006,7 +2267,7 @@ impl Engine for RedisEngine {
         // Vector index stats (HNSW M/EF, num_docs, index memory, ...). Errors on
         // the BEFORE snapshot (index not yet created) → index_info: null.
         let ft_info = redis::cmd("FT.INFO")
-            .arg("idx")
+            .arg(configured_index_name())
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));

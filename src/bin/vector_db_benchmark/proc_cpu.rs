@@ -150,10 +150,11 @@ pub fn compute(
         _ => (None, None),
     };
 
+    // `client_saturated` is decided ONLY by the measured signals (client CPU
+    // fraction, system CPU). `parallel > cores` is the legitimate high-parallel
+    // config a fast single shard needs when the workload is I/O-bound, so it must
+    // NOT by itself declare the client saturated — it is demoted to advisory text.
     let mut reasons: Vec<String> = Vec::new();
-    if oversubscribed {
-        reasons.push(format!("parallel={} > {} cores", parallel, available_cores));
-    }
     if let Some(c) = cores_used {
         if available_cores > 0 && c / available_cores as f64 > CLIENT_CORE_SATURATION {
             reasons.push(format!(
@@ -168,13 +169,21 @@ pub fn compute(
             reasons.push(format!("system CPU {:.0}%", 100.0 * s));
         }
     }
+    let client_saturated = !reasons.is_empty();
+    // Report oversubscription as advisory context, never as a saturation trigger.
+    if oversubscribed {
+        reasons.push(format!(
+            "parallel={} > {} cores (advisory)",
+            parallel, available_cores
+        ));
+    }
 
     Saturation {
         client_cpu_cores_used: cores_used,
         system_cpu_pct: system_pct,
         available_cores,
         oversubscribed,
-        client_saturated: !reasons.is_empty(),
+        client_saturated,
         saturation_reason: reasons.join("; "),
     }
 }
@@ -221,12 +230,27 @@ mod tests {
     }
 
     #[test]
-    fn oversubscription_flags_without_cpu_samples() {
+    fn oversubscription_is_advisory_not_saturation() {
+        // parallel > cores is the legitimate high-parallel config an I/O-bound
+        // run needs, so it must NOT by itself flag the client as saturated. It is
+        // still reported as advisory context.
         let sat = compute(None, None, 64, 8);
         assert!(sat.oversubscribed);
-        assert!(sat.client_saturated);
+        assert!(!sat.client_saturated);
         assert!(sat.client_cpu_cores_used.is_none());
         assert!(sat.saturation_reason.contains("> 8 cores"));
+        assert!(sat.saturation_reason.contains("advisory"));
+    }
+
+    #[test]
+    fn oversubscription_plus_measured_cpu_flags_saturated() {
+        // When the MEASURED client CPU is over threshold the run is saturated;
+        // the oversubscription note rides along as advisory context.
+        let sat = compute(Some(s(0, 0, 0)), Some(s(800, 800, 0)), 64, 8);
+        assert!(sat.oversubscribed);
+        assert!(sat.client_saturated);
+        assert!(sat.saturation_reason.contains("client CPU"));
+        assert!(sat.saturation_reason.contains("advisory"));
     }
 
     #[test]

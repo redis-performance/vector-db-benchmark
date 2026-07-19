@@ -1530,6 +1530,110 @@ fn test_binary_redis_end_to_end() {
 }
 
 #[test]
+fn test_binary_redis_open_loop_fixed_qps() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+    let engine_config = serde_json::json!([{
+        "name": "test-redis-open-loop",
+        "engine": "redis",
+        "algorithm": "hnsw",
+        "collection_params": {
+            "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 }
+        },
+        "search_params": [{
+            "parallel": 4,
+            "search_params": { "ef": 256 },
+            "top": top
+        }],
+        "upload_params": {
+            "data_type": "FLOAT32",
+            "parallel": 1,
+            "batch_size": 64
+        }
+    }]);
+    let project_root = create_test_project(
+        "test-open-loop",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+
+    let output = Command::new(binary_path())
+        .args([
+            "--engines",
+            "test-redis-open-loop",
+            "--datasets",
+            "test-open-loop",
+            "--host",
+            "localhost",
+            "--target-qps",
+            "100",
+            "--search-duration",
+            "0.4",
+            "--max-lateness-ms",
+            "1000",
+            "--repetitions",
+            "1",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .current_dir(&project_root)
+        .output()
+        .expect("Failed to run open-loop benchmark");
+    assert!(
+        output.status.success(),
+        "open-loop binary failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let results_dir = project_root.join("results");
+    assert_eq!(
+        read_search_result_field(&results_dir, "test-redis-open-loop", "target_qps"),
+        Some(serde_json::json!(100.0))
+    );
+    assert_eq!(
+        read_search_result_field(&results_dir, "test-redis-open-loop", "offered_queries"),
+        Some(serde_json::json!(40))
+    );
+    assert_eq!(
+        read_search_result_field(&results_dir, "test-redis-open-loop", "succeeded_queries"),
+        Some(serde_json::json!(40))
+    );
+    assert_eq!(
+        read_search_result_field(&results_dir, "test-redis-open-loop", "dropped_queries"),
+        Some(serde_json::json!(0))
+    );
+    assert!(read_search_result_field(
+        &results_dir,
+        "test-redis-open-loop",
+        "schedule_delay_p95_time"
+    )
+    .and_then(|v| v.as_f64())
+    .is_some());
+    assert!(
+        read_search_result_field(&results_dir, "test-redis-open-loop", "end_to_end_p95_time")
+            .and_then(|v| v.as_f64())
+            .is_some()
+    );
+
+    fs::remove_dir_all(&project_root).ok();
+}
+
+#[test]
 fn test_binary_vectorsets_end_to_end() {
     wait_for_redis();
     let mut conn = get_test_connection();

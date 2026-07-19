@@ -38,6 +38,10 @@ pub struct Args {
     #[arg(long, default_value = "false")]
     pub skip_search: bool,
 
+    /// Keep the configured index and uploaded data after the experiment
+    #[arg(long, default_value = "false")]
+    pub keep_data: bool,
+
     /// Skip if results already exist (accepts an optional value, e.g.
     /// `--skip-if-exists false`; bare `--skip-if-exists` means true)
     #[arg(
@@ -76,6 +80,24 @@ pub struct Args {
     /// Number of queries to run (-1 means all)
     #[arg(long, default_value = "-1")]
     pub queries: i64,
+
+    /// Fixed offered query rate. 0 keeps the existing closed-loop behavior.
+    /// Open-loop mode is currently supported by Redis and Vertex.
+    #[arg(long, default_value = "0.0")]
+    pub target_qps: f64,
+
+    /// Measured search duration in seconds. With --target-qps this is open-loop;
+    /// without it Redis and Vertex run unrestricted closed-loop for this long.
+    #[arg(long, default_value = "0.0")]
+    pub search_duration: f64,
+
+    /// Warm-up duration before each measured open-loop search configuration.
+    #[arg(long, default_value = "0.0")]
+    pub warmup_seconds: f64,
+
+    /// Drop an open-loop request when dispatch is this many milliseconds late.
+    #[arg(long, default_value = "1000.0")]
+    pub max_lateness_ms: f64,
 
     /// Repeat each measured search config this many times and report the
     /// best-RPS run (warm best-of, matching v0's REPETITIONS). The first run is
@@ -148,6 +170,24 @@ mod tests {
         assert!(parse(&["--exit-on-error"]).exit_on_error, "bare → true");
         assert!(!parse(&["--exit-on-error", "false"]).exit_on_error);
         assert!(!parse(&["--exit-on-error=false"]).exit_on_error);
+    }
+
+    #[test]
+    fn parses_open_loop_options() {
+        let args = parse(&[
+            "--target-qps",
+            "1500",
+            "--search-duration",
+            "300",
+            "--warmup-seconds",
+            "10",
+            "--max-lateness-ms",
+            "250",
+        ]);
+        assert_eq!(args.target_qps, 1500.0);
+        assert_eq!(args.search_duration, 300.0);
+        assert_eq!(args.warmup_seconds, 10.0);
+        assert_eq!(args.max_lateness_ms, 250.0);
     }
 
     // `--describe datasets|engines` is what the docker-build smoke test exercises;
