@@ -19,6 +19,41 @@ pub struct IndexDatapoint {
     pub datapoint_id: String,
     #[prost(float, repeated, tag = "2")]
     pub feature_vector: Vec<f32>,
+    // Categorical + numeric filters carried on the query datapoint. Field tags
+    // match `google.cloud.aiplatform.v1.IndexDatapoint` (restricts=4,
+    // numeric_restricts=6); empty vecs encode to nothing.
+    #[prost(message, repeated, tag = "4")]
+    pub restricts: Vec<Restriction>,
+    #[prost(message, repeated, tag = "6")]
+    pub numeric_restricts: Vec<NumericRestriction>,
+}
+
+/// `IndexDatapoint.Restriction` — categorical (token) filter.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Restriction {
+    #[prost(string, tag = "1")]
+    pub namespace: String,
+    #[prost(string, repeated, tag = "2")]
+    pub allow_list: Vec<String>,
+    #[prost(string, repeated, tag = "3")]
+    pub deny_list: Vec<String>,
+}
+
+/// `IndexDatapoint.NumericRestriction` — numeric filter. The `Value` oneof is
+/// modeled as separate optional scalar fields (only one is ever set), which is
+/// wire-identical to the proto oneof. `op` is the `Operator` enum as int32.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct NumericRestriction {
+    #[prost(string, tag = "1")]
+    pub namespace: String,
+    #[prost(int64, optional, tag = "2")]
+    pub value_int: Option<i64>,
+    #[prost(float, optional, tag = "3")]
+    pub value_float: Option<f32>,
+    #[prost(double, optional, tag = "4")]
+    pub value_double: Option<f64>,
+    #[prost(int32, tag = "5")]
+    pub op: i32,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -75,10 +110,42 @@ pub struct PrivateMatchRequest {
     pub float_val: Vec<f32>,
     #[prost(int32, tag = "3")]
     pub num_neighbors: i32,
+    // Categorical filters. Tag matches container `MatchRequest.restricts` (4).
+    #[prost(message, repeated, tag = "4")]
+    pub restricts: Vec<Namespace>,
     #[prost(int32, tag = "6")]
     pub approx_num_neighbors: i32,
     #[prost(double, tag = "9")]
     pub fraction_leaf_nodes_to_search_override: f64,
+    // Numeric filters. Tag matches container `MatchRequest.numeric_restricts` (11).
+    #[prost(message, repeated, tag = "11")]
+    pub numeric_restricts: Vec<NumericNamespace>,
+}
+
+/// Container `Namespace` — categorical filter for the private Match API.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Namespace {
+    #[prost(string, tag = "1")]
+    pub name: String,
+    #[prost(string, repeated, tag = "2")]
+    pub allow_tokens: Vec<String>,
+    #[prost(string, repeated, tag = "3")]
+    pub deny_tokens: Vec<String>,
+}
+
+/// Container `NumericNamespace` — numeric filter for the private Match API.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct NumericNamespace {
+    #[prost(string, tag = "1")]
+    pub name: String,
+    #[prost(int64, optional, tag = "2")]
+    pub value_int: Option<i64>,
+    #[prost(float, optional, tag = "3")]
+    pub value_float: Option<f32>,
+    #[prost(double, optional, tag = "4")]
+    pub value_double: Option<f64>,
+    #[prost(int32, tag = "5")]
+    pub op: i32,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -93,6 +160,142 @@ pub struct PrivateNeighbor {
 pub struct PrivateMatchResponse {
     #[prost(message, repeated, tag = "1")]
     pub neighbor: Vec<PrivateNeighbor>,
+}
+
+/// Transport-neutral filter model, produced by the query/condition parser and
+/// the upload metadata mapper in `vertex.rs`. Serialized to REST JSON there and
+/// to the gRPC wire types here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericOp {
+    Less,
+    LessEqual,
+    Equal,
+    GreaterEqual,
+    Greater,
+    /// Part of Vertex's `Operator` set; the benchmark filter model has no
+    /// not-equal condition, so the parser never emits it.
+    #[allow(dead_code)]
+    NotEqual,
+}
+
+impl NumericOp {
+    /// REST `Operator` enum string.
+    pub fn as_rest(self) -> &'static str {
+        match self {
+            NumericOp::Less => "LESS",
+            NumericOp::LessEqual => "LESS_EQUAL",
+            NumericOp::Equal => "EQUAL",
+            NumericOp::GreaterEqual => "GREATER_EQUAL",
+            NumericOp::Greater => "GREATER",
+            NumericOp::NotEqual => "NOT_EQUAL",
+        }
+    }
+
+    /// Proto `Operator` enum value (shared by v1 NumericRestriction and the
+    /// container NumericNamespace).
+    pub fn as_proto(self) -> i32 {
+        match self {
+            NumericOp::Less => 1,
+            NumericOp::LessEqual => 2,
+            NumericOp::Equal => 3,
+            NumericOp::GreaterEqual => 4,
+            NumericOp::Greater => 5,
+            NumericOp::NotEqual => 6,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum NumericValue {
+    Int(i64),
+    Double(f64),
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct Restrict {
+    pub namespace: String,
+    pub allow_list: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct NumericRestrict {
+    pub namespace: String,
+    /// `None` on the upload/datapoint side (a stored value carries no operator);
+    /// `Some` on the query side.
+    pub op: Option<NumericOp>,
+    pub value: NumericValue,
+}
+
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct VertexFilter {
+    pub restricts: Vec<Restrict>,
+    pub numeric_restricts: Vec<NumericRestrict>,
+}
+
+impl VertexFilter {
+    pub fn is_empty(&self) -> bool {
+        self.restricts.is_empty() && self.numeric_restricts.is_empty()
+    }
+
+    /// Public v1 wire restrictions (for `IndexDatapoint`).
+    fn to_public(&self) -> (Vec<Restriction>, Vec<NumericRestriction>) {
+        let restricts = self
+            .restricts
+            .iter()
+            .map(|r| Restriction {
+                namespace: r.namespace.clone(),
+                allow_list: r.allow_list.clone(),
+                deny_list: Vec::new(),
+            })
+            .collect();
+        let numeric = self
+            .numeric_restricts
+            .iter()
+            .map(|n| {
+                let mut nr = NumericRestriction {
+                    namespace: n.namespace.clone(),
+                    op: n.op.map(|o| o.as_proto()).unwrap_or(0),
+                    ..Default::default()
+                };
+                match n.value {
+                    NumericValue::Int(i) => nr.value_int = Some(i),
+                    NumericValue::Double(d) => nr.value_double = Some(d),
+                }
+                nr
+            })
+            .collect();
+        (restricts, numeric)
+    }
+
+    /// Container wire restrictions (for the private `MatchRequest`).
+    fn to_private(&self) -> (Vec<Namespace>, Vec<NumericNamespace>) {
+        let restricts = self
+            .restricts
+            .iter()
+            .map(|r| Namespace {
+                name: r.namespace.clone(),
+                allow_tokens: r.allow_list.clone(),
+                deny_tokens: Vec::new(),
+            })
+            .collect();
+        let numeric = self
+            .numeric_restricts
+            .iter()
+            .map(|n| {
+                let mut nn = NumericNamespace {
+                    name: n.namespace.clone(),
+                    op: n.op.map(|o| o.as_proto()).unwrap_or(0),
+                    ..Default::default()
+                };
+                match n.value {
+                    NumericValue::Int(i) => nn.value_int = Some(i),
+                    NumericValue::Double(d) => nn.value_double = Some(d),
+                }
+                nn
+            })
+            .collect();
+        (restricts, numeric)
+    }
 }
 
 #[derive(Clone)]
@@ -187,35 +390,49 @@ impl VertexGrpcWorker {
         top: usize,
         fraction_leaf_override: Option<f64>,
         approximate_neighbor_count: Option<i64>,
+        filter: Option<&VertexFilter>,
     ) -> VertexGrpcRequest {
         match &self.kind {
             WorkerKind::Public {
                 index_endpoint,
                 deployed_index_id,
                 ..
-            } => VertexGrpcRequest::Public(PublicFindNeighborsRequest {
-                index_endpoint: index_endpoint.clone(),
-                deployed_index_id: deployed_index_id.clone(),
-                queries: vec![PublicQuery {
-                    datapoint: Some(IndexDatapoint {
-                        datapoint_id: String::new(),
-                        feature_vector: vector.to_vec(),
-                    }),
-                    neighbor_count: top as i32,
-                    approximate_neighbor_count: approximate_neighbor_count.unwrap_or(0) as i32,
-                    fraction_leaf_nodes_to_search_override: fraction_leaf_override.unwrap_or(0.0),
-                }],
-                return_full_datapoint: false,
-            }),
+            } => {
+                let (restricts, numeric_restricts) =
+                    filter.map(|f| f.to_public()).unwrap_or_default();
+                VertexGrpcRequest::Public(PublicFindNeighborsRequest {
+                    index_endpoint: index_endpoint.clone(),
+                    deployed_index_id: deployed_index_id.clone(),
+                    queries: vec![PublicQuery {
+                        datapoint: Some(IndexDatapoint {
+                            datapoint_id: String::new(),
+                            feature_vector: vector.to_vec(),
+                            restricts,
+                            numeric_restricts,
+                        }),
+                        neighbor_count: top as i32,
+                        approximate_neighbor_count: approximate_neighbor_count.unwrap_or(0) as i32,
+                        fraction_leaf_nodes_to_search_override: fraction_leaf_override
+                            .unwrap_or(0.0),
+                    }],
+                    return_full_datapoint: false,
+                })
+            }
             WorkerKind::Private {
                 deployed_index_id, ..
-            } => VertexGrpcRequest::Private(PrivateMatchRequest {
-                deployed_index_id: deployed_index_id.clone(),
-                float_val: vector.to_vec(),
-                num_neighbors: top as i32,
-                approx_num_neighbors: approximate_neighbor_count.unwrap_or(0) as i32,
-                fraction_leaf_nodes_to_search_override: fraction_leaf_override.unwrap_or(0.0),
-            }),
+            } => {
+                let (restricts, numeric_restricts) =
+                    filter.map(|f| f.to_private()).unwrap_or_default();
+                VertexGrpcRequest::Private(PrivateMatchRequest {
+                    deployed_index_id: deployed_index_id.clone(),
+                    float_val: vector.to_vec(),
+                    num_neighbors: top as i32,
+                    restricts,
+                    approx_num_neighbors: approximate_neighbor_count.unwrap_or(0) as i32,
+                    fraction_leaf_nodes_to_search_override: fraction_leaf_override.unwrap_or(0.0),
+                    numeric_restricts,
+                })
+            }
         }
     }
 
@@ -319,6 +536,7 @@ mod tests {
                 datapoint: Some(IndexDatapoint {
                     datapoint_id: String::new(),
                     feature_vector: vec![1.0, 2.0],
+                    ..Default::default()
                 }),
                 neighbor_count: 10,
                 approximate_neighbor_count: 100,
@@ -340,10 +558,69 @@ mod tests {
             num_neighbors: 10,
             approx_num_neighbors: 100,
             fraction_leaf_nodes_to_search_override: 0.07,
+            ..Default::default()
         };
         let decoded = PrivateMatchRequest::decode(message.encode_to_vec().as_slice())
             .expect("request must round-trip");
         assert_eq!(decoded.num_neighbors, 10);
         assert_eq!(decoded.approx_num_neighbors, 100);
+    }
+
+    #[test]
+    fn public_datapoint_restricts_round_trip() {
+        let filter = VertexFilter {
+            restricts: vec![Restrict {
+                namespace: "color".to_string(),
+                allow_list: vec!["red".to_string(), "blue".to_string()],
+            }],
+            numeric_restricts: vec![NumericRestrict {
+                namespace: "size".to_string(),
+                op: Some(NumericOp::GreaterEqual),
+                value: NumericValue::Int(3),
+            }],
+        };
+        let (restricts, numeric) = filter.to_public();
+        let dp = IndexDatapoint {
+            datapoint_id: String::new(),
+            feature_vector: vec![1.0],
+            restricts,
+            numeric_restricts: numeric,
+        };
+        let decoded = IndexDatapoint::decode(dp.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.restricts[0].namespace, "color");
+        assert_eq!(decoded.restricts[0].allow_list, vec!["red", "blue"]);
+        assert_eq!(decoded.numeric_restricts[0].namespace, "size");
+        assert_eq!(decoded.numeric_restricts[0].value_int, Some(3));
+        assert_eq!(decoded.numeric_restricts[0].op, 4); // GREATER_EQUAL
+    }
+
+    #[test]
+    fn private_request_restricts_round_trip() {
+        let filter = VertexFilter {
+            restricts: vec![Restrict {
+                namespace: "color".to_string(),
+                allow_list: vec!["red".to_string()],
+            }],
+            numeric_restricts: vec![NumericRestrict {
+                namespace: "size".to_string(),
+                op: Some(NumericOp::LessEqual),
+                value: NumericValue::Double(7.5),
+            }],
+        };
+        let (restricts, numeric) = filter.to_private();
+        let msg = PrivateMatchRequest {
+            deployed_index_id: "d".to_string(),
+            float_val: vec![1.0],
+            num_neighbors: 10,
+            restricts,
+            numeric_restricts: numeric,
+            ..Default::default()
+        };
+        let decoded = PrivateMatchRequest::decode(msg.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded.restricts[0].name, "color");
+        assert_eq!(decoded.restricts[0].allow_tokens, vec!["red"]);
+        assert_eq!(decoded.numeric_restricts[0].name, "size");
+        assert_eq!(decoded.numeric_restricts[0].value_double, Some(7.5));
+        assert_eq!(decoded.numeric_restricts[0].op, 2); // LESS_EQUAL
     }
 }
