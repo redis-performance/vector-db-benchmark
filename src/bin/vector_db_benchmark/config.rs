@@ -142,12 +142,30 @@ pub fn read_dataset_configs() -> Result<HashMap<String, DatasetConfig>, String> 
 }
 
 /// Read all engine configurations from experiments/configurations/*.json
-pub fn read_engine_configs() -> Result<HashMap<String, EngineConfig>, String> {
-    let configs_dir = project_root().join("experiments/configurations");
-    let pattern = configs_dir.join("*.json");
-
+/// Read engine configs. When `engines_file` is `Some`, ONLY that JSON file is
+/// read (the `--engines-file` flag); otherwise every
+/// `experiments/configurations/*.json` is globbed. A `--engines-file` that is
+/// missing or malformed is a hard error (the previous glob-only behavior
+/// silently ignored the flag, so `--engines-file x.json` failed with a
+/// confusing "no engines match" — see issue #151).
+pub fn read_engine_configs(
+    engines_file: Option<&str>,
+) -> Result<HashMap<String, EngineConfig>, String> {
     let mut all_configs = HashMap::new();
 
+    if let Some(file) = engines_file {
+        let content = fs::read_to_string(file)
+            .map_err(|e| format!("failed to read --engines-file {}: {}", file, e))?;
+        let configs: Vec<EngineConfig> = serde_json::from_str(&content)
+            .map_err(|e| format!("invalid JSON in --engines-file {}: {}", file, e))?;
+        for config in configs {
+            all_configs.insert(config.name.clone(), config);
+        }
+        return Ok(all_configs);
+    }
+
+    let configs_dir = project_root().join("experiments/configurations");
+    let pattern = configs_dir.join("*.json");
     for path in glob::glob(pattern.to_str().unwrap())
         .map_err(|e| e.to_string())?
         .flatten()
@@ -336,7 +354,7 @@ pub fn describe_datasets(verbose: bool) -> Result<(), String> {
 
 /// Describe available engines
 pub fn describe_engines(verbose: bool) -> Result<(), String> {
-    let configs = read_engine_configs()?;
+    let configs = read_engine_configs(None)?;
     println!("Available engines ({}):", configs.len());
     for (name, config) in configs.iter() {
         if verbose {
@@ -361,6 +379,26 @@ mod tests {
         assert!(matches_pattern("redis", "redis"));
         assert!(matches_pattern("anything-at-all", "*"));
         assert!(!matches_pattern("redis", "qdrant"));
+    }
+
+    // #151: `--engines-file` must actually read the given file (it was a silent
+    // no-op). A missing/malformed file is a hard error, not a fallback to glob.
+    #[test]
+    fn engines_file_is_read_and_errors_are_hard() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        write!(
+            f,
+            r#"[{{"name":"my-cfg","engine":"redis","search_params":[{{"parallel":1}}]}}]"#
+        )
+        .unwrap();
+        f.flush().unwrap();
+        let configs = read_engine_configs(Some(f.path().to_str().unwrap())).unwrap();
+        assert!(configs.contains_key("my-cfg"));
+        assert_eq!(configs["my-cfg"].engine.as_deref(), Some("redis"));
+
+        // Missing file → hard error (not a silent fall-through to the glob).
+        assert!(read_engine_configs(Some("/no/such/file.json")).is_err());
     }
 
     #[test]
