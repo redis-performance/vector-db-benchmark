@@ -414,6 +414,12 @@ fn weaviate_property(field_name: &str, field_type: &str) -> Option<serde_json::V
         "keyword" | "text" => "text",
         "float" => "number",
         "geo" => "geoCoordinates",
+        // Bools become a `boolean` property (upload converts the reader's
+        // "true"/"false" string to a native bool). Datetimes become a `date`
+        // property; Weaviate stores/filters RFC3339 strings, and its gRPC filter
+        // compares date properties via valueText (there is no ValueDate variant).
+        "bool" => "boolean",
+        "datetime" => "date",
         _ => return None,
     };
     let mut prop = serde_json::json!({
@@ -462,6 +468,15 @@ fn coerce_metadata_value(
                 .parse::<f64>()
                 .map(serde_json::Value::from)
                 .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+            // A `boolean` property needs a native JSON bool, not the "true"/
+            // "false" string the reader produces (Weaviate is strict-typed).
+            Some("bool") => match s.as_str() {
+                "true" => serde_json::Value::Bool(true),
+                "false" => serde_json::Value::Bool(false),
+                _ => serde_json::Value::String(s.clone()),
+            },
+            // `datetime` -> `date` property: keep the RFC3339 string as-is
+            // (Weaviate parses ISO-8601 date strings).
             _ => serde_json::Value::String(s.clone()),
         },
         MetadataValue::Int(n) => serde_json::Value::from(*n),
@@ -1103,6 +1118,10 @@ fn build_weaviate_filter(
             let value_key = |v: &serde_json::Value| -> &str {
                 if v.is_i64() {
                     "valueInt"
+                } else if v.is_string() {
+                    // ISO-8601 datetime bound over a `date` property — Weaviate's
+                    // gRPC filter compares dates via valueText (RFC3339).
+                    "valueText"
                 } else {
                     "valueNumber"
                 }
