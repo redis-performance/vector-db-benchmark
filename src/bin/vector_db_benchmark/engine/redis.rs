@@ -1283,10 +1283,14 @@ fn build_ft_search_cmd(
         .arg("TIMEOUT")
         .arg(query_timeout);
 
-    // Count params: vec_param(2) + K(2) + optional EF(2) + filter params (2 each)
+    // Count params: vec_param(2) + K(2) + optional EF(2) + filter params (2 each).
+    // The `$EF` param backs HNSW's EF_RUNTIME and SVS-VAMANA's SEARCH_WINDOW_SIZE
+    // (see build_knn_query_str), so bind it for either algorithm.
+    let algo = algorithm.to_uppercase();
+    let binds_ef = (algo == "HNSW" || algo.contains("SVS")) && hybrid_policy != "ADHOC_BF";
     let filter_param_count = filter.as_ref().map(|(_, p)| p.len() * 2).unwrap_or(0);
     let mut base_param_count = 4; // vec_param + K
-    if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
+    if binds_ef {
         base_param_count += 2; // EF
     }
     let total_param_count = base_param_count + filter_param_count;
@@ -1295,7 +1299,7 @@ fn build_ft_search_cmd(
     cmd.arg("vec_param").arg(vec_bytes);
     cmd.arg("K").arg(top.to_string());
 
-    if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
+    if binds_ef {
         cmd.arg("EF").arg(ef.to_string());
     }
 
