@@ -141,6 +141,14 @@ pub struct Args {
     /// Collapses all M/EF variants of the same engine into a single "<engine>-no-vector" experiment.
     #[arg(long, default_value = "false")]
     pub skip_vector_index: bool,
+
+    /// Also dump the FULL raw per-query arrays (precisions, recalls, mrrs, ndcgs,
+    /// latencies, and mixed update_latencies) into each result file. Off by
+    /// default: results carry only the compact HDR/quality digests, which shrink
+    /// large-run files ~1000x while keeping every percentile re-derivable. Enable
+    /// this only for full-fidelity archival of a specific run.
+    #[arg(long, default_value = "false")]
+    pub dump_raw_latencies: bool,
 }
 
 #[cfg(test)]
@@ -204,6 +212,17 @@ mod tests {
     fn search_timeout_parses() {
         assert_eq!(parse(&[]).search_timeout, 0.0, "omitted → disabled");
         assert_eq!(parse(&["--search-timeout", "300"]).search_timeout, 300.0);
+    }
+
+    // Raw-array dump (#151-8): opt-in, defaults to false so result files carry
+    // only the compact digests, and parses when explicitly requested.
+    #[test]
+    fn dump_raw_latencies_parses() {
+        assert!(
+            !parse(&[]).dump_raw_latencies,
+            "omitted → false (digests only)"
+        );
+        assert!(parse(&["--dump-raw-latencies"]).dump_raw_latencies);
     }
 
     // `--describe datasets|engines` is what the docker-build smoke test exercises;

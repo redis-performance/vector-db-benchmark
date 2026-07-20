@@ -9,6 +9,7 @@ mod dataset;
 mod download;
 mod engine;
 mod experiment;
+mod latency_digest;
 mod metrics;
 mod plot;
 mod proc_cpu;

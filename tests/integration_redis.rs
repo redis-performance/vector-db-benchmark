@@ -2217,12 +2217,16 @@ fn test_binary_redis_tenancy() {
     );
 
     assert!(
-        common::run_binary(
+        // --dump-raw-latencies: the per-tenant leakage check below reads the
+        // full per-query `recalls` array, which is only emitted under this flag
+        // (results otherwise carry compact HDR/quality digests).
+        common::run_binary_extra(
             &proj.root,
             "redis-tenancy",
             "tenancy-test",
             "localhost",
             &[("REDIS_PORT", &TEST_PORT.to_string())],
+            &["--dump-raw-latencies"],
         ),
         "redis tenancy run failed"
     );

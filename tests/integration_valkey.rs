@@ -1423,12 +1423,16 @@ fn test_binary_valkey_tenancy() {
 
     let port = test_port().to_string();
     assert!(
-        common::run_binary(
+        // --dump-raw-latencies: the per-tenant leakage check below reads the
+        // full per-query `recalls` array, only emitted under this flag (results
+        // otherwise carry compact HDR/quality digests).
+        common::run_binary_extra(
             &proj.root,
             "valkey-tenancy",
             "tenancy-test",
             "127.0.0.1",
             &[("VALKEY_PORT", port.as_str())],
+            &["--dump-raw-latencies"],
         ),
         "valkey tenancy run failed"
     );
