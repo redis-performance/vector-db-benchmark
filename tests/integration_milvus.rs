@@ -454,6 +454,74 @@ fn test_binary_milvus_match_any() {
     assert!(recall >= 0.9, "milvus match_any recall {:.3} < 0.9", recall);
 }
 
+/// Bool-field equality filter end-to-end. Regression: `"bool"` hit the schema
+/// `_ => continue` arm so no column was created, while the filter emitted a
+/// native `flag == true` against the missing column. Now `bool` -> native Bool
+/// column (upload converts the reader's "true"/"false" string to a JSON bool).
+#[test]
+fn test_binary_milvus_bool() {
+    wait_for_milvus();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-bool", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj =
+        common::write_bool_project("bool-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-bool",
+            "bool-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_bool")
+            ],
+        ),
+        "milvus bool run failed"
+    );
+    let recall = common::read_recall(&proj.root, "milvus-bool");
+    println!("milvus bool recall={:.3}", recall);
+    assert!(recall >= 0.9, "milvus bool recall {:.3} < 0.9", recall);
+}
+
+/// Datetime range filter end-to-end. Regression: `"datetime"` was dropped from
+/// the schema and the range builder inlined the quoted ISO string. Now
+/// `datetime` -> Int64 epoch column; upload and the range filter both convert
+/// ISO-8601 to epoch seconds, so the `[day 100, day 300)` window is selected.
+#[test]
+fn test_binary_milvus_datetime() {
+    wait_for_milvus();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-dt", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj =
+        common::write_datetime_project("dt-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-dt",
+            "dt-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_dt")
+            ],
+        ),
+        "milvus datetime run failed"
+    );
+    let recall = common::read_recall(&proj.root, "milvus-dt");
+    println!("milvus datetime recall={:.3}", recall);
+    assert!(recall >= 0.9, "milvus datetime recall {:.3} < 0.9", recall);
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88).
 /// Milvus stores it as an Array(VarChar) and filters with
 /// `array_contains_any`; before the fix it was a comma-joined VarChar tested

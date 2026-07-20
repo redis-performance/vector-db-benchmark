@@ -14,6 +14,7 @@ use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
 use crate::engine::{Engine, SearchResults, UploadStats};
+use vector_db_benchmark::parsers::datetime_to_epoch_secs;
 use vector_db_benchmark::readers::metadata::{is_multivalued_keyword_field, MetadataItem};
 
 const DEFAULT_COLLECTION: &str = "Benchmark";
@@ -196,6 +197,11 @@ impl MilvusEngine {
                             "int" => "Int64",
                             "keyword" | "text" => "VarChar",
                             "float" => "Double",
+                            // Milvus has a native Bool type. No native date type, so
+                            // datetimes are stored as Int64 epoch seconds (upload +
+                            // filter both convert via datetime_to_epoch_secs).
+                            "bool" => "Bool",
+                            "datetime" => "Int64",
                             _ => continue,
                         };
                         let mut field = serde_json::json!({
@@ -458,7 +464,21 @@ fn insert_batch(
                 // string, or the strict VarChar column rejects the whole batch.
                 let v = v.coerce_for_schema(schema_types.get(k).map(|s| s.as_str()));
                 let val = match v.as_ref() {
-                    MetadataValue::String(s) => serde_json::Value::String(s.clone()),
+                    MetadataValue::String(s) => match schema_types.get(k).map(|t| t.as_str()) {
+                        // Native Bool column needs a JSON bool, not the reader's
+                        // "true"/"false" string.
+                        Some("bool") => match s.as_str() {
+                            "true" => serde_json::Value::Bool(true),
+                            "false" => serde_json::Value::Bool(false),
+                            _ => serde_json::Value::String(s.clone()),
+                        },
+                        // datetime -> Int64 epoch seconds (same conversion the range
+                        // filter uses, so stored and queried values compare exactly).
+                        Some("datetime") => datetime_to_epoch_secs(s)
+                            .map(|e| serde_json::Value::from(e as i64))
+                            .unwrap_or_else(|| serde_json::Value::String(s.clone())),
+                        _ => serde_json::Value::String(s.clone()),
+                    },
                     MetadataValue::Int(n) => serde_json::Value::from(*n),
                     MetadataValue::Float(f) => serde_json::json!(*f),
                     MetadataValue::Labels(labels) => {
@@ -778,24 +798,26 @@ fn build_milvus_filter(
         "range" => {
             let criteria_obj = criteria.as_object()?;
             let mut clauses = Vec::new();
-            if let Some(lt) = criteria_obj.get("lt") {
-                if !lt.is_null() {
-                    clauses.push(format!("{} < {}", field_name, lt));
+            // Render a range bound as a Milvus scalar literal. A numeric bound is
+            // emitted verbatim; a string bound is an ISO-8601 datetime over the
+            // Int64-epoch column, converted with datetime_to_epoch_secs (the same
+            // conversion upload uses). A bound we can't render is dropped.
+            let bound_literal = |v: &serde_json::Value| -> Option<String> {
+                if v.is_number() {
+                    Some(v.to_string())
+                } else if let Some(s) = v.as_str() {
+                    datetime_to_epoch_secs(s).map(|e| (e as i64).to_string())
+                } else {
+                    None
                 }
-            }
-            if let Some(gt) = criteria_obj.get("gt") {
-                if !gt.is_null() {
-                    clauses.push(format!("{} > {}", field_name, gt));
-                }
-            }
-            if let Some(lte) = criteria_obj.get("lte") {
-                if !lte.is_null() {
-                    clauses.push(format!("{} <= {}", field_name, lte));
-                }
-            }
-            if let Some(gte) = criteria_obj.get("gte") {
-                if !gte.is_null() {
-                    clauses.push(format!("{} >= {}", field_name, gte));
+            };
+            for (key, sql_op) in [("lt", "<"), ("gt", ">"), ("lte", "<="), ("gte", ">=")] {
+                if let Some(bound) = criteria_obj.get(key) {
+                    if !bound.is_null() {
+                        if let Some(lit) = bound_literal(bound) {
+                            clauses.push(format!("{} {} {}", field_name, sql_op, lit));
+                        }
+                    }
                 }
             }
             if clauses.is_empty() {
