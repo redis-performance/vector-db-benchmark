@@ -35,8 +35,10 @@ use crate::engine::vertex_grpc::{
 };
 use crate::engine::{
     attach_open_loop_metrics, closed_loop_duration, zero_search_results, Engine, OpenLoopPlan,
-    SearchResults, UploadStats,
+    SearchResults, UpdateSearchRatio, UploadStats,
 };
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
 
 const DEFAULT_REGION: &str = "us-central1";
@@ -1509,6 +1511,306 @@ impl Engine for VertexEngine {
                 late_queries,
             );
         }
+        Ok(results)
+    }
+
+    fn search_mixed(
+        &mut self,
+        dataset: &Dataset,
+        params: &SearchParams,
+        num_queries: i64,
+        ratio: &UpdateSearchRatio,
+    ) -> Result<SearchResults, String> {
+        self.distance_measure = vertex_distance_measure(dataset.distance()).to_string();
+
+        // Resolve the deployed index (reuse env on --skip-upload) + public domain.
+        if self.index_name.is_empty()
+            || self.index_endpoint_name.is_empty()
+            || self.deployed_index_id.is_empty()
+        {
+            let (index, endpoint, deployed) = reuse_index_ids().ok_or(
+                "Vertex mixed benchmark needs a deployed index (VERTEX_INDEX, VERTEX_INDEX_ENDPOINT, VERTEX_DEPLOYED_INDEX_ID)",
+            )?;
+            self.index_name = index;
+            self.index_endpoint_name = endpoint;
+            self.deployed_index_id = deployed;
+        }
+        if self.public_endpoint_domain.is_empty()
+            && self.query_transport != VertexQueryTransport::PrivateGrpc
+        {
+            let token = self.access_token()?;
+            let ep = self.get_json(
+                &format!("{}/{}", self.base_url(), self.index_endpoint_name),
+                &token,
+            )?;
+            self.public_endpoint_domain = ep
+                .get("publicEndpointDomainName")
+                .and_then(|d| d.as_str())
+                .ok_or("index endpoint has no publicEndpointDomainName")?
+                .to_string();
+        }
+
+        let parallel = params.parallel.unwrap_or(1).max(1) as usize;
+        let schema = schema_type_map(dataset);
+
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+        if queries.is_empty() {
+            return Err("dataset contains no search queries".to_string());
+        }
+        let parsed_filters: Vec<Option<VertexFilter>> = conditions
+            .iter()
+            .map(|c| {
+                c.as_ref()
+                    .map(|v| parse_vertex_filter(v, &schema))
+                    .transpose()
+            })
+            .collect::<Result<_, _>>()?;
+
+        // Vectors + metadata for the update half (deterministic shuffled order,
+        // so re-upserts hit the same datapoints run-to-run).
+        let normalize = dataset.needs_normalization();
+        let (upd_ids, upd_vectors, upd_metadata) = dataset.read_vectors(normalize)?;
+        if upd_ids.is_empty() {
+            return Err("dataset has no vectors for the update half".to_string());
+        }
+        let mut update_seq: Vec<usize> = (0..upd_ids.len()).collect();
+        update_seq.shuffle(&mut rand::rngs::StdRng::seed_from_u64(42));
+
+        let explicit_top: Option<usize> = params.top.map(|t| t as usize);
+        let num_to_run = if num_queries > 0 {
+            (num_queries as usize).min(queries.len())
+        } else {
+            queries.len()
+        };
+        let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
+        if neighbors.len() < queries.len() {
+            return Err(format!(
+                "dataset misaligned: {} neighbor lists for {} queries",
+                neighbors.len(),
+                queries.len()
+            ));
+        }
+        let fraction_leaf_override: Option<f64> = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.extra.as_ref())
+            .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
+            .and_then(|v| v.as_f64());
+        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(top as i64));
+
+        let ratio_searches = ratio.searches.max(1) as usize;
+        let ratio_updates = ratio.updates as usize;
+        let update_seq_len = update_seq.len();
+
+        println!(
+            "\tRunning mixed {}:{} (updates:searches) — {} searches, top={}, parallel={}...",
+            ratio.updates, ratio.searches, num_to_run, top, parallel
+        );
+
+        // One access token for the whole timed region (as in search()). gRPC
+        // query workers embed it at construction; the REST update client re-uses
+        // it. Mixed runs are bounded by `num_to_run` searches.
+        let token = self.access_token()?;
+        let deployed_index_id = self.deployed_index_id.as_str();
+        let query_transport = self.query_transport;
+        let public_endpoint_domain = self.public_endpoint_domain.as_str();
+        let private_address = self.grpc_address.as_deref();
+        let index_endpoint_name = self.index_endpoint_name.as_str();
+        let upsert_url = format!("{}/{}:upsertDatapoints", self.base_url(), self.index_name);
+
+        let workers = parallel.min(num_to_run.max(1));
+        let search_idx = Arc::new(AtomicUsize::new(0));
+        let update_idx = Arc::new(AtomicUsize::new(0));
+        let pb = self.create_progress_bar(num_to_run);
+        let start_time = Instant::now();
+
+        let queries = &queries;
+        let neighbors = &neighbors;
+        let parsed_filters = &parsed_filters;
+        let upd_ids = &upd_ids;
+        let upd_vectors = &upd_vectors;
+        let upd_metadata = &upd_metadata;
+        let update_seq = &update_seq;
+        let schema = &schema;
+        let token = token.as_str();
+        let upsert_url = upsert_url.as_str();
+
+        let mut latencies: Vec<f64> = Vec::new();
+        let mut precisions: Vec<f64> = Vec::new();
+        let mut recalls: Vec<f64> = Vec::new();
+        let mut mrrs: Vec<f64> = Vec::new();
+        let mut ndcgs: Vec<f64> = Vec::new();
+        let mut update_times: Vec<f64> = Vec::new();
+
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(workers);
+            for _ in 0..workers {
+                let search_idx = Arc::clone(&search_idx);
+                let update_idx = Arc::clone(&update_idx);
+                let pb = &pb;
+                handles.push(s.spawn(move || {
+                    let mut t = Vec::new();
+                    let mut p = Vec::new();
+                    let mut r = Vec::new();
+                    let mut mr = Vec::new();
+                    let mut nd = Vec::new();
+                    let mut ut = Vec::new();
+                    let mut pb_pending: u64 = 0;
+
+                    let mut client = match VertexWorker::new(VertexWorkerConfig {
+                        transport: query_transport,
+                        public_domain: public_endpoint_domain,
+                        private_address,
+                        token,
+                        index_endpoint: index_endpoint_name,
+                        deployed_index_id,
+                    }) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Vertex mixed worker build failed: {e}");
+                            return (t, p, r, mr, nd, ut);
+                        }
+                    };
+                    let update_client = match reqwest::blocking::Client::builder()
+                        .timeout(Duration::from_secs(60))
+                        .build()
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Vertex mixed update client build failed: {e}");
+                            return (t, p, r, mr, nd, ut);
+                        }
+                    };
+
+                    'outer: loop {
+                        // Search phase: S searches.
+                        for _ in 0..ratio_searches {
+                            let idx = search_idx.fetch_add(1, Ordering::Relaxed);
+                            if idx >= num_to_run {
+                                break 'outer;
+                            }
+                            let qpos = idx % queries.len();
+                            let request = client.request(
+                                deployed_index_id,
+                                &queries[qpos],
+                                top,
+                                fraction_leaf_override,
+                                approximate_neighbor_count,
+                                parsed_filters[qpos].as_ref(),
+                            );
+                            let start = Instant::now();
+                            let outcome = client.execute(request);
+                            let elapsed = start.elapsed().as_secs_f64();
+                            match outcome {
+                                Ok(ids) => {
+                                    let m = crate::metrics::compute_metrics(
+                                        &ids,
+                                        &neighbors[qpos],
+                                        top,
+                                    );
+                                    t.push(elapsed);
+                                    p.push(m.precision);
+                                    r.push(m.recall);
+                                    mr.push(m.mrr);
+                                    nd.push(m.ndcg);
+                                }
+                                Err(e) => eprintln!("Mixed search {} failed: {}", idx, e),
+                            }
+                            pb_pending += 1;
+                            if pb_pending >= 256 {
+                                pb.inc(pb_pending);
+                                pb_pending = 0;
+                            }
+                        }
+                        // Update phase: U single-datapoint upserts (with restricts).
+                        for _ in 0..ratio_updates {
+                            let uidx = update_idx.fetch_add(1, Ordering::Relaxed);
+                            let dpos = update_seq[uidx % update_seq_len];
+                            let body = build_upsert_body(
+                                &upd_ids[dpos..dpos + 1],
+                                &upd_vectors[dpos..dpos + 1],
+                                &upd_metadata[dpos..dpos + 1],
+                                schema,
+                            );
+                            let ustart = Instant::now();
+                            match update_client
+                                .post(upsert_url)
+                                .bearer_auth(token)
+                                .json(&body)
+                                .send()
+                            {
+                                Ok(rr) if rr.status().is_success() => {
+                                    ut.push(ustart.elapsed().as_secs_f64())
+                                }
+                                Ok(rr) => eprintln!(
+                                    "Mixed update {} failed: {}: {}",
+                                    uidx,
+                                    rr.status(),
+                                    rr.text().unwrap_or_default()
+                                ),
+                                Err(e) => eprintln!("Mixed update {} failed: {}", uidx, e),
+                            }
+                        }
+                    }
+                    if pb_pending > 0 {
+                        pb.inc(pb_pending);
+                    }
+                    (t, p, r, mr, nd, ut)
+                }));
+            }
+            for h in handles {
+                let (t, p, r, mr, nd, ut) = h.join().unwrap();
+                latencies.extend(t);
+                precisions.extend(p);
+                recalls.extend(r);
+                mrrs.extend(mr);
+                ndcgs.extend(nd);
+                update_times.extend(ut);
+            }
+        });
+        pb.finish_and_clear();
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        if latencies.is_empty() {
+            return Err("No searches completed (all mixed queries failed)".to_string());
+        }
+
+        let (update_count, update_rps, update_mean, u50, u95, u99) = if !update_times.is_empty() {
+            let rps = update_times.len() as f64 / total_time;
+            let mean = update_times.iter().sum::<f64>() / update_times.len() as f64;
+            let mut sorted = update_times.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            (
+                Some(update_times.len()),
+                Some(rps),
+                Some(mean),
+                Some(crate::engine::percentile_linear(&sorted, 0.50)),
+                Some(crate::engine::percentile_linear(&sorted, 0.95)),
+                Some(crate::engine::percentile_linear(&sorted, 0.99)),
+            )
+        } else {
+            (None, None, None, None, None, None)
+        };
+
+        let mut results = crate::engine::compute_search_stats(
+            &latencies,
+            &precisions,
+            &recalls,
+            &mrrs,
+            &ndcgs,
+            total_time,
+            top,
+            parallel,
+            num_to_run,
+        )?;
+        results.update_count = update_count;
+        results.update_rps = update_rps;
+        results.update_mean_time = update_mean;
+        results.update_p50_time = u50;
+        results.update_p95_time = u95;
+        results.update_p99_time = u99;
+        results.update_latencies = Some(update_times);
+        results.update_search_ratio = Some(format!("{}:{}", ratio.updates, ratio.searches));
         Ok(results)
     }
 
