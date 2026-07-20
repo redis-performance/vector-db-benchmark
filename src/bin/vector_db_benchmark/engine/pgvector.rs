@@ -25,6 +25,11 @@ fn pg_column_type(field_type: &str) -> Option<&'static str> {
         "keyword" | "text" => Some("TEXT"),
         "int" => Some("BIGINT"),
         "float" => Some("DOUBLE PRECISION"),
+        // Bools/datetimes arrive from the reader as strings ("true"/"false",
+        // ISO-8601). COPY-text coerces those into a BOOLEAN column and parses
+        // ISO into a TIMESTAMPTZ column, so a plain scalar column filters fine.
+        "bool" => Some("BOOLEAN"),
+        "datetime" => Some("TIMESTAMPTZ"),
         _ => None,
     }
 }
@@ -795,8 +800,22 @@ fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Op
                             } else if let Some(f) = val.as_f64() {
                                 let ph = builder.bind(PgValue::Float(f));
                                 parts.push(format!("\"{}\" {} {}", field_name, sql_op, ph));
+                            } else if let Some(s) = val.as_str() {
+                                // A string bound is an ISO-8601 datetime range over a
+                                // TIMESTAMPTZ column. Inline as a single-quoted SQL
+                                // literal + cast: binding `$n::timestamptz` makes
+                                // Postgres infer the param type as timestamptz and
+                                // reject a text value ("error serializing parameter").
+                                // Single-quote-escape the benchmark-controlled ISO
+                                // string (was previously inlined bare, i.e. rendered
+                                // with double quotes → a broken SQL identifier).
+                                let esc = s.replace('\'', "''");
+                                parts.push(format!(
+                                    "\"{}\" {} '{}'::timestamptz",
+                                    field_name, sql_op, esc
+                                ));
                             } else {
-                                // Non-numeric range bound (degenerate) — inline.
+                                // Non-scalar range bound (degenerate) — inline.
                                 parts.push(format!("\"{}\" {} {}", field_name, sql_op, val));
                             }
                         }
