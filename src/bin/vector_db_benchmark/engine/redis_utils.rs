@@ -215,6 +215,10 @@ fn value_to_string(v: &redis::Value) -> String {
         redis::Value::SimpleString(s) => s.clone(),
         redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
         redis::Value::Int(n) => n.to_string(),
+        // RESP3 returns FT.INFO numeric size fields (`*_mb`) as Double; render the
+        // bare number so `ft_info_index_memory_bytes` can parse it (else per-config
+        // memory silently degrades to null under `*_PROTOCOL=resp3`).
+        redis::Value::Double(d) => d.to_string(),
         other => format!("{:?}", other),
     }
 }
@@ -355,6 +359,87 @@ fn evaluate(
     }
 }
 
+/// Confirm a search index exists before a search run (issue #151-4). On the
+/// `--skip-upload` path a name/prefix mismatch (old→new upgrade, wrong config,
+/// missing prior upload) would otherwise write a silent `recall 0.0` result
+/// file. `FT.INFO <index_name>` errors when the index is absent → hard error.
+pub fn ensure_index_exists(conn: &mut Connection, index_name: &str) -> Result<(), String> {
+    redis::cmd("FT.INFO")
+        .arg(index_name)
+        .query::<redis::Value>(conn)
+        .map(|_| ())
+        .map_err(|_| {
+            format!(
+                "index '{index_name}' not found — did you upload this config? \
+                 (--skip-upload requires a prior upload with --keep-data)"
+            )
+        })
+}
+
+/// Per-index memory footprint in bytes, summed from every `*_mb` size field of
+/// an `FT.INFO` reply (RESP2 flat array or RESP3 map). Under issue #151-4's
+/// coexistence mode the server-wide `used_memory` is the SUM of all resident
+/// configs, so it cannot attribute memory per graph; this reads the per-index
+/// figure instead. Returns `None` when the reply carries no size fields.
+pub fn ft_info_index_memory_bytes(v: &redis::Value) -> Option<i64> {
+    let pairs: Vec<(String, &redis::Value)> = match v {
+        redis::Value::Map(m) => m.iter().map(|(k, val)| (value_to_string(k), val)).collect(),
+        redis::Value::Array(items) => items
+            .chunks_exact(2)
+            .map(|c| (value_to_string(&c[0]), &c[1]))
+            .collect(),
+        _ => return None,
+    };
+    let mut mb = 0.0f64;
+    let mut found = false;
+    for (k, val) in pairs {
+        if k.ends_with("_mb") {
+            if let Ok(n) = value_to_string(val).parse::<f64>() {
+                mb += n;
+                found = true;
+            }
+        }
+    }
+    found.then_some((mb * 1024.0 * 1024.0) as i64)
+}
+
+/// Non-destructive teardown for a single config's index + keys (issue #151-4),
+/// for engines with no `DD` flag on `FT.DROPINDEX` (Valkey / Dragonfly). Drops
+/// the index, then SCAN+UNLINKs only keys matching `<key_prefix>*`. `key_prefix`
+/// is sanitized (see `index_naming::sanitize_token`) so the SCAN `MATCH` glob
+/// contains no metacharacters — it is a literal prefix. Runs OUTSIDE every timed
+/// window and every `check_commandstats` reset window. UNLINK (async) avoids the
+/// blocking spike a large synchronous `DEL` would cause.
+pub fn drop_index_and_keys(conn: &mut Connection, index_name: &str, key_prefix: &str) {
+    let _ = redis::cmd("FT.DROPINDEX").arg(index_name).query::<()>(conn);
+    let pattern = format!("{key_prefix}*"); // key_prefix is sanitized → no glob metachars
+    let mut cursor: u64 = 0;
+    loop {
+        let (next, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(&pattern)
+            .arg("COUNT")
+            .arg(1000)
+            .query(conn)
+        {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        if !keys.is_empty() {
+            let mut unlink = redis::cmd("UNLINK");
+            for k in &keys {
+                unlink.arg(k);
+            }
+            let _ = unlink.query::<()>(conn);
+        }
+        if next == 0 {
+            break;
+        }
+        cursor = next;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{evaluate, parse_failed_calls, CommandStatsBaseline};
@@ -444,6 +529,41 @@ mod tests {
         let m = parse_failed_calls(info);
         assert_eq!(m.get("FT.CREATE"), Some(&2));
         assert!(!m.contains_key("BAD"));
+    }
+
+    #[test]
+    fn ft_info_memory_sums_mb_fields_from_both_shapes() {
+        use redis::Value;
+        fn bulk(s: &str) -> Value {
+            Value::BulkString(s.as_bytes().to_vec())
+        }
+        // RESP2 flat array: only `*_mb` fields count; num_docs is ignored.
+        let arr = Value::Array(vec![
+            bulk("num_docs"),
+            bulk("100"),
+            bulk("inverted_sz_mb"),
+            bulk("1.0"),
+            bulk("vector_index_sz_mb"),
+            bulk("2.0"),
+        ]);
+        assert_eq!(
+            super::ft_info_index_memory_bytes(&arr),
+            Some(3 * 1024 * 1024)
+        );
+        // RESP3 map: same total.
+        let map = Value::Map(vec![
+            (bulk("inverted_sz_mb"), bulk("1.0")),
+            (bulk("vector_index_sz_mb"), bulk("2.0")),
+        ]);
+        assert_eq!(
+            super::ft_info_index_memory_bytes(&map),
+            Some(3 * 1024 * 1024)
+        );
+        // No size fields → None.
+        assert_eq!(
+            super::ft_info_index_memory_bytes(&Value::Array(vec![bulk("num_docs"), bulk("5")])),
+            None
+        );
     }
 }
 

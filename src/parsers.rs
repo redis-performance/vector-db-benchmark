@@ -69,6 +69,28 @@ pub fn datetime_to_epoch_secs(s: &str) -> Option<f64> {
     None
 }
 
+/// Recover the numeric doc id from an FT.SEARCH key under the RESP2 arm, where
+/// the id is positionally guaranteed present. Since issue #151-4 the doc key is
+/// `"<config>:<id>"` (per-config keyspace prefix), so the id is the tail after
+/// the last `:`. A bare `"42"` (no prefix, as older uploads and the Class-A
+/// integration tests write) still yields `42`, keeping this backward-compatible.
+/// An unparseable tail falls back to `0` (mirrors the old `value_as_i64`).
+pub fn doc_key_to_id(key: &str) -> i64 {
+    key.rsplit(':')
+        .next()
+        .unwrap_or(key)
+        .parse::<i64>()
+        .unwrap_or(0)
+}
+
+/// Recover the numeric doc id from an FT.SEARCH key under the RESP3 arm, where a
+/// missing/unparseable id must be SKIPPED (returns `None`) rather than emitted as
+/// a phantom `id=0` hit that would pollute recall. Do NOT collapse this into
+/// `doc_key_to_id`: the `Option` semantics are load-bearing here.
+pub fn doc_key_to_id_opt(key: &str) -> Option<i64> {
+    key.rsplit(':').next().unwrap_or(key).parse::<i64>().ok()
+}
+
 /// Parse an FT.SEARCH reply under EITHER protocol:
 /// - RESP2: a flat array `[count, id, fields, id, fields, ...]`
 /// - RESP3: a map `{ results: [ { id, extra_attributes: { vector_score, .. }, .. } ], .. }`
@@ -94,7 +116,11 @@ fn parse_ft_search_resp2(response: &[redis::Value]) -> Vec<(i64, f64)> {
     // First element is total count.
     let mut i = 1;
     while i < response.len() {
-        let id = value_as_i64(&response[i]);
+        // The reply carries the doc KEY (e.g. "cfg:42"), not a bare id; recover
+        // the trailing numeric id. Missing string → 0 (positionally present).
+        let id = value_as_string(&response[i])
+            .map(|s| doc_key_to_id(&s))
+            .unwrap_or(0);
         i += 1;
 
         if i < response.len() {
@@ -133,7 +159,7 @@ fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f6
         let mut score = 0.0f64;
         for (k, v) in fields {
             match value_as_string(k).as_deref() {
-                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()),
+                Some("id") => id = value_as_string(v).and_then(|s| doc_key_to_id_opt(&s)),
                 Some("extra_attributes") => {
                     if let redis::Value::Map(attrs) = v {
                         for (ak, av) in attrs {
@@ -245,6 +271,40 @@ mod tests {
     }
 
     // ---- Regression tests for fuzzer-found crashes (see notes in report). ----
+
+    #[test]
+    fn doc_key_to_id_recovers_prefixed_and_bare() {
+        // Bare (pre-#151-4 uploads + Class-A tests) stays identity.
+        assert_eq!(doc_key_to_id("42"), 42);
+        // Per-config prefixed key: tail after the last ':'.
+        assert_eq!(doc_key_to_id("redis-m-16-ef-64:42"), 42);
+        // Pathological colon shapes never panic; unparseable tail → 0.
+        assert_eq!(doc_key_to_id("a:b:c"), 0);
+        assert_eq!(doc_key_to_id("::"), 0);
+        assert_eq!(doc_key_to_id(""), 0);
+        assert_eq!(doc_key_to_id("a:b:7"), 7);
+    }
+
+    #[test]
+    fn doc_key_to_id_opt_skips_unparseable() {
+        // resp3 arm PRESERVES Option so a bad id is skipped, not emitted as 0.
+        assert_eq!(doc_key_to_id_opt("42"), Some(42));
+        assert_eq!(doc_key_to_id_opt("cfg:42"), Some(42));
+        assert_eq!(doc_key_to_id_opt("cfg:x"), None);
+        assert_eq!(doc_key_to_id_opt(""), None);
+        assert_eq!(doc_key_to_id_opt("a:b:c"), None);
+    }
+
+    #[test]
+    fn ft_search_resp2_recovers_id_from_prefixed_key() {
+        // A prefixed key ("cfg:42") must resolve to id 42, not 0.
+        let resp = Value::Array(vec![
+            Value::Int(1),
+            bulk("cfg:42"),
+            Value::Array(vec![bulk("vector_score"), bulk("0.5")]),
+        ]);
+        assert_eq!(parse_ft_search_response(&resp).unwrap(), vec![(42, 0.5)]);
+    }
 
     #[test]
     fn parse_info_no_panic_on_arbitrary_bytes() {

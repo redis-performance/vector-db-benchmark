@@ -69,6 +69,14 @@ pub struct Args {
     #[arg(long, default_value = "86400.0")]
     pub timeout: f64,
 
+    /// Per-search-point wall-clock watchdog in seconds. A single search/mixed
+    /// call that runs longer than this (e.g. a proxy/connection-pool stall at
+    /// high `parallel`) is aborted with a diagnostic instead of hanging the whole
+    /// sweep silently. Progress is logged while a point is in flight. 0 disables
+    /// (default) — behavior is then unchanged.
+    #[arg(long, default_value = "0.0")]
+    pub search_timeout: f64,
+
     /// Upload start index
     #[arg(long, default_value = "0")]
     pub upload_start_idx: usize,
@@ -133,6 +141,14 @@ pub struct Args {
     /// Collapses all M/EF variants of the same engine into a single "<engine>-no-vector" experiment.
     #[arg(long, default_value = "false")]
     pub skip_vector_index: bool,
+
+    /// Also dump the FULL raw per-query arrays (precisions, recalls, mrrs, ndcgs,
+    /// latencies, and mixed update_latencies) into each result file. Off by
+    /// default: results carry only the compact HDR/quality digests, which shrink
+    /// large-run files ~1000x while keeping every percentile re-derivable. Enable
+    /// this only for full-fidelity archival of a specific run.
+    #[arg(long, default_value = "false")]
+    pub dump_raw_latencies: bool,
 }
 
 #[cfg(test)]
@@ -188,6 +204,25 @@ mod tests {
         assert_eq!(args.search_duration, 300.0);
         assert_eq!(args.warmup_seconds, 10.0);
         assert_eq!(args.max_lateness_ms, 250.0);
+    }
+
+    // Per-search watchdog (#151-5): opt-in, defaults to 0.0 (disabled) so the
+    // unchanged behavior is preserved, and parses an explicit value.
+    #[test]
+    fn search_timeout_parses() {
+        assert_eq!(parse(&[]).search_timeout, 0.0, "omitted → disabled");
+        assert_eq!(parse(&["--search-timeout", "300"]).search_timeout, 300.0);
+    }
+
+    // Raw-array dump (#151-8): opt-in, defaults to false so result files carry
+    // only the compact digests, and parses when explicitly requested.
+    #[test]
+    fn dump_raw_latencies_parses() {
+        assert!(
+            !parse(&[]).dump_raw_latencies,
+            "omitted → false (digests only)"
+        );
+        assert!(parse(&["--dump-raw-latencies"]).dump_raw_latencies);
     }
 
     // `--describe datasets|engines` is what the docker-build smoke test exercises;

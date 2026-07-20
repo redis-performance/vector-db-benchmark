@@ -15,3 +15,9 @@ f_results="results"
 f_id="id"
 f_extra="extra_attributes"
 f_score="vector_score"
+# Per-config prefixed doc keys (#151-4): doc_key_to_id / _opt split on the last
+# ':'. Exercise a normal prefixed key plus pathological colon shapes.
+key_prefixed="$19\x0d\x0aredis-m-16-ef-64:42\x0d\x0a"
+key_double_colon="$2\x0d\x0a::\x0d\x0a"
+key_multi_colon="$5\x0d\x0aa:b:c\x0d\x0a"
+key_empty_tail="$4\x0d\x0acfg:\x0d\x0a"

@@ -10,7 +10,13 @@
 //!   minutes) — set `VERTEX_DEPLOY_TIMEOUT_SECS` accordingly. To skip the slow
 //!   create+deploy, point the engine at an already-deployed index by setting
 //!   `VERTEX_INDEX`, `VERTEX_INDEX_ENDPOINT`, and `VERTEX_DEPLOYED_INDEX_ID`.
-//! - `upload`: `upsertDatapoints` in batches (streaming index).
+//! - `upload`: `upsertDatapoints` in batches (streaming index), then poll the
+//!   index describe until `indexStats.vectorsCount` catches up to the uploaded
+//!   count (STREAM_UPDATE syncs asynchronously, so an immediate search would
+//!   race a partially-synced index and under-report recall). Tunable via
+//!   `VERTEX_SYNC_TIMEOUT_SECS` (default 900; <= 0 opts out) and
+//!   `VERTEX_SYNC_POLL_SECS` (default 10). The wait is timed and printed
+//!   separately — it is NOT included in the upload throughput number.
 //! - `search`: `findNeighbors` against the public endpoint, one persistent
 //!   worker per `parallel`, timing only the RPC + reply parse.
 //!
@@ -615,6 +621,22 @@ fn parse_lro(resp: &serde_json::Value) -> Result<Option<serde_json::Value>, Stri
     Ok(None)
 }
 
+/// Pull `indexStats.vectorsCount` out of an index describe reply.
+///
+/// GCP's REST convention encodes int64 fields as JSON *strings* (e.g.
+/// `"vectorsCount": "10000"`), but we also tolerate a bare JSON number in case
+/// the API ever changes or a mock feeds us one — the value is the same integer
+/// either way. Returns `None` when the field is absent or unparseable, letting
+/// the caller treat "no reading yet" as "keep waiting".
+fn parse_vectors_count(idx: &serde_json::Value) -> Option<u64> {
+    let v = idx.get("indexStats")?.get("vectorsCount")?;
+    match v {
+        serde_json::Value::String(s) => s.trim().parse::<u64>().ok(),
+        serde_json::Value::Number(n) => n.as_u64(),
+        _ => None,
+    }
+}
+
 pub struct VertexEngine {
     name: String,
     project: String,
@@ -821,6 +843,134 @@ impl VertexEngine {
                     std::thread::sleep(Duration::from_secs(15));
                 }
             }
+        }
+    }
+
+    /// Block until the STREAM_UPDATE index has finished ingesting the vectors we
+    /// just upserted, or a timeout elapses.
+    ///
+    /// WHY: Vertex indexes STREAM_UPDATE datapoints ASYNCHRONOUSLY. `upsertDatapoints`
+    /// returns as soon as the write is accepted, but the tree-AH index keeps
+    /// syncing in the background for a while afterwards. Searching immediately
+    /// therefore hits a partially-synced index and reports low/zero recall
+    /// (issue #151 item 7). There is no "sync done" signal in the API, so we
+    /// poll the index describe and watch `indexStats.vectorsCount` climb toward
+    /// the number of vectors we uploaded.
+    ///
+    /// This is telemetry/correctness, NOT part of the upload throughput number —
+    /// the caller measures and prints the wait separately so `upload_time` stays
+    /// pure upsert wall-clock.
+    ///
+    /// CAVEAT: `vectorsCount` is the TOTAL vector count in the index, not just
+    /// this run's contribution. In reuse-index mode (`VERTEX_INDEX` et al.) the
+    /// index may already hold vectors from a prior run, so `>= expected_count`
+    /// can be satisfied instantly (over-count) or, if a prior run left fewer,
+    /// approached from below as expected. We keep the rule deliberately simple:
+    /// wait until `vectorsCount >= expected_count` OR the timeout fires.
+    ///
+    /// Soft by design: on timeout or repeated describe failures we print a
+    /// WARNING and return `Ok(())` so the benchmark still proceeds — a genuinely
+    /// unsynced index will surface as poor recall in the results, which is more
+    /// honest than aborting the run.
+    fn wait_for_index_sync(&self, expected_count: usize) -> Result<(), String> {
+        // Env-gated knobs. Malformed values fall back to the defaults rather
+        // than aborting the whole benchmark over a typo.
+        let timeout_secs = std::env::var("VERTEX_SYNC_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(900);
+        // A non-positive timeout is an explicit opt-out of the wait entirely.
+        if timeout_secs <= 0 {
+            println!("Vertex index sync wait disabled (VERTEX_SYNC_TIMEOUT_SECS <= 0)");
+            return Ok(());
+        }
+        let timeout = Duration::from_secs(timeout_secs as u64);
+        let poll_secs = std::env::var("VERTEX_SYNC_POLL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|s| *s > 0)
+            .unwrap_or(10);
+
+        let expected = expected_count as u64;
+        println!(
+            "Waiting for Vertex STREAM_UPDATE index to sync {} vectors (timeout {}s, poll {}s)...",
+            expected,
+            timeout.as_secs(),
+            poll_secs
+        );
+
+        let describe_url = format!("{}/{}", self.base_url(), self.index_name);
+        let start = Instant::now();
+        let mut consecutive_failures = 0usize;
+        // A handful of transient describe failures are normal on a busy index;
+        // bail (softly) only if they persist, so we never wait out the full
+        // timeout hammering a broken endpoint.
+        const MAX_CONSECUTIVE_FAILURES: usize = 5;
+
+        loop {
+            // Re-mint the token each iteration: sync waits can outlast the ~60-min
+            // GCP token lifetime, and describe on an expired token would 401.
+            let token = match self.access_token() {
+                Ok(t) => t,
+                Err(e) => {
+                    consecutive_failures += 1;
+                    eprintln!(
+                        "Vertex index sync: token refresh failed ({e}) [{consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}]"
+                    );
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        eprintln!(
+                            "WARNING: giving up on Vertex index sync wait after {consecutive_failures} consecutive token failures; proceeding (recall may be low if the index is not yet synced)"
+                        );
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_secs(poll_secs));
+                    continue;
+                }
+            };
+
+            match self.get_json(&describe_url, &token) {
+                Ok(idx) => {
+                    consecutive_failures = 0;
+                    let count = parse_vectors_count(&idx).unwrap_or(0);
+                    println!(
+                        "Vertex index sync: {}/{} vectors (elapsed {:.0}s)",
+                        count,
+                        expected,
+                        start.elapsed().as_secs_f64()
+                    );
+                    if count >= expected {
+                        println!(
+                            "Vertex index sync complete: {}/{} vectors after {:.0}s",
+                            count,
+                            expected,
+                            start.elapsed().as_secs_f64()
+                        );
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    consecutive_failures += 1;
+                    eprintln!(
+                        "Vertex index sync: describe failed ({e}) [{consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}]"
+                    );
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        eprintln!(
+                            "WARNING: giving up on Vertex index sync wait after {consecutive_failures} consecutive describe failures; proceeding (recall may be low if the index is not yet synced)"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+
+            if start.elapsed() > timeout {
+                eprintln!(
+                    "WARNING: Vertex index did not report {} synced vectors within {}s; proceeding anyway (recall may be low if the index is still syncing)",
+                    expected,
+                    timeout.as_secs()
+                );
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_secs(poll_secs));
         }
     }
 }
@@ -1137,6 +1287,22 @@ impl Engine for VertexEngine {
             "Upload time: {:.3}s ({:.0} records/sec)",
             upload_time,
             vectors.len() as f64 / upload_time
+        );
+
+        // The upsert RPCs have all returned, but a STREAM_UPDATE index syncs the
+        // datapoints ASYNCHRONOUSLY (#151 item 7). Searching now would race the
+        // index and report artificially low recall, so block until the index
+        // reports it has ingested our vectors (or the timeout fires). This wait
+        // is measured and reported SEPARATELY — it is deliberately NOT folded
+        // into upload_time, which stays pure upsert wall-clock. The helper
+        // returns Ok even on timeout/soft failure, so `?` only propagates true
+        // hard errors (of which there are none today).
+        let sync_start = Instant::now();
+        self.wait_for_index_sync(vectors.len())?;
+        let sync_time = sync_start.elapsed().as_secs_f64();
+        println!(
+            "Index sync wait: {:.3}s (not counted in upload_time)",
+            sync_time
         );
 
         Ok(UploadStats {
@@ -1978,6 +2144,34 @@ mod tests {
         assert_eq!(vertex_distance_measure("dot"), "DOT_PRODUCT_DISTANCE");
         assert_eq!(vertex_distance_measure("ip"), "DOT_PRODUCT_DISTANCE");
         assert_eq!(vertex_distance_measure("mystery"), "DOT_PRODUCT_DISTANCE");
+    }
+
+    #[test]
+    fn vectors_count_parses_string_and_number() {
+        // GCP's REST convention: int64 fields come back as JSON strings.
+        let s = json!({ "indexStats": { "vectorsCount": "10000" } });
+        assert_eq!(parse_vectors_count(&s), Some(10_000));
+        // Tolerate a bare JSON number too (defensive / mockable).
+        let n = json!({ "indexStats": { "vectorsCount": 42 } });
+        assert_eq!(parse_vectors_count(&n), Some(42));
+    }
+
+    #[test]
+    fn vectors_count_missing_or_malformed_is_none() {
+        // No indexStats at all (fresh index before first stats refresh).
+        assert_eq!(parse_vectors_count(&json!({})), None);
+        // indexStats present but no vectorsCount field.
+        assert_eq!(parse_vectors_count(&json!({ "indexStats": {} })), None);
+        // Unparseable string.
+        assert_eq!(
+            parse_vectors_count(&json!({ "indexStats": { "vectorsCount": "not-a-number" } })),
+            None
+        );
+        // Wrong JSON type entirely.
+        assert_eq!(
+            parse_vectors_count(&json!({ "indexStats": { "vectorsCount": true } })),
+            None
+        );
     }
 
     #[test]

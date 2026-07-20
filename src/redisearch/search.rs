@@ -476,10 +476,11 @@ fn parse_ft_search_response(response: &[redis::Value]) -> PyResult<Vec<(i64, f64
     // First element is total count
     let mut i = 1;
     while i < response.len() {
-        // doc_id
+        // doc_id — the reply carries the doc KEY (e.g. "cfg:42") since issue
+        // #151-4's per-config keyspace prefix; recover the trailing numeric id.
         let id = match &response[i] {
             redis::Value::BulkString(data) => {
-                String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0)
+                crate::parsers::doc_key_to_id(&String::from_utf8_lossy(data))
             }
             redis::Value::Int(n) => *n,
             _ => 0,

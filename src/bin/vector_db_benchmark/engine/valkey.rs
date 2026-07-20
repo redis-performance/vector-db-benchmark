@@ -33,8 +33,9 @@ use redis::Connection;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
+use crate::engine::index_naming::{derive_index_name, derive_key_prefix};
 use crate::engine::{Engine, SearchResults, UpdateSearchRatio, UploadStats};
-use vector_db_benchmark::parsers::datetime_to_epoch_secs;
+use vector_db_benchmark::parsers::{datetime_to_epoch_secs, doc_key_to_id, doc_key_to_id_opt};
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
 
 /// Valkey engine configuration
@@ -59,6 +60,12 @@ pub struct ValkeyEngineConfig {
     /// supports single-term full-text matching (any doc containing the term); it
     /// does NOT support phrase / multi-term full-text queries.
     pub text_tag_fields: Arc<HashSet<String>>,
+    /// Per-config index name (`"<base>:<config>"`, issue #151-4) so a sweep's
+    /// configs address disjoint indexes on one server. Resolved once in `new()`.
+    pub index_name: String,
+    /// Per-config key prefix (`"<config>:"`, issue #151-4). Each config owns a
+    /// disjoint keyspace; teardown is a prefix-scoped SCAN+UNLINK (no DD flag).
+    pub key_prefix: String,
 }
 
 pub struct ValkeyEngine {
@@ -126,6 +133,8 @@ impl ValkeyEngine {
                 skip_vector_index: engine_config.skip_vector_index,
                 datetime_fields: Arc::new(HashSet::new()),
                 text_tag_fields: Arc::new(HashSet::new()),
+                index_name: derive_index_name("VALKEY_INDEX_NAME", "idx", &engine_config.name),
+                key_prefix: derive_key_prefix(&engine_config.name),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             commandstats_baseline: None,
@@ -166,22 +175,22 @@ impl ValkeyEngine {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
-        // Drop existing index if any (Valkey Search does not support DD flag)
-        let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(conn);
-        // Flush all keys to clean up data from previous runs
-        let _ = redis::cmd("FLUSHALL").query::<()>(conn);
+        // Drop this config's index + keys ONLY (Valkey Search has no DD flag, so a
+        // prefix-scoped SCAN+UNLINK replaces the old keyspace-wide FLUSHALL). Under
+        // #151-4 coexistence a FLUSHALL would wipe sibling configs' data.
+        redis_utils::drop_index_and_keys(conn, &self.config.index_name, &self.config.key_prefix);
 
         // Map distance metric
         let distance_metric = map_distance_metric(distance);
 
         // Build FT.CREATE command
         let mut cmd = redis::cmd("FT.CREATE");
-        cmd.arg("idx")
+        cmd.arg(&self.config.index_name)
             .arg("ON")
             .arg("HASH")
             .arg("PREFIX")
             .arg("1")
-            .arg("");
+            .arg(&self.config.key_prefix);
 
         cmd.arg("SCHEMA");
 
@@ -350,7 +359,7 @@ impl ValkeyEngine {
 
         loop {
             let info: redis::Value = redis::cmd("FT.INFO")
-                .arg("idx")
+                .arg(&self.config.index_name)
                 .query(&mut conn)
                 .map_err(|e| format!("FT.INFO error: {}", e))?;
 
@@ -479,6 +488,12 @@ impl ValkeyEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        // Index-existence guard (#151-4): hard-error on a missing/mismatched index.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
+
         let parallel = params.parallel.unwrap_or(1) as usize;
         let query_timeout: i64 = std::env::var("VALKEY_QUERY_TIMEOUT")
             .ok()
@@ -525,6 +540,9 @@ impl ValkeyEngine {
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
 
+        // Resolve the per-config index name once (not per query / per worker).
+        let index_name = self.config.index_name.clone();
+
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
@@ -535,6 +553,7 @@ impl ValkeyEngine {
                 let neighbors = &neighbors;
                 let errors = Arc::clone(&errors);
                 let query_idx = Arc::clone(&query_idx);
+                let index_name = index_name.as_str();
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -585,6 +604,7 @@ impl ValkeyEngine {
                         let query_start = Instant::now();
                         let result = ft_search_filter_only(
                             &mut conn,
+                            index_name,
                             top,
                             query_timeout,
                             parsed_filters[idx].as_ref().unwrap(),
@@ -712,7 +732,7 @@ fn upload_batch_internal(
     let mut pipe_bytes: usize = 0;
 
     for i in 0..ids.len() {
-        let key = ids[i].to_string();
+        let key = format!("{}{}", config.key_prefix, ids[i]);
         let vec_bytes: Vec<u8> = match config.data_type.as_str() {
             "FLOAT64" => vectors[i]
                 .iter()
@@ -1202,6 +1222,7 @@ fn build_condition(
 /// Execute filter-only FT.SEARCH (no KNN vector query).
 fn ft_search_filter_only(
     conn: &mut Connection,
+    index_name: &str,
     top: usize,
     query_timeout: i64,
     filter: &ParsedFilter,
@@ -1209,7 +1230,7 @@ fn ft_search_filter_only(
     let (filter_expr, params) = filter;
 
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(index_name)
         .arg(filter_expr.as_str())
         .arg("LIMIT")
         .arg(0)
@@ -1282,6 +1303,7 @@ fn encode_query_vector(query_vector: &[f32]) -> Vec<u8> {
 #[allow(clippy::too_many_arguments)]
 fn ft_search_knn(
     conn: &mut Connection,
+    index_name: &str,
     vec_bytes: &[u8],
     query_str: &str,
     top: usize,
@@ -1293,7 +1315,7 @@ fn ft_search_knn(
 ) -> Result<Vec<(i64, f64)>, String> {
     // Valkey Search: DIALECT 2 only, no SORTBY on computed fields
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(index_name)
         .arg(query_str)
         .arg("LIMIT")
         .arg(0)
@@ -1358,7 +1380,11 @@ fn parse_ft_search_resp2(response: &[redis::Value]) -> Vec<(i64, f64)> {
     let mut results = Vec::new();
     let mut i = 1;
     while i < response.len() {
-        let id = value_as_i64(&response[i]);
+        // The reply carries the doc KEY ("<config>:<id>", #151-4); recover the
+        // trailing numeric id. Missing string → 0 (positionally present).
+        let id = value_as_string(&response[i])
+            .map(|s| doc_key_to_id(&s))
+            .unwrap_or(0);
         i += 1;
 
         if i < response.len() {
@@ -1397,7 +1423,7 @@ fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f6
         let mut score = 0.0f64;
         for (k, v) in fields {
             match value_as_string(k).as_deref() {
-                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()),
+                Some("id") => id = value_as_string(v).and_then(|s| doc_key_to_id_opt(&s)),
                 Some("extra_attributes") => {
                     if let redis::Value::Map(attrs) = v {
                         for (ak, av) in attrs {
@@ -1429,6 +1455,10 @@ fn value_as_string(v: &redis::Value) -> Option<String> {
 }
 
 /// Parse a RESP value as an i64 doc id (bulk/simple string or integer).
+/// Retained for its unit test; the resp2 hot path now goes through
+/// `doc_key_to_id` (#151-4) to strip the per-config key prefix, so this is
+/// test-only.
+#[cfg(test)]
 fn value_as_i64(v: &redis::Value) -> i64 {
     match v {
         redis::Value::BulkString(data) => String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0),
@@ -1475,7 +1505,7 @@ fn hset_single(
     vector: &[f32],
     metadata: Option<&MetadataItem>,
 ) -> Result<(), String> {
-    let key = id.to_string();
+    let key = format!("{}{}", config.key_prefix, id);
     let vec_bytes: Vec<u8> = match config.data_type.as_str() {
         "FLOAT64" => vector
             .iter()
@@ -1704,6 +1734,12 @@ impl Engine for ValkeyEngine {
             return self.search_filter_only(dataset, params, num_queries);
         }
 
+        // Index-existence guard (#151-4): fail loudly on a missing/mismatched index.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
+
         let ef = params
             .search_params
             .as_ref()
@@ -1759,6 +1795,9 @@ impl Engine for ValkeyEngine {
         let mut mrr_vals: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut ndcg_vals: Vec<f64> = Vec::with_capacity(num_to_run);
 
+        // Resolve the per-config index name once (not per query / per worker).
+        let index_name = self.config.index_name.clone();
+
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(parallel);
             for _ in 0..parallel {
@@ -1771,6 +1810,7 @@ impl Engine for ValkeyEngine {
                 let encoded_queries = &encoded_queries;
                 let query_strs = &query_strs;
                 let query_idx = Arc::clone(&query_idx);
+                let index_name = index_name.as_str();
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1824,6 +1864,7 @@ impl Engine for ValkeyEngine {
                         let query_start = Instant::now();
                         let results = ft_search_knn(
                             &mut conn,
+                            index_name,
                             &encoded_queries[idx],
                             &query_strs[idx],
                             top,
@@ -1915,6 +1956,12 @@ impl Engine for ValkeyEngine {
         let (dt_fields, text_fields) = schema_transform_fields(dataset);
         self.config.datetime_fields = Arc::new(dt_fields);
         self.config.text_tag_fields = Arc::new(text_fields);
+
+        // Index-existence guard (#151-4): fail loudly on a missing/mismatched index.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
 
         let ef = params
             .search_params
@@ -2038,6 +2085,7 @@ impl Engine for ValkeyEngine {
                             let query_str = build_knn_query_str(parsed_filters[idx].as_ref());
                             let results = ft_search_knn(
                                 &mut conn,
+                                &config.index_name,
                                 &vec_bytes,
                                 &query_str,
                                 top,
@@ -2165,27 +2213,38 @@ impl Engine for ValkeyEngine {
 
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
-        // Valkey Search does not support DD flag on FT.DROPINDEX
-        let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(&mut conn);
-        // Flush all keys to clean up uploaded data
-        let _ = redis::cmd("FLUSHALL").query::<()>(&mut conn);
+        // Valkey Search has no DD flag: drop this config's index + its keys via a
+        // prefix-scoped SCAN+UNLINK (not a keyspace-wide FLUSHALL, which under
+        // #151-4 coexistence would wipe sibling configs' data).
+        redis_utils::drop_index_and_keys(
+            &mut conn,
+            &self.config.index_name,
+            &self.config.key_prefix,
+        );
         Ok(())
     }
 
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
+        // used_memory is server-wide (SUM of all resident configs under #151-4);
+        // kept only as a secondary/global figure. The per-config figure is the
+        // FT.INFO index size below.
         let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = parse_used_memory(&info_str);
 
-        let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
-            .arg("idx")
+        let ft_info_raw: Option<redis::Value> = redis::cmd("FT.INFO")
+            .arg(&self.config.index_name)
             .query::<redis::Value>(&mut conn)
-            .ok()
-            .map(|v| redis_value_to_json(&v));
+            .ok();
+        let index_memory_bytes = ft_info_raw
+            .as_ref()
+            .and_then(redis_utils::ft_info_index_memory_bytes);
+        let ft_info = ft_info_raw.as_ref().map(redis_value_to_json);
 
         Some(serde_json::json!({
             "used_memory": [used_memory],
+            "index_memory_bytes": index_memory_bytes,
             "index_info": ft_info,
         }))
     }
@@ -2196,7 +2255,7 @@ impl Engine for ValkeyEngine {
         // Vector index stats. Errors on the BEFORE snapshot (index not yet
         // created) → index_info: null.
         let ft_info = redis::cmd("FT.INFO")
-            .arg("idx")
+            .arg(&self.config.index_name)
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));
@@ -2444,6 +2503,8 @@ mod tests {
             skip_vector_index: false,
             datetime_fields: Arc::new(dt),
             text_tag_fields: Arc::new(txt),
+            index_name: "idx:test".to_string(),
+            key_prefix: "test:".to_string(),
         };
         assert_eq!(
             encode_string_field(&cfg, "ts", "2021-01-01T00:00:00Z"),
@@ -2469,12 +2530,14 @@ mod tests {
 
     #[test]
     fn parse_ft_search_response_resp2_reads_id_score_pairs() {
-        // RESP2 FT.SEARCH shape: [count, id1, fields1, id2, fields2, ...]
+        // RESP2 FT.SEARCH shape: [count, key1, fields1, key2, fields2, ...]. Doc
+        // ids arrive as the string KEY; a per-config-prefixed key ("cfg:42",
+        // #151-4) resolves to its trailing numeric id.
         let resp = Value::Array(vec![
             Value::Int(2),
             bulk("7"),
             Value::Array(vec![bulk("vector_score"), bulk("0.25")]),
-            Value::Int(42), // id may also arrive as an integer
+            bulk("cfg:42"),
             Value::Array(vec![bulk("vector_score"), bulk("1.5")]),
         ]);
         let hits = parse_ft_search_response(&resp).unwrap();

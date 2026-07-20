@@ -8,6 +8,7 @@
 
 mod dragonfly;
 mod elasticsearch;
+pub mod index_naming;
 mod milvus;
 mod mongodb_engine;
 mod opensearch;

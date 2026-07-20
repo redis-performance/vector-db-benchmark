@@ -39,8 +39,10 @@ use super::redis_utils;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
+use crate::engine::index_naming::{derive_index_name, derive_key_prefix};
 use crate::engine::{Engine, SearchResults, UploadStats};
 use crate::metrics::compute_metrics;
+use vector_db_benchmark::parsers::{doc_key_to_id, doc_key_to_id_opt};
 use vector_db_benchmark::readers::metadata::MetadataItem;
 
 /// Dragonfly engine configuration.
@@ -53,6 +55,12 @@ pub struct DragonflyEngineConfig {
     pub algorithm: String,
     pub batch_size: usize,
     pub parallel: usize,
+    /// Per-config index name (`"<base>:<config>"`, issue #151-4) so a sweep's
+    /// configs address disjoint indexes on one server. Resolved once in `new()`.
+    pub index_name: String,
+    /// Per-config key prefix (`"<config>:"`, issue #151-4). Each config owns a
+    /// disjoint keyspace; teardown is a prefix-scoped SCAN+UNLINK (no DD flag).
+    pub key_prefix: String,
 }
 
 pub struct DragonflyEngine {
@@ -130,6 +138,8 @@ impl DragonflyEngine {
                 algorithm,
                 batch_size,
                 parallel,
+                index_name: derive_index_name("DRAGONFLY_INDEX_NAME", "idx", &engine_config.name),
+                key_prefix: derive_key_prefix(&engine_config.name),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
             commandstats_baseline: None,
@@ -170,22 +180,22 @@ impl DragonflyEngine {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
-        // Drop existing index if any (ignore "not found"), then flush leftover
-        // keys from previous runs.
-        let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(conn);
-        let _ = redis::cmd("FLUSHALL").query::<()>(conn);
+        // Drop this config's index + keys ONLY (Dragonfly Search has no DD flag, so
+        // a prefix-scoped SCAN+UNLINK replaces the old keyspace-wide FLUSHALL, which
+        // under #151-4 coexistence would wipe sibling configs' data).
+        redis_utils::drop_index_and_keys(conn, &self.config.index_name, &self.config.key_prefix);
 
         let distance_metric = map_distance_metric(distance);
 
         // Build FT.CREATE: a single VECTOR field `vector`. KNN-only, so no
         // metadata/filter schema fields are declared.
         let mut cmd = redis::cmd("FT.CREATE");
-        cmd.arg("idx")
+        cmd.arg(&self.config.index_name)
             .arg("ON")
             .arg("HASH")
             .arg("PREFIX")
             .arg("1")
-            .arg("");
+            .arg(&self.config.key_prefix);
 
         cmd.arg("SCHEMA");
 
@@ -217,6 +227,7 @@ impl DragonflyEngine {
                 &mut conn,
                 &ids[batch_start..batch_end],
                 &vectors[batch_start..batch_end],
+                &self.config.key_prefix,
             )?;
             pb.inc((batch_end - batch_start) as u64);
         }
@@ -241,6 +252,7 @@ impl DragonflyEngine {
             for _ in 0..num_threads {
                 let host = self.host.clone();
                 let port = self.port;
+                let key_prefix = self.config.key_prefix.clone();
                 let batches = &batches;
                 let batch_idx = Arc::clone(&batch_idx);
                 let error = Arc::clone(&error);
@@ -265,6 +277,7 @@ impl DragonflyEngine {
                             &mut conn,
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
+                            &key_prefix,
                         ) {
                             *error.lock().unwrap() = Some(e);
                             break;
@@ -291,7 +304,7 @@ impl DragonflyEngine {
 
         loop {
             let info: redis::Value = redis::cmd("FT.INFO")
-                .arg("idx")
+                .arg(&self.config.index_name)
                 .query(&mut conn)
                 .map_err(|e| format!("FT.INFO error: {}", e))?;
 
@@ -445,11 +458,12 @@ fn upload_batch_internal(
     conn: &mut Connection,
     ids: &[i64],
     vectors: &[Vec<f32>],
+    key_prefix: &str,
 ) -> Result<(), String> {
     let mut pipe = redis::pipe();
 
     for i in 0..ids.len() {
-        let key = ids[i].to_string();
+        let key = format!("{}{}", key_prefix, ids[i]);
         let vec_bytes = encode_query_vector(&vectors[i]);
         let mut hset_cmd = redis::cmd("HSET");
         hset_cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
@@ -503,8 +517,10 @@ fn build_knn_query_str(algorithm: &str) -> String {
 /// `vec_bytes` and `query_str` are precomputed by the caller BEFORE the timed
 /// window; this performs only the arg binding, the `cmd.query` RPC round-trip,
 /// and the reply parse.
+#[allow(clippy::too_many_arguments)]
 fn ft_search_knn(
     conn: &mut Connection,
+    index_name: &str,
     vec_bytes: &[u8],
     query_str: &str,
     top: usize,
@@ -513,7 +529,7 @@ fn ft_search_knn(
     query_timeout: i64,
 ) -> Result<Vec<(i64, f64)>, String> {
     let mut cmd = redis::cmd("FT.SEARCH");
-    cmd.arg("idx")
+    cmd.arg(index_name)
         .arg(query_str)
         .arg("SORTBY")
         .arg("vector_score")
@@ -564,7 +580,11 @@ fn parse_ft_search_resp2(response: &[redis::Value]) -> Vec<(i64, f64)> {
     let mut results = Vec::new();
     let mut i = 1;
     while i < response.len() {
-        let id = value_as_i64(&response[i]);
+        // The reply carries the doc KEY ("<config>:<id>", #151-4); recover the
+        // trailing numeric id. Missing string → 0 (positionally present).
+        let id = value_as_string(&response[i])
+            .map(|s| doc_key_to_id(&s))
+            .unwrap_or(0);
         i += 1;
 
         if i < response.len() {
@@ -600,7 +620,7 @@ fn parse_ft_search_resp3(pairs: &[(redis::Value, redis::Value)]) -> Vec<(i64, f6
         let mut score = 0.0f64;
         for (k, v) in fields {
             match value_as_string(k).as_deref() {
-                Some("id") => id = value_as_string(v).and_then(|s| s.parse().ok()),
+                Some("id") => id = value_as_string(v).and_then(|s| doc_key_to_id_opt(&s)),
                 Some("extra_attributes") => {
                     if let redis::Value::Map(attrs) = v {
                         for (ak, av) in attrs {
@@ -632,6 +652,10 @@ fn value_as_string(v: &redis::Value) -> Option<String> {
 }
 
 /// Parse a RESP value as an i64 doc id (bulk/simple string or integer).
+/// Retained for its unit test; the resp2 hot path now goes through
+/// `doc_key_to_id` (#151-4) to strip the per-config key prefix, so this is
+/// test-only.
+#[cfg(test)]
 fn value_as_i64(v: &redis::Value) -> i64 {
     match v {
         redis::Value::BulkString(data) => String::from_utf8_lossy(data).parse::<i64>().unwrap_or(0),
@@ -809,6 +833,13 @@ impl Engine for DragonflyEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        // Index-existence guard (#151-4): on the --skip-upload path a missing or
+        // mismatched index would otherwise write a silent recall-0.0 result file.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
+
         let ef = params
             .search_params
             .as_ref()
@@ -841,6 +872,8 @@ impl Engine for DragonflyEngine {
             queries.iter().map(|q| encode_query_vector(q)).collect();
         let algorithm = self.config.algorithm.clone();
         let query_str = build_knn_query_str(&algorithm);
+        // Resolve the per-config index name once (not per query / per worker).
+        let index_name = self.config.index_name.clone();
 
         // Per-thread sample buffers merged on join — no per-query Mutex<Vec>
         // contention in the timed loop (see redis.rs::search). Metrics are
@@ -865,6 +898,7 @@ impl Engine for DragonflyEngine {
                 let encoded_queries = &encoded_queries;
                 let query_str = query_str.as_str();
                 let algorithm = algorithm.as_str();
+                let index_name = index_name.as_str();
                 let query_idx = Arc::clone(&query_idx);
                 let pb = &pb;
 
@@ -901,6 +935,7 @@ impl Engine for DragonflyEngine {
                         let query_start = Instant::now();
                         let results = ft_search_knn(
                             &mut conn,
+                            index_name,
                             &encoded_queries[idx],
                             query_str,
                             top,
@@ -975,25 +1010,38 @@ impl Engine for DragonflyEngine {
 
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
-        let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(&mut conn);
-        let _ = redis::cmd("FLUSHALL").query::<()>(&mut conn);
+        // Dragonfly Search has no DD flag: drop this config's index + its keys via
+        // a prefix-scoped SCAN+UNLINK (not a keyspace-wide FLUSHALL, which under
+        // #151-4 coexistence would wipe sibling configs' data).
+        redis_utils::drop_index_and_keys(
+            &mut conn,
+            &self.config.index_name,
+            &self.config.key_prefix,
+        );
         Ok(())
     }
 
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
+        // used_memory is server-wide (SUM of all resident configs under #151-4);
+        // kept only as a secondary/global figure. The per-config figure is the
+        // FT.INFO index size below.
         let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = parse_used_memory(&info_str);
 
-        let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
-            .arg("idx")
+        let ft_info_raw: Option<redis::Value> = redis::cmd("FT.INFO")
+            .arg(&self.config.index_name)
             .query::<redis::Value>(&mut conn)
-            .ok()
-            .map(|v| redis_value_to_json(&v));
+            .ok();
+        let index_memory_bytes = ft_info_raw
+            .as_ref()
+            .and_then(redis_utils::ft_info_index_memory_bytes);
+        let ft_info = ft_info_raw.as_ref().map(redis_value_to_json);
 
         Some(serde_json::json!({
             "used_memory": [used_memory],
+            "index_memory_bytes": index_memory_bytes,
             "index_info": ft_info,
         }))
     }
@@ -1004,7 +1052,7 @@ impl Engine for DragonflyEngine {
         // Vector index stats. Errors on the BEFORE snapshot (index not yet
         // created) → index_info: null.
         let ft_info = redis::cmd("FT.INFO")
-            .arg("idx")
+            .arg(&self.config.index_name)
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));
@@ -1075,12 +1123,13 @@ mod tests {
 
     #[test]
     fn parse_ft_search_response_resp2_reads_id_score_pairs() {
-        // [count, id, [vector_score, val], id, [vector_score, val]]
+        // [count, key, [vector_score, val], key, [vector_score, val]]. A
+        // per-config-prefixed key ("cfg:42", #151-4) resolves to its trailing id.
         let resp = Value::Array(vec![
             Value::Int(2),
             bulk("7"),
             Value::Array(vec![bulk("vector_score"), bulk("0.5")]),
-            bulk("42"),
+            bulk("cfg:42"),
             Value::Array(vec![bulk("vector_score"), bulk("0.75")]),
         ]);
         let out = parse_ft_search_response(&resp).unwrap();
