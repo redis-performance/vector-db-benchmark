@@ -97,7 +97,15 @@ pub fn read_jsonl_queries(
         }
         result
     } else {
-        // No ground truth available
+        // No neighbours.jsonl: every query gets an EMPTY ground-truth set, which
+        // compute_metrics scores as a vacuous recall/precision/mrr/ndcg = 1.0.
+        // Warn loudly so a missing ground-truth file is not mistaken for a
+        // perfect-quality run that masks real recall differences between engines.
+        eprintln!(
+            "WARNING: no neighbours.jsonl found for this dataset — ground truth is \
+             empty, so reported recall/precision/mrr/ndcg will be a meaningless 1.0. \
+             Provide neighbours.jsonl to measure real search quality."
+        );
         vec![vec![]; queries.len()]
     };
 
