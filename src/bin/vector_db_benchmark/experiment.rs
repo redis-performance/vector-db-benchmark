@@ -64,7 +64,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
 
     let dataset_configs = read_dataset_configs()?;
-    let engine_configs = read_engine_configs()?;
+    let engine_configs = read_engine_configs(args.engines_file.as_deref())?;
 
     // Filter datasets by pattern
     let datasets: Vec<_> = dataset_configs
@@ -548,7 +548,20 @@ fn run_single_experiment(
                 // is often cold (OS page cache / index warm-up), and best-of
                 // discards it, so published QPS is a warm figure comparable to
                 // the Python tool. --repetitions 1 disables it.
-                let repetitions = args.repetitions.max(1);
+                // Best-of-N is meaningless in --search-duration (closed/open-loop
+                // timed) mode — it just triples runtime for an upward-biased max.
+                // Force a single rep there, warning if the user set >1 (#151).
+                let repetitions = if args.search_duration > 0.0 {
+                    if args.repetitions > 1 {
+                        eprintln!(
+                            "note: --repetitions {} ignored (using 1) in --search-duration mode",
+                            args.repetitions
+                        );
+                    }
+                    1
+                } else {
+                    args.repetitions.max(1)
+                };
                 let mut best: Option<crate::engine::SearchResults> = None;
                 let mut last_err: Option<String> = None;
 

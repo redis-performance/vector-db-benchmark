@@ -1047,9 +1047,34 @@ impl Engine for VertexEngine {
                             schema,
                         );
                         let mut quota_retries = 0usize;
+                        let mut auth_retries = 0usize;
                         loop {
                             match client.post(url).bearer_auth(&token).json(&body).send() {
                                 Ok(r) if r.status().is_success() => break,
+                                // A transient 401 (e.g. a token that expired or was
+                                // invalidated early) must NOT abort the whole upload
+                                // and leave a partially-populated index (#151):
+                                // re-mint the token and retry the (idempotent) batch.
+                                Ok(r)
+                                    if r.status() == reqwest::StatusCode::UNAUTHORIZED
+                                        && auth_retries < 5 =>
+                                {
+                                    auth_retries += 1;
+                                    match engine.access_token() {
+                                        Ok(t) => {
+                                            token = t;
+                                            token_at = Instant::now();
+                                        }
+                                        Err(e) => {
+                                            *error.lock().unwrap() = Some(e);
+                                            break;
+                                        }
+                                    }
+                                    eprintln!(
+                                        "Vertex upsert got 401; refreshed token, retrying batch {} (attempt {}/5)",
+                                        idx, auth_retries
+                                    );
+                                }
                                 Ok(r)
                                     if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
                                         && quota_retries < 30 =>
