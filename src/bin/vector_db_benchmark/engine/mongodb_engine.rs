@@ -1058,7 +1058,13 @@ fn build_mongo_filter_entry(entry: &serde_json::Value) -> Option<Document> {
 fn json_to_bson(value: &serde_json::Value) -> mongodb::bson::Bson {
     match value {
         serde_json::Value::Null => mongodb::bson::Bson::Null,
-        serde_json::Value::Bool(b) => mongodb::bson::Bson::Boolean(*b),
+        // Bools are STORED as the string "true"/"false" (metadata_value_to_bson —
+        // readers::metadata has no Bool variant), so a filter bool must compare as
+        // that string. A native Bson::Boolean never equals the stored String and
+        // silently matches zero documents (0 recall). json_to_bson is filter-only.
+        serde_json::Value::Bool(b) => {
+            mongodb::bson::Bson::String(if *b { "true" } else { "false" }.to_string())
+        }
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 mongodb::bson::Bson::Int64(i)
@@ -1797,8 +1803,12 @@ mod tests {
     fn json_to_bson_covers_all_arms() {
         use mongodb::bson::Bson;
         assert_eq!(json_to_bson(&json!(null)), Bson::Null);
-        assert_eq!(json_to_bson(&json!(true)), Bson::Boolean(true));
-        assert_eq!(json_to_bson(&json!(false)), Bson::Boolean(false));
+        // Bools compare as the stored string form, not native Bson::Boolean.
+        assert_eq!(json_to_bson(&json!(true)), Bson::String("true".to_string()));
+        assert_eq!(
+            json_to_bson(&json!(false)),
+            Bson::String("false".to_string())
+        );
         // Integer JSON numbers map to Int64, floats to Double.
         assert_eq!(json_to_bson(&json!(7)), Bson::Int64(7));
         assert_eq!(json_to_bson(&json!(1.5)), Bson::Double(1.5));

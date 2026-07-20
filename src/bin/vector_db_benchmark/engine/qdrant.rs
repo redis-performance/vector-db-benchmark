@@ -302,7 +302,11 @@ impl QdrantEngine {
                         "float" => FieldType::Float,
                         "geo" => FieldType::Geo,
                         "uuid" => FieldType::Uuid,
-                        "bool" => FieldType::Bool,
+                        // Bools are stored as the STRING "true"/"false" (readers::metadata
+                        // has no Bool variant), so index them as Keyword — a Bool index
+                        // would index nothing for a string payload and the filter would
+                        // silently match zero points.
+                        "bool" => FieldType::Keyword,
                         "datetime" => FieldType::Datetime,
                         _ => continue,
                     };
@@ -879,7 +883,14 @@ fn build_qdrant_filter(
             if let Some(s) = value.as_str() {
                 Some(Condition::matches(field_name.to_string(), s.to_string()))
             } else if let Some(b) = value.as_bool() {
-                Some(Condition::matches(field_name.to_string(), b))
+                // Bools are stored+indexed as the STRING "true"/"false", so match
+                // the string form. A native boolean Match never matches the string
+                // payload and silently returns zero points (0 recall).
+                let token = if b { "true" } else { "false" };
+                Some(Condition::matches(
+                    field_name.to_string(),
+                    token.to_string(),
+                ))
             } else {
                 value
                     .as_i64()
@@ -1505,8 +1516,22 @@ mod tests {
 
     #[test]
     fn builds_bool_exact_match() {
+        use qdrant_client::qdrant::r#match::MatchValue;
+        // Bools are stored as the string "true"/"false", so the filter must match
+        // the STRING keyword, NOT a native boolean (which matches 0 points).
         let c = build_qdrant_filter("flag", "match", &json!({"value": true})).unwrap();
-        assert!(field_condition(&c).r#match.is_some());
+        let m = field_condition(&c).r#match.expect("match present");
+        assert_eq!(
+            m.match_value,
+            Some(MatchValue::Keyword("true".to_string())),
+            "bool true must match keyword \"true\", not a native boolean"
+        );
+        let c = build_qdrant_filter("flag", "match", &json!({"value": false})).unwrap();
+        let m = field_condition(&c).r#match.expect("match present");
+        assert_eq!(
+            m.match_value,
+            Some(MatchValue::Keyword("false".to_string()))
+        );
     }
 
     #[test]
