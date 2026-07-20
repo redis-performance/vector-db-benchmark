@@ -36,6 +36,14 @@ pub struct RedisEngineConfig {
     pub batch_size: usize,
     pub parallel: usize,
     pub skip_vector_index: bool,
+    /// SVS-VAMANA build params, resolved once in `new()` with precedence
+    /// `collection_params.svs-vamana_config` > env (`REDIS_SVS_*`) > derived.
+    /// `None` graph/window → derive from `m`*2 / `ef_construction` at FT.CREATE.
+    /// Ignored for non-SVS algorithms.
+    pub svs_graph_max_degree: Option<i64>,
+    pub svs_construction_window_size: Option<i64>,
+    pub svs_compression: Option<String>,
+    pub svs_reduce: Option<i64>,
     /// Per-config RediSearch index name (`"<base>:<config>"`, issue #151-4) so a
     /// sweep's configs address disjoint indexes on one server. Resolved once in
     /// `new()`; never re-read from the environment inside a timed window.
@@ -73,18 +81,79 @@ impl RedisEngine {
             .map(|h| (h.m.unwrap_or(16), h.ef_construction.unwrap_or(128)))
             .unwrap_or((16, 128));
 
+        // Untyped catch-all under `collection_params` (serde-flattened). Legacy
+        // SVS configs (e.g. dbpedia-calibration.json) nest `algorithm`,
+        // `data_type`, and a `svs-vamana_config` block here rather than at the
+        // top level, so read them as fallbacks.
+        let cp_extra = engine_config
+            .collection_params
+            .as_ref()
+            .and_then(|cp| cp.extra.as_ref());
+        let cp_str = |key: &str| {
+            cp_extra
+                .and_then(|e| e.get(key))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let up_str = |key: &str| {
+            engine_config
+                .upload_params
+                .as_ref()
+                .and_then(|p| p.get(key))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+
+        // algorithm: top-level > collection_params.algorithm > upload_params.algorithm.
         let algorithm = engine_config
             .algorithm
             .clone()
+            .or_else(|| cp_str("algorithm"))
+            .or_else(|| up_str("algorithm"))
             .unwrap_or_else(|| "hnsw".to_string());
 
-        let data_type = engine_config
-            .upload_params
-            .as_ref()
-            .and_then(|p| p.get("data_type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("FLOAT32")
-            .to_string();
+        // data_type: upload_params.data_type > collection_params.data_type.
+        let data_type = up_str("data_type")
+            .or_else(|| cp_str("data_type"))
+            .unwrap_or_else(|| "FLOAT32".to_string());
+
+        // SVS-VAMANA build params: `collection_params.svs-vamana_config` block
+        // wins, else the REDIS_SVS_* env vars, else derived at FT.CREATE. Resolved
+        // only for SVS algorithms so a non-SVS config can never pick up a stray
+        // REDIS_SVS_* env var (the fields stay None and unused).
+        let (svs_graph_max_degree, svs_construction_window_size, svs_compression, svs_reduce) =
+            if is_svs(&algorithm) {
+                let svs_block = cp_extra
+                    .and_then(|e| e.get("svs-vamana_config"))
+                    .and_then(|v| v.as_object());
+                let svs_i64 =
+                    |key: &str| svs_block.and_then(|b| b.get(key)).and_then(|v| v.as_i64());
+                let compression = svs_block
+                    .and_then(|b| b.get("compression"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        std::env::var("REDIS_SVS_COMPRESSION")
+                            .ok()
+                            .map(|s| s.trim().to_string())
+                    })
+                    .filter(|s| !s.is_empty());
+                let reduce = svs_i64("REDUCE")
+                    .or_else(|| {
+                        std::env::var("REDIS_SVS_REDUCE")
+                            .ok()
+                            .and_then(|s| s.trim().parse::<i64>().ok())
+                    })
+                    .filter(|&n| n > 0);
+                (
+                    svs_i64("GRAPH_MAX_DEGREE"),
+                    svs_i64("CONSTRUCTION_WINDOW_SIZE"),
+                    compression,
+                    reduce,
+                )
+            } else {
+                (None, None, None, None)
+            };
 
         let parallel = engine_config
             .upload_params
@@ -111,6 +180,10 @@ impl RedisEngine {
                 batch_size,
                 parallel,
                 skip_vector_index: engine_config.skip_vector_index,
+                svs_graph_max_degree,
+                svs_construction_window_size,
+                svs_compression,
+                svs_reduce,
                 index_name: derive_index_name("REDIS_INDEX_NAME", "idx", &engine_config.name),
                 key_prefix: derive_key_prefix(&engine_config.name),
                 datetime_fields: Arc::new(HashSet::new()),
@@ -167,34 +240,36 @@ impl RedisEngine {
             if is_svs(&self.config.algorithm) {
                 // SVS-VAMANA (Redis 8.2+) uses GRAPH_MAX_DEGREE / CONSTRUCTION_WINDOW_SIZE,
                 // NOT HNSW's M / EF_CONSTRUCTION (those are rejected at FT.CREATE:
-                // "Bad arguments for algorithm SVS-VAMANA: M"). Drive them from the
-                // same swept M / EF_CONSTRUCTION config values so one grid covers both
-                // algorithms. (Redis docs note GRAPH_MAX_DEGREE ~= HNSW's M*2; we map M
-                // through directly to keep the existing sweep grid meaningful.)
+                // "Bad arguments for algorithm SVS-VAMANA: M"). Values come from the
+                // `svs-vamana_config` block if present, else are derived from the
+                // swept M / EF_CONSTRUCTION so one grid covers both algorithms.
+                // GRAPH_MAX_DEGREE derives as M*2 (Redis docs: it is HNSW's M*2
+                // equivalent), so the same M yields a comparable graph degree.
                 //
-                // Optional compression: LVQ<b> / LVQ<b1>x<b2> / LeanVec<b1>x<b2> via
-                // REDIS_SVS_COMPRESSION; LeanVec dim-reduction via REDIS_SVS_REDUCE
-                // (only valid with a LeanVec compression). On OSS / non-Intel builds
-                // COMPRESSION silently falls back to basic 8-bit scalar quantization.
-                let compression = std::env::var("REDIS_SVS_COMPRESSION")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                let mut reduce = std::env::var("REDIS_SVS_REDUCE")
-                    .ok()
-                    .and_then(|s| s.trim().parse::<i64>().ok())
-                    .filter(|&n| n > 0);
-                // REDUCE (LeanVec dim-reduction) is only valid with a LeanVec
-                // COMPRESSION; emitting it otherwise builds an index RediSearch
-                // rejects. Drop it (with a warning) rather than send a doomed
-                // FT.CREATE, so a stray REDIS_SVS_REDUCE can't fail an LVQ/plain run.
+                // Compression/REDUCE come from the config block or REDIS_SVS_*
+                // (resolved in new()). REDUCE (LeanVec dim-reduction) is only valid
+                // with a LeanVec COMPRESSION. On OSS / non-Intel builds COMPRESSION
+                // silently falls back to basic 8-bit scalar quantization.
+                let graph_max_degree = self
+                    .config
+                    .svs_graph_max_degree
+                    .unwrap_or(self.config.m * 2);
+                let construction_window_size = self
+                    .config
+                    .svs_construction_window_size
+                    .unwrap_or(self.config.ef_construction);
+                let compression = self.config.svs_compression.clone();
+                let mut reduce = self.config.svs_reduce;
+                // REDUCE is only valid with a LeanVec COMPRESSION; emitting it
+                // otherwise builds an index RediSearch rejects. Drop it (with a
+                // warning) rather than send a doomed FT.CREATE.
                 let is_leanvec = compression
                     .as_deref()
                     .map(|c| c.to_uppercase().contains("LEANVEC"))
                     .unwrap_or(false);
                 if reduce.is_some() && !is_leanvec {
                     eprintln!(
-                        "warning: REDIS_SVS_REDUCE ignored — REDUCE requires a LeanVec COMPRESSION (COMPRESSION={:?})",
+                        "warning: SVS REDUCE ignored — REDUCE requires a LeanVec COMPRESSION (COMPRESSION={:?})",
                         compression
                     );
                     reduce = None;
@@ -209,9 +284,9 @@ impl RedisEngine {
                 cmd.arg("TYPE").arg(&self.config.data_type);
                 cmd.arg("DIM").arg(vector_size);
                 cmd.arg("DISTANCE_METRIC").arg(distance_metric);
-                cmd.arg("GRAPH_MAX_DEGREE").arg(self.config.m);
+                cmd.arg("GRAPH_MAX_DEGREE").arg(graph_max_degree);
                 cmd.arg("CONSTRUCTION_WINDOW_SIZE")
-                    .arg(self.config.ef_construction);
+                    .arg(construction_window_size);
                 if let Some(ref c) = compression {
                     cmd.arg("COMPRESSION").arg(c);
                 }
@@ -2609,6 +2684,10 @@ mod tests {
             batch_size: 1,
             parallel: 1,
             skip_vector_index: false,
+            svs_graph_max_degree: None,
+            svs_construction_window_size: None,
+            svs_compression: None,
+            svs_reduce: None,
             index_name: "idx:test".to_string(),
             key_prefix: "test:".to_string(),
             datetime_fields: Arc::new(dt),
@@ -2631,6 +2710,60 @@ mod tests {
         assert_eq!(bytes.len(), 8); // 2 x f32
         assert_eq!(bytes, encode_vector("SOMETHING_UNKNOWN", &v));
         assert_eq!(&bytes[0..4], &1.0f32.to_le_bytes());
+    }
+
+    // Legacy SVS configs (dbpedia-calibration.json shape) nest algorithm,
+    // data_type, and the svs-vamana_config block under collection_params. new()
+    // must resolve all of them so the config actually selects + configures SVS.
+    #[test]
+    fn resolves_nested_svs_collection_params() {
+        use super::{is_svs, RedisEngine};
+        let cfg_json = serde_json::json!({
+            "name": "dbpedia-cal-svs-LeanVec4x8-div4-float16",
+            "engine": "redis",
+            "collection_params": {
+                "algorithm": "svs-vamana",
+                "data_type": "FLOAT16",
+                "svs-vamana_config": {
+                    "DISTANCE_METRIC": "L2",
+                    "GRAPH_MAX_DEGREE": 40,
+                    "CONSTRUCTION_WINDOW_SIZE": 250,
+                    "compression": "LeanVec4x8",
+                    "REDUCE": 384
+                }
+            },
+            "upload_params": { "algorithm": "svs-vamana", "data_type": "FLOAT16" }
+        });
+        let ec: crate::config::EngineConfig = serde_json::from_value(cfg_json).unwrap();
+        let eng = RedisEngine::new(&ec, "localhost").unwrap();
+        let c = &eng.config;
+        assert_eq!(c.algorithm, "svs-vamana", "nested algorithm resolved");
+        assert!(is_svs(&c.algorithm));
+        assert_eq!(c.data_type, "FLOAT16", "nested data_type resolved");
+        assert_eq!(c.svs_graph_max_degree, Some(40));
+        assert_eq!(c.svs_construction_window_size, Some(250));
+        assert_eq!(c.svs_compression.as_deref(), Some("LeanVec4x8"));
+        assert_eq!(c.svs_reduce, Some(384));
+    }
+
+    // Top-level algorithm still wins over a nested one, and a plain HNSW config
+    // (no svs block) leaves the SVS fields None + derives nothing.
+    #[test]
+    fn hnsw_config_leaves_svs_fields_unset() {
+        use super::RedisEngine;
+        let cfg_json = serde_json::json!({
+            "name": "redis-hnsw",
+            "engine": "redis",
+            "algorithm": "hnsw",
+            "collection_params": { "hnsw_config": { "M": 32, "EF_CONSTRUCTION": 200 } }
+        });
+        let ec: crate::config::EngineConfig = serde_json::from_value(cfg_json).unwrap();
+        let c = RedisEngine::new(&ec, "localhost").unwrap().config;
+        assert_eq!(c.algorithm, "hnsw");
+        assert_eq!(c.m, 32);
+        assert_eq!(c.svs_graph_max_degree, None);
+        assert_eq!(c.svs_compression, None);
+        assert_eq!(c.svs_reduce, None);
     }
 
     #[test]
