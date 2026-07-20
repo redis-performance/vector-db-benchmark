@@ -838,6 +838,7 @@ fn run_single_experiment(
             results,
             server_metadata_before.as_ref(),
             server_metadata_after.as_ref(),
+            args.dump_raw_latencies,
         )?;
     }
 
@@ -957,6 +958,7 @@ fn save_search_results(
     results: &crate::engine::SearchResults,
     server_metadata_before: Option<&serde_json::Value>,
     server_metadata_after: Option<&serde_json::Value>,
+    dump_raw_latencies: bool,
 ) -> Result<(), String> {
     let timestamp = Local::now().format("%Y-%m-%d-%H-%M-%S");
     let pid = std::process::id();
@@ -1023,13 +1025,28 @@ fn save_search_results(
             "p50_time": results.p50_time,
             "p95_time": results.p95_time,
             "p99_time": results.p99_time,
-            "precisions": results.precisions,
-            "recalls": results.recalls,
-            "mrrs": results.mrrs,
-            "ndcgs": results.ndcgs,
-            "latencies": results.latencies,
+            // Compact re-derivable digests replace the full per-query arrays
+            // (which reached ~80 MB each on a 10M-query run). The top-level
+            // p50/p95/p99_time seconds fields above are unchanged for back-compat.
+            // Raw arrays are additionally dumped only under --dump-raw-latencies.
+            "latency_hdr": crate::latency_digest::latency_hdr(&results.latencies),
+            "precision_dist": crate::latency_digest::quality_dist(&results.precisions),
+            "recall_dist": crate::latency_digest::quality_dist(&results.recalls),
+            "mrr_dist": crate::latency_digest::quality_dist(&results.mrrs),
+            "ndcg_dist": crate::latency_digest::quality_dist(&results.ndcgs),
         }
     });
+
+    // Opt-in full-fidelity archival: additionally emit the raw per-query arrays
+    // exactly as before. Off by default so large runs stay ~1000x smaller.
+    if dump_raw_latencies {
+        let results_obj = result["results"].as_object_mut().unwrap();
+        results_obj.insert("precisions".to_string(), json!(results.precisions));
+        results_obj.insert("recalls".to_string(), json!(results.recalls));
+        results_obj.insert("mrrs".to_string(), json!(results.mrrs));
+        results_obj.insert("ndcgs".to_string(), json!(results.ndcgs));
+        results_obj.insert("latencies".to_string(), json!(results.latencies));
+    }
 
     // Add update metrics when present (mixed benchmark mode)
     if let Some(ref ratio) = results.update_search_ratio {
@@ -1054,7 +1071,13 @@ fn save_search_results(
             results_obj.insert("update_p99_time".to_string(), json!(t));
         }
         if let Some(ref lats) = results.update_latencies {
-            results_obj.insert("update_latencies".to_string(), json!(lats));
+            results_obj.insert(
+                "update_latency_hdr".to_string(),
+                crate::latency_digest::latency_hdr(lats),
+            );
+            if dump_raw_latencies {
+                results_obj.insert("update_latencies".to_string(), json!(lats));
+            }
         }
     }
 
