@@ -166,6 +166,13 @@ impl OpenSearchEngine {
                     let os_type = match ft {
                         "int" => "long",
                         "geo" => "geo_point",
+                        // "bool"/"datetime" are not valid OS types; map to the real
+                        // ones. OS coerces the reader's "true"/"false" string into a
+                        // `boolean` field and parses ISO-8601 into a `date` field.
+                        // Forwarding them verbatim made index creation reject the
+                        // whole mapping.
+                        "bool" => "boolean",
+                        "datetime" => "date",
                         other => other,
                     };
                     props.insert(
