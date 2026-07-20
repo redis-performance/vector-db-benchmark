@@ -154,16 +154,80 @@ impl RedisEngine {
         // Vector field with HNSW params (matches Python v0 configure.py)
         // Skipped when skip_vector_index is set (filter-only benchmark)
         if !self.config.skip_vector_index {
-            let num_attrs = 6 + 2 + 2; // TYPE+DIM+DISTANCE_METRIC + M + EF_CONSTRUCTION
-            cmd.arg("vector")
-                .arg("VECTOR")
-                .arg(self.config.algorithm.to_uppercase())
-                .arg(num_attrs);
-            cmd.arg("TYPE").arg(&self.config.data_type);
-            cmd.arg("DIM").arg(vector_size);
-            cmd.arg("DISTANCE_METRIC").arg(distance_metric);
-            cmd.arg("M").arg(self.config.m);
-            cmd.arg("EF_CONSTRUCTION").arg(self.config.ef_construction);
+            // Emit the canonical algorithm token. SVS is matched by substring
+            // (is_svs), but RediSearch requires the exact `SVS-VAMANA` keyword —
+            // so normalize any SVS spelling to it rather than passing a token
+            // like `SVS` that FT.CREATE would reject.
+            let algo_token = if is_svs(&self.config.algorithm) {
+                "SVS-VAMANA".to_string()
+            } else {
+                self.config.algorithm.to_uppercase()
+            };
+            cmd.arg("vector").arg("VECTOR").arg(algo_token);
+            if is_svs(&self.config.algorithm) {
+                // SVS-VAMANA (Redis 8.2+) uses GRAPH_MAX_DEGREE / CONSTRUCTION_WINDOW_SIZE,
+                // NOT HNSW's M / EF_CONSTRUCTION (those are rejected at FT.CREATE:
+                // "Bad arguments for algorithm SVS-VAMANA: M"). Drive them from the
+                // same swept M / EF_CONSTRUCTION config values so one grid covers both
+                // algorithms. (Redis docs note GRAPH_MAX_DEGREE ~= HNSW's M*2; we map M
+                // through directly to keep the existing sweep grid meaningful.)
+                //
+                // Optional compression: LVQ<b> / LVQ<b1>x<b2> / LeanVec<b1>x<b2> via
+                // REDIS_SVS_COMPRESSION; LeanVec dim-reduction via REDIS_SVS_REDUCE
+                // (only valid with a LeanVec compression). On OSS / non-Intel builds
+                // COMPRESSION silently falls back to basic 8-bit scalar quantization.
+                let compression = std::env::var("REDIS_SVS_COMPRESSION")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let mut reduce = std::env::var("REDIS_SVS_REDUCE")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .filter(|&n| n > 0);
+                // REDUCE (LeanVec dim-reduction) is only valid with a LeanVec
+                // COMPRESSION; emitting it otherwise builds an index RediSearch
+                // rejects. Drop it (with a warning) rather than send a doomed
+                // FT.CREATE, so a stray REDIS_SVS_REDUCE can't fail an LVQ/plain run.
+                let is_leanvec = compression
+                    .as_deref()
+                    .map(|c| c.to_uppercase().contains("LEANVEC"))
+                    .unwrap_or(false);
+                if reduce.is_some() && !is_leanvec {
+                    eprintln!(
+                        "warning: REDIS_SVS_REDUCE ignored — REDUCE requires a LeanVec COMPRESSION (COMPRESSION={:?})",
+                        compression
+                    );
+                    reduce = None;
+                }
+                // num_attrs counts the tokens that follow (2 per key/value pair):
+                // TYPE,DIM,DISTANCE_METRIC,GRAPH_MAX_DEGREE,CONSTRUCTION_WINDOW_SIZE = 10,
+                // + COMPRESSION (2), + REDUCE (2). A miscount is fatal at FT.CREATE.
+                let num_attrs = 10
+                    + if compression.is_some() { 2 } else { 0 }
+                    + if reduce.is_some() { 2 } else { 0 };
+                cmd.arg(num_attrs);
+                cmd.arg("TYPE").arg(&self.config.data_type);
+                cmd.arg("DIM").arg(vector_size);
+                cmd.arg("DISTANCE_METRIC").arg(distance_metric);
+                cmd.arg("GRAPH_MAX_DEGREE").arg(self.config.m);
+                cmd.arg("CONSTRUCTION_WINDOW_SIZE")
+                    .arg(self.config.ef_construction);
+                if let Some(ref c) = compression {
+                    cmd.arg("COMPRESSION").arg(c);
+                }
+                if let Some(r) = reduce {
+                    cmd.arg("REDUCE").arg(r);
+                }
+            } else {
+                // HNSW (default): TYPE+DIM+DISTANCE_METRIC + M + EF_CONSTRUCTION.
+                let num_attrs = 6 + 2 + 2;
+                cmd.arg(num_attrs);
+                cmd.arg("TYPE").arg(&self.config.data_type);
+                cmd.arg("DIM").arg(vector_size);
+                cmd.arg("DISTANCE_METRIC").arg(distance_metric);
+                cmd.arg("M").arg(self.config.m);
+                cmd.arg("EF_CONSTRUCTION").arg(self.config.ef_construction);
+            }
         }
 
         // Add schema fields from dataset config for filtering
@@ -1234,13 +1298,28 @@ fn ft_search_filter_only(
 /// only the RPC round-trip + reply parse, matching pgvector/qdrant. The query
 /// vector is passed as a `$vec_param` PARAM, so this structure is identical
 /// across queries that share a filter.
+/// True when the configured algorithm is SVS-VAMANA (Intel Scalable Vector
+/// Search). Matched by substring so `svs-vamana` / `SVS-VAMANA` / `SVS` all
+/// count. SVS-VAMANA takes GRAPH_MAX_DEGREE/CONSTRUCTION_WINDOW_SIZE at build
+/// time and SEARCH_WINDOW_SIZE at query time, in place of HNSW's
+/// M/EF_CONSTRUCTION and EF_RUNTIME.
+fn is_svs(algorithm: &str) -> bool {
+    algorithm.to_uppercase().contains("SVS")
+}
+
 fn build_knn_query_str(
     algorithm: &str,
     hybrid_policy: &str,
     filter: Option<&ParsedFilter>,
 ) -> String {
-    // Build KNN conditions string
-    let knn_conditions = if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
+    // Runtime search-window param, bound as `$EF` in build_ft_search_cmd:
+    //   HNSW → EF_RUNTIME, SVS-VAMANA → SEARCH_WINDOW_SIZE (its EF_RUNTIME
+    //   analogue). ADHOC_BF is brute-force, so no graph-traversal window applies.
+    let knn_conditions = if hybrid_policy == "ADHOC_BF" {
+        ""
+    } else if is_svs(algorithm) {
+        "SEARCH_WINDOW_SIZE $EF"
+    } else if algorithm.to_uppercase() == "HNSW" {
         "EF_RUNTIME $EF"
     } else {
         ""
@@ -1300,10 +1379,16 @@ fn build_ft_search_cmd(
         .arg("TIMEOUT")
         .arg(query_timeout);
 
-    // Count params: vec_param(2) + K(2) + optional EF(2) + filter params (2 each)
+    // Count params: vec_param(2) + K(2) + optional EF(2) + filter params (2 each).
+    // The `$EF` param backs HNSW's EF_RUNTIME and SVS-VAMANA's SEARCH_WINDOW_SIZE
+    // (see build_knn_query_str), so bind it for either algorithm — and only when
+    // that query actually references `$EF` (matches build_knn_query_str exactly,
+    // else the bind would be an inert or missing param).
+    let binds_ef =
+        (algorithm.to_uppercase() == "HNSW" || is_svs(algorithm)) && hybrid_policy != "ADHOC_BF";
     let filter_param_count = filter.as_ref().map(|(_, p)| p.len() * 2).unwrap_or(0);
     let mut base_param_count = 4; // vec_param + K
-    if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
+    if binds_ef {
         base_param_count += 2; // EF
     }
     let total_param_count = base_param_count + filter_param_count;
@@ -1312,7 +1397,7 @@ fn build_ft_search_cmd(
     cmd.arg("vec_param").arg(vec_bytes);
     cmd.arg("K").arg(top.to_string());
 
-    if algorithm.to_uppercase() == "HNSW" && hybrid_policy != "ADHOC_BF" {
+    if binds_ef {
         cmd.arg("EF").arg(ef.to_string());
     }
 
@@ -2656,6 +2741,31 @@ mod tests {
         assert_eq!(
             build_knn_query_str("hnsw", "ADHOC_BF", None),
             "*=>[KNN $K @vector $vec_param  AS vector_score]=>{$HYBRID_POLICY: ADHOC_BF }"
+        );
+    }
+
+    // SVS-VAMANA uses SEARCH_WINDOW_SIZE (its EF_RUNTIME analogue), still bound as
+    // `$EF`. This MUST stay in lock-step with build_ft_search_cmd's `binds_ef`:
+    // the query references `$EF` here, so the search cmd must bind an EF param.
+    #[test]
+    fn build_knn_query_str_svs_emits_search_window_size() {
+        use super::{build_knn_query_str, is_svs};
+        assert!(is_svs("svs-vamana") && is_svs("SVS-VAMANA") && is_svs("svs"));
+        assert!(!is_svs("hnsw") && !is_svs("flat"));
+        // SVS → SEARCH_WINDOW_SIZE $EF (not EF_RUNTIME), prefilter "*".
+        assert_eq!(
+            build_knn_query_str("svs-vamana", "", None),
+            "*=>[KNN $K @vector $vec_param SEARCH_WINDOW_SIZE $EF AS vector_score]"
+        );
+        // ADHOC_BF is brute-force → no runtime window for SVS either.
+        assert_eq!(
+            build_knn_query_str("svs-vamana", "ADHOC_BF", None),
+            "*=>[KNN $K @vector $vec_param  AS vector_score]=>{$HYBRID_POLICY: ADHOC_BF }"
+        );
+        // A non-HNSW/non-SVS algorithm (e.g. FLAT) has no runtime window param.
+        assert_eq!(
+            build_knn_query_str("flat", "", None),
+            "*=>[KNN $K @vector $vec_param  AS vector_score]"
         );
     }
 
