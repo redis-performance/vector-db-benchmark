@@ -27,6 +27,52 @@ fn results_dir() -> PathBuf {
 }
 
 /// Run all matching experiments
+/// Run one search/mixed call under a per-point wall-clock watchdog (#151-5).
+///
+/// `f` executes on the CURRENT thread — so the timed measurement path and its
+/// fidelity are untouched. A monitor thread only watches the clock: it logs
+/// progress every 60s while the point is in flight and, if the point exceeds
+/// `timeout_secs`, prints a diagnostic naming the stuck point and aborts the
+/// process (rather than letting one hung search — e.g. connection-pool
+/// exhaustion at high `parallel` — stall the whole sweep silently). A
+/// `timeout_secs <= 0` disables the watchdog entirely (behavior unchanged).
+fn run_with_search_watchdog<T>(timeout_secs: f64, label: &str, f: impl FnOnce() -> T) -> T {
+    if !timeout_secs.is_finite() || timeout_secs <= 0.0 {
+        return f();
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let label = label.to_string();
+    let watchdog = std::thread::spawn(move || {
+        let start = Instant::now();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(60)) {
+                // `f` finished (tx dropped) → stop watching promptly.
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let secs = start.elapsed().as_secs_f64();
+                    if secs >= timeout_secs {
+                        eprintln!(
+                            "\n✗ WATCHDOG: search point '{}' exceeded --search-timeout {:.0}s with no \
+                             result — likely a proxy/connection-pool stall (parallel exceeding server \
+                             capacity). Aborting; reduce parallel or raise --search-timeout.",
+                            label, timeout_secs
+                        );
+                        std::process::exit(3);
+                    }
+                    eprintln!(
+                        "\t⏳ WATCHDOG: '{}' still running after {:.0}s (limit {:.0}s, no result yet)",
+                        label, secs, timeout_secs
+                    );
+                }
+            }
+        }
+    });
+    let result = f();
+    drop(tx); // signals completion; the monitor wakes on Disconnected and exits
+    let _ = watchdog.join();
+    result
+}
+
 pub fn run(args: &Args) -> Result<(), String> {
     println!("vector-db-benchmark v{}", env!("CARGO_PKG_VERSION"));
 
@@ -563,9 +609,10 @@ fn run_single_experiment(
                         "\tOpen-loop warm-up: {:.1} QPS for {:.1}s",
                         args.target_qps, args.warmup_seconds
                     );
-                    engine
-                        .search(dataset, &warmup_params, args.queries)
-                        .map_err(|e| format!("open-loop warm-up failed: {}", e))?;
+                    run_with_search_watchdog(args.search_timeout, "open-loop warm-up", || {
+                        engine.search(dataset, &warmup_params, args.queries)
+                    })
+                    .map_err(|e| format!("open-loop warm-up failed: {}", e))?;
                 } else if args.search_duration > 0.0 && args.warmup_seconds > 0.0 {
                     // Closed-loop-duration warm-up: a discarded search phase so the
                     // measured window sees a warm server for BOTH engines (Vertex
@@ -575,9 +622,10 @@ fn run_single_experiment(
                     warmup_params.duration_seconds = Some(args.warmup_seconds);
                     warmup_params.target_qps = None;
                     println!("\tClosed-loop warm-up: {:.1}s", args.warmup_seconds);
-                    engine
-                        .search(dataset, &warmup_params, args.queries)
-                        .map_err(|e| format!("closed-loop warm-up failed: {}", e))?;
+                    run_with_search_watchdog(args.search_timeout, "closed-loop warm-up", || {
+                        engine.search(dataset, &warmup_params, args.queries)
+                    })
+                    .map_err(|e| format!("closed-loop warm-up failed: {}", e))?;
                 }
 
                 // Run the measured search `repetitions` times and keep the
@@ -617,12 +665,20 @@ fn run_single_experiment(
                     // A window-scoped sample would require the Engine trait to
                     // return the measured-loop CPU, which is deliberately avoided.
                     let cpu_before = crate::proc_cpu::sample();
-                    let search_result = match phase {
-                        Some(ratio) => {
-                            engine.search_mixed(dataset, effective_params, args.queries, ratio)
-                        }
-                        None => engine.search(dataset, effective_params, args.queries),
-                    };
+                    let wd_label = format!(
+                        "{}/{} {}[parallel={}]",
+                        engine.name(),
+                        dataset.config.name,
+                        if phase.is_some() { "mixed" } else { "search" },
+                        effective_params.parallel.unwrap_or(1),
+                    );
+                    let search_result =
+                        run_with_search_watchdog(args.search_timeout, &wd_label, || match phase {
+                            Some(ratio) => {
+                                engine.search_mixed(dataset, effective_params, args.queries, ratio)
+                            }
+                            None => engine.search(dataset, effective_params, args.queries),
+                        });
                     let cpu_after = crate::proc_cpu::sample();
 
                     match search_result {
@@ -1063,7 +1119,37 @@ fn save_upload_results(
 #[cfg(test)]
 mod tests {
     use super::parse_update_search_ratio;
+    use super::run_with_search_watchdog;
     use crate::engine::UpdateSearchRatio;
+
+    // Watchdog disabled (timeout <= 0, non-finite): must run `f` inline on the
+    // current thread and return its value verbatim — the default, unchanged path.
+    #[test]
+    fn watchdog_disabled_runs_inline_and_returns_value() {
+        assert_eq!(run_with_search_watchdog(0.0, "off", || 42), 42);
+        assert_eq!(run_with_search_watchdog(-1.0, "neg", || 7), 7);
+        assert_eq!(run_with_search_watchdog(f64::NAN, "nan", || 5), 5);
+        assert_eq!(
+            run_with_search_watchdog(f64::INFINITY, "inf", || 9),
+            9,
+            "infinite (non-finite) timeout disables rather than never-firing"
+        );
+    }
+
+    // Watchdog enabled but `f` completes well within the limit: the monitor
+    // thread must observe completion (tx drop → Disconnected) and let the call
+    // return the closure's value without aborting.
+    #[test]
+    fn watchdog_enabled_fast_completion_returns_value() {
+        let out = run_with_search_watchdog(30.0, "fast", || {
+            let mut acc = 0u64;
+            for i in 0..1000 {
+                acc += i;
+            }
+            acc
+        });
+        assert_eq!(out, 499_500);
+    }
 
     #[test]
     fn parses_valid_ratio() {
