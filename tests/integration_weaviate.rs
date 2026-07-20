@@ -604,6 +604,78 @@ fn test_binary_weaviate_match_any() {
     );
 }
 
+/// Run a filter project on Weaviate over the default gRPC transport, returning
+/// recall. Runs the binary directly so per-query stderr is surfaced.
+fn run_weaviate_filter(root: &std::path::Path, ds_name: &str, class_name: &str) -> f64 {
+    let port = std::env::var("WEAVIATE_HTTP_PORT").unwrap_or_else(|_| WEAVIATE_PORT.to_string());
+    let out = std::process::Command::new(common::binary_path())
+        .args([
+            "--engines",
+            "weaviate-f",
+            "--datasets",
+            ds_name,
+            "--host",
+            WEAVIATE_HOST,
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("WEAVIATE_HTTP_PORT", &port)
+        .env("WEAVIATE_CLASS_NAME", class_name)
+        .current_dir(root)
+        .output()
+        .expect("run vector-db-benchmark");
+    println!(
+        "weaviate {} stdout:\n{}\nstderr:\n{}",
+        ds_name,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "weaviate {} run failed", ds_name);
+    common::read_recall(root, "weaviate-f")
+}
+
+fn weaviate_filter_config() -> String {
+    serde_json::json!([{
+        "name": "weaviate-f", "engine": "weaviate",
+        "connection_params": {},
+        "search_params": [{"parallel": 1, "vectorIndexConfig": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }])
+    .to_string()
+}
+
+/// Bool-field equality filter end-to-end. Regression: the `bool` schema type was
+/// dropped (no property created), so the filter matched nothing. Now `bool` ->
+/// `boolean` property, the upload converts the reader's "true"/"false" string to
+/// a native bool, and the gRPC `valueBoolean` filter selects the even ids.
+#[test]
+fn test_binary_weaviate_bool() {
+    wait_for_weaviate();
+    let proj = common::write_bool_project("bool-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "bool-test", "BenchBool");
+    println!("weaviate bool recall={:.3}", recall);
+    assert!(recall >= 0.9, "weaviate bool recall {:.3} < 0.9", recall);
+}
+
+/// Datetime range filter end-to-end. Regression: `datetime` was dropped and the
+/// range builder only emitted valueInt/valueNumber. Now `datetime` -> `date`
+/// property and the ISO bound is sent as `valueText` (Weaviate compares dates
+/// via RFC3339 text), selecting the [day 100, day 300) window.
+#[test]
+fn test_binary_weaviate_datetime() {
+    wait_for_weaviate();
+    let proj = common::write_datetime_project("dt-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "dt-test", "BenchDt");
+    println!("weaviate datetime recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate datetime recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88).
 /// `labels` is declared as a `text[]` array property and each doc stores an
 /// array; the OR-of-`Equal` filter matches per element (Weaviate's `Equal` on
