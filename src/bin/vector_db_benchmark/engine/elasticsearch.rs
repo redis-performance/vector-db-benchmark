@@ -164,6 +164,14 @@ impl ElasticsearchEngine {
                     let es_type = match ft {
                         "int" => "long",
                         "geo" => "geo_point",
+                        // Bools/datetimes arrive from the reader as strings
+                        // ("true"/"false", ISO-8601); ES coerces those into a
+                        // `boolean` field and parses ISO into a `date` field. The
+                        // canonical schema names them "bool"/"datetime", which are
+                        // NOT valid ES types — forwarding them verbatim made
+                        // index creation reject the whole mapping.
+                        "bool" => "boolean",
+                        "datetime" => "date",
                         other => other,
                     };
                     props.insert(

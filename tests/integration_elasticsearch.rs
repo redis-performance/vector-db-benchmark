@@ -949,6 +949,69 @@ fn test_binary_elasticsearch_match_any() {
     assert!(recall >= 0.9, "es match_any recall {:.3} < 0.9", recall);
 }
 
+/// Bool-field equality filter end-to-end. Regression for the schema-type bug:
+/// the canonical schema names the field "bool", which is NOT a valid ES type —
+/// forwarding it verbatim made index creation reject the whole mapping. With
+/// "bool" -> "boolean" ES coerces the reader's "true"/"false" string and the
+/// `{flag:{match:{value:true}}}` filter selects the even ids.
+#[test]
+fn test_binary_elasticsearch_bool() {
+    wait_for_elasticsearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "es-bool", "engine": "elasticsearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_bool_project("bool-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "es-bool",
+            "bool-test",
+            "127.0.0.1",
+            &[("ELASTIC_PORT", "9201"), ("ELASTIC_INDEX", "bench_bool")],
+        ),
+        "es bool run failed"
+    );
+    let recall = common::read_recall(&proj.root, "es-bool");
+    println!("es bool recall={:.3}", recall);
+    assert!(recall >= 0.9, "es bool recall {:.3} < 0.9", recall);
+}
+
+/// Datetime range filter end-to-end. Regression for the schema-type bug:
+/// "datetime" is not a valid ES type; with "datetime" -> "date" ES parses the
+/// reader's ISO-8601 strings and the `{ts:{range:{gte,lt}}}` ISO bounds select
+/// the [day 100, day 300) window.
+#[test]
+fn test_binary_elasticsearch_datetime() {
+    wait_for_elasticsearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "es-dt", "engine": "elasticsearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_datetime_project("dt-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "es-dt",
+            "dt-test",
+            "127.0.0.1",
+            &[("ELASTIC_PORT", "9201"), ("ELASTIC_INDEX", "bench_dt")],
+        ),
+        "es datetime run failed"
+    );
+    let recall = common::read_recall(&proj.root, "es-dt");
+    println!("es datetime recall={:.3}", recall);
+    assert!(recall >= 0.9, "es datetime recall {:.3} < 0.9", recall);
+}
+
 /// End-to-end full-text filter (#120): the query carries a single
 /// `{"body":{"match":{"text":"quick"}}}` condition and ground truth is
 /// brute-forced over only the docs whose body CONTAINS "quick". Before the fix,
