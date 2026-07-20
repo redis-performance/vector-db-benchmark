@@ -1529,6 +1529,100 @@ fn test_binary_redis_end_to_end() {
     fs::remove_dir_all(&project_root).ok();
 }
 
+/// SVS-VAMANA (Intel Scalable Vector Search) end-to-end via the binary.
+/// Guards the two paths that HNSW-only code broke for `algorithm: svs-vamana`:
+///   1. `create_index` must emit GRAPH_MAX_DEGREE/CONSTRUCTION_WINDOW_SIZE, NOT
+///      M/EF_CONSTRUCTION (which SVS-VAMANA rejects at FT.CREATE), and
+///   2. the query must use SEARCH_WINDOW_SIZE $EF (not EF_RUNTIME), with the
+///      swept `ef` bound as the $EF PARAM.
+///
+/// Requires Redis 8.2+ (SVS-VAMANA support); the CI test image is 8.x.
+#[test]
+fn test_binary_redis_svs_vamana() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([{
+        "name": "test-redis-svs",
+        "engine": "redis",
+        "algorithm": "svs-vamana",
+        // The same M / EF_CONSTRUCTION config drives GRAPH_MAX_DEGREE /
+        // CONSTRUCTION_WINDOW_SIZE for SVS.
+        "collection_params": {
+            "hnsw_config": { "M": 32, "EF_CONSTRUCTION": 200 }
+        },
+        // Two swept ef values exercise distinct SEARCH_WINDOW_SIZE settings; both
+        // are large enough to be exact over 100 docs so the recall floor holds
+        // regardless of which result file read_search_precision samples first.
+        "search_params": [
+            { "parallel": 1, "search_params": { "ef": 200 }, "top": top },
+            { "parallel": 1, "search_params": { "ef": 64 }, "top": top }
+        ],
+        "upload_params": {
+            "data_type": "FLOAT32",
+            "parallel": 1,
+            "batch_size": 64
+        }
+    }]);
+
+    let project_root = create_test_project(
+        "test-svs",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+
+    let bin = binary_path();
+    assert!(bin.exists(), "Binary not found at {:?}", bin);
+
+    let output = Command::new(&bin)
+        .args([
+            "--engines",
+            "test-redis-svs",
+            "--datasets",
+            "test-svs",
+            "--host",
+            "localhost",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .current_dir(&project_root)
+        .output()
+        .expect("Failed to run vector-db-benchmark");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "SVS-VAMANA binary run failed.\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    let results_dir = project_root.join("results");
+    let precision = read_search_precision(&results_dir, "test-redis-svs");
+    assert!(
+        precision >= 0.8,
+        "SVS-VAMANA precision should be >= 0.8, got {}",
+        precision
+    );
+
+    fs::remove_dir_all(&project_root).ok();
+}
+
 #[test]
 fn test_binary_redis_open_loop_fixed_qps() {
     wait_for_redis();
