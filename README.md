@@ -171,6 +171,29 @@ Options:
     -h, --help                 Print help
 ```
 
+### Per-config index isolation (Redis / Valkey / Dragonfly)
+
+Each engine config gets its **own** RediSearch index and keyspace, derived from the
+config `name`: index `"<base>:<config>"` (base `idx`) with docs keyed
+`"<config>:<id>"`. This lets an M×EF_CONSTRUCTION **sweep** run all its configs
+against one server and coexist, so you can upload every config once and then
+search each in a later `--skip-upload` pass — each config reads its own graph, and
+memory is reported per-index via `FT.INFO` (issue #151-4).
+
+- `REDIS_INDEX_NAME` / `VALKEY_INDEX_NAME` / `DRAGONFLY_INDEX_NAME` now set the
+  **base namespace**, not the whole index name; the config name is always appended.
+  Set `<VAR>_EXACT=1` to use the base verbatim (single-config "point at an
+  out-of-band index" case — combining it with >1 config for that engine is a
+  startup error).
+- Indexes/keys written by any **pre-#151-4** binary are incompatible — re-upload.
+  `--skip-upload` against a missing/mismatched index now **hard-errors** instead of
+  silently writing a `recall 0.0` file.
+- Two-phase coexistence sweep: `… --keep-data` (upload + search all configs,
+  keep the data), then `… --skip-upload --keep-data --skip-if-exists false`
+  (search each against its own index). Per-config prefixing stores N copies of
+  otherwise-identical sweep docs, so keyspace bytes scale ×N — the intended trade
+  for isolation.
+
 ### Charts
 
 Render a QPS-vs-precision trade-off plot (SVG, no dependencies) from existing `*-summary.json` results — one colored series per engine, filtered by `--engines`/`--datasets`:

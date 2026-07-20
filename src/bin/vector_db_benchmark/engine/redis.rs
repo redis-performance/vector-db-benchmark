@@ -17,6 +17,7 @@ use redis::Connection;
 
 use crate::config::{EngineConfig, SearchParams};
 use crate::dataset::Dataset;
+use crate::engine::index_naming::{derive_index_name, derive_key_prefix};
 use crate::engine::{
     attach_open_loop_metrics, closed_loop_duration, zero_search_results, Engine, OpenLoopPlan,
     SearchResults, UpdateSearchRatio, UploadStats,
@@ -24,10 +25,6 @@ use crate::engine::{
 use crate::metrics::compute_metrics;
 use vector_db_benchmark::parsers::{datetime_to_epoch_secs, parse_ft_search_response};
 use vector_db_benchmark::readers::metadata::{MetadataItem, MetadataValue};
-
-fn configured_index_name() -> String {
-    std::env::var("REDIS_INDEX_NAME").unwrap_or_else(|_| "idx".to_string())
-}
 
 /// Redis engine configuration
 #[derive(Clone)]
@@ -39,6 +36,15 @@ pub struct RedisEngineConfig {
     pub batch_size: usize,
     pub parallel: usize,
     pub skip_vector_index: bool,
+    /// Per-config RediSearch index name (`"<base>:<config>"`, issue #151-4) so a
+    /// sweep's configs address disjoint indexes on one server. Resolved once in
+    /// `new()`; never re-read from the environment inside a timed window.
+    pub index_name: String,
+    /// Per-config key prefix (`"<config>:"`, issue #151-4). Every doc key is
+    /// `"<key_prefix><id>"`, and the index is `PREFIX 1 "<key_prefix>"`, so each
+    /// config owns a disjoint keyspace and its `FT.DROPINDEX ... DD` teardown
+    /// touches only its own docs.
+    pub key_prefix: String,
     /// Schema field names declared as `datetime`. Values for these fields are
     /// ISO-8601 strings in the payload; they are converted to epoch seconds at
     /// HSET time so the NUMERIC index/range filters match. Populated in
@@ -105,6 +111,8 @@ impl RedisEngine {
                 batch_size,
                 parallel,
                 skip_vector_index: engine_config.skip_vector_index,
+                index_name: derive_index_name("REDIS_INDEX_NAME", "idx", &engine_config.name),
+                key_prefix: derive_key_prefix(&engine_config.name),
                 datetime_fields: Arc::new(HashSet::new()),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
@@ -121,9 +129,11 @@ impl RedisEngine {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
-        // Drop existing index if any
+        // Drop existing index if any. DD deletes the indexed docs too; because the
+        // index PREFIX is now this config's `<config>:` (not `""`), DD removes only
+        // this config's keys — sibling configs' indexes/keys are untouched (#151-4).
         let _ = redis::cmd("FT.DROPINDEX")
-            .arg(configured_index_name())
+            .arg(&self.config.index_name)
             .arg("DD")
             .query::<()>(conn);
 
@@ -132,12 +142,12 @@ impl RedisEngine {
 
         // Build FT.CREATE command
         let mut cmd = redis::cmd("FT.CREATE");
-        cmd.arg(configured_index_name())
+        cmd.arg(&self.config.index_name)
             .arg("ON")
             .arg("HASH")
             .arg("PREFIX")
             .arg("1")
-            .arg("");
+            .arg(&self.config.key_prefix);
 
         cmd.arg("SCHEMA");
 
@@ -314,7 +324,7 @@ impl RedisEngine {
 
         loop {
             let info: redis::Value = redis::cmd("FT.INFO")
-                .arg(configured_index_name())
+                .arg(&self.config.index_name)
                 .query(&mut conn)
                 .map_err(|e| format!("FT.INFO error: {}", e))?;
 
@@ -443,6 +453,13 @@ impl RedisEngine {
         params: &SearchParams,
         num_queries: i64,
     ) -> Result<SearchResults, String> {
+        // Index-existence guard (#151-4): hard-error on a missing/mismatched index
+        // instead of writing a silent recall-0.0 file on the --skip-upload path.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
+
         let parallel = params.parallel.unwrap_or(1) as usize;
         let query_timeout: i64 = std::env::var("REDIS_QUERY_TIMEOUT")
             .ok()
@@ -488,7 +505,7 @@ impl RedisEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         // Resolve the index name once (env lookup) instead of per query.
-        let index_name = configured_index_name();
+        let index_name = self.config.index_name.clone();
 
         let pb = self.create_progress_bar(num_to_run);
         let start_time = Instant::now();
@@ -692,7 +709,7 @@ fn upload_batch_internal(
     let mut pipe = redis::pipe();
 
     for i in 0..ids.len() {
-        let key = ids[i].to_string();
+        let key = format!("{}{}", config.key_prefix, ids[i]);
         let vec_bytes = encode_vector(&config.data_type, &vectors[i]);
 
         let mut fields: Vec<(Vec<u8>, Vec<u8>)> = vec![("vector".as_bytes().to_vec(), vec_bytes)];
@@ -1374,7 +1391,7 @@ fn hset_single(
     vector: &[f32],
     metadata: Option<&MetadataItem>,
 ) -> Result<(), String> {
-    let key = id.to_string();
+    let key = format!("{}{}", config.key_prefix, id);
     let vec_bytes = encode_vector(&config.data_type, vector);
 
     let mut cmd = redis::cmd("HSET");
@@ -1562,6 +1579,13 @@ impl Engine for RedisEngine {
             return self.search_filter_only(dataset, params, num_queries);
         }
 
+        // Index-existence guard (#151-4): on the --skip-upload path a missing or
+        // mismatched index would otherwise write a silent recall-0.0 result file.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
+
         let ef = params
             .search_params
             .as_ref()
@@ -1639,7 +1663,7 @@ impl Engine for RedisEngine {
         });
         // Resolve the index name ONCE (env lookup) so it is not re-read from the
         // environment inside the per-query timed window.
-        let index_name = configured_index_name();
+        let index_name = self.config.index_name.clone();
 
         // Barrier-synchronized start so connection setup AND the cold first query
         // fall OUTSIDE the measured window — for open-loop and closed-loop-duration
@@ -1974,6 +1998,12 @@ impl Engine for RedisEngine {
         // the `--skip-upload` path (configure() does not run there). Idempotent.
         self.config.datetime_fields = Arc::new(datetime_fields_from_schema(dataset));
 
+        // Index-existence guard (#151-4): fail loudly on a missing/mismatched index.
+        {
+            let mut conn = self.get_connection()?;
+            redis_utils::ensure_index_exists(&mut conn, &self.config.index_name)?;
+        }
+
         let ef = params
             .search_params
             .as_ref()
@@ -2017,7 +2047,7 @@ impl Engine for RedisEngine {
         let update_idx = Arc::new(AtomicUsize::new(0));
 
         // Resolve the index name once (env lookup) rather than per query.
-        let index_name = configured_index_name();
+        let index_name = self.config.index_name.clone();
 
         let ratio_searches = ratio.searches as usize;
         let ratio_updates = ratio.updates as usize;
@@ -2235,7 +2265,7 @@ impl Engine for RedisEngine {
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
         let _ = redis::cmd("FT.DROPINDEX")
-            .arg(configured_index_name())
+            .arg(&self.config.index_name)
             .arg("DD")
             .query::<()>(&mut conn);
         Ok(())
@@ -2244,19 +2274,26 @@ impl Engine for RedisEngine {
     fn get_memory_usage(&mut self) -> Option<serde_json::Value> {
         let mut conn = self.get_connection().ok()?;
 
-        // Get used_memory from INFO memory (returns bulk string, parse key:value lines)
+        // Server-wide used_memory is kept only as a SECONDARY/global figure: under
+        // #151-4 coexistence it is the SUM of all resident configs, so it cannot
+        // attribute memory per graph. The per-config figure is the FT.INFO index
+        // size below.
         let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = parse_used_memory(&info_str);
 
-        // Get FT.INFO for index stats
-        let ft_info: Option<serde_json::Value> = redis::cmd("FT.INFO")
-            .arg(configured_index_name())
+        // Get FT.INFO for this config's index stats + per-index memory.
+        let ft_info_raw: Option<redis::Value> = redis::cmd("FT.INFO")
+            .arg(&self.config.index_name)
             .query::<redis::Value>(&mut conn)
-            .ok()
-            .map(|v| redis_value_to_json(&v));
+            .ok();
+        let index_memory_bytes = ft_info_raw
+            .as_ref()
+            .and_then(redis_utils::ft_info_index_memory_bytes);
+        let ft_info = ft_info_raw.as_ref().map(redis_value_to_json);
 
         Some(serde_json::json!({
             "used_memory": [used_memory],
+            "index_memory_bytes": index_memory_bytes,
             "index_info": ft_info,
         }))
     }
@@ -2267,7 +2304,7 @@ impl Engine for RedisEngine {
         // Vector index stats (HNSW M/EF, num_docs, index memory, ...). Errors on
         // the BEFORE snapshot (index not yet created) → index_info: null.
         let ft_info = redis::cmd("FT.INFO")
-            .arg(configured_index_name())
+            .arg(&self.config.index_name)
             .query::<redis::Value>(&mut conn)
             .ok()
             .map(|v| redis_value_to_json(&v));
@@ -2487,6 +2524,8 @@ mod tests {
             batch_size: 1,
             parallel: 1,
             skip_vector_index: false,
+            index_name: "idx:test".to_string(),
+            key_prefix: "test:".to_string(),
             datetime_fields: Arc::new(dt),
         };
         // datetime field → epoch seconds string
@@ -2659,12 +2698,14 @@ mod tests {
 
     #[test]
     fn parse_ft_search_response_resp2_reads_id_score_pairs() {
-        // RESP2 FT.SEARCH shape: [count, id1, fields1, id2, fields2, ...]
+        // RESP2 FT.SEARCH shape: [count, key1, fields1, key2, fields2, ...]. Doc
+        // ids arrive as the string KEY; a per-config-prefixed key ("cfg:42",
+        // #151-4) resolves to its trailing numeric id.
         let resp = Value::Array(vec![
             Value::Int(2),
             bulk("7"),
             Value::Array(vec![bulk("vector_score"), bulk("0.25")]),
-            Value::Int(42),
+            bulk("cfg:42"),
             Value::Array(vec![bulk("vector_score"), bulk("1.5")]),
         ]);
         let hits = parse_ft_search_response(&resp).unwrap();
