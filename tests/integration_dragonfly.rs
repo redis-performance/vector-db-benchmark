@@ -597,3 +597,217 @@ fn test_dragonfly_non_numeric_ef_rejected() {
 
     let _ = redis::cmd("FT.DROPINDEX").arg("idx").query::<()>(&mut conn);
 }
+
+/// Count keys under a glob (KEYS is fine on the small test keyspace).
+fn count_keys(conn: &mut Connection, pattern: &str) -> usize {
+    redis::cmd("KEYS")
+        .arg(pattern)
+        .query::<Vec<String>>(conn)
+        .map(|k| k.len())
+        .unwrap_or(0)
+}
+
+/// Delete only `*-search-*.json` result files under `root/results`.
+fn delete_search_result_files(root: &std::path::Path) {
+    let dir = root.join("results");
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            if entry.file_name().to_string_lossy().contains("-search-") {
+                fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+}
+
+/// #151-4 regression (dragonfly mirror): "upload all, then --skip-upload search
+/// each" gives every config its OWN graph. Two configs (dense high-ef vs sparse
+/// low-ef) coexist on one server via disjoint `idx:<config>` indexes + `<config>:`
+/// keyspaces; pre-fix they shared `idx` + keyspace → identical recall on the sweep.
+#[test]
+fn test_dragonfly_coexistence_skip_upload() {
+    wait_for_dragonfly();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let n_docs = 2000;
+    let n_queries = 100;
+    let top = 10;
+    let (vectors, queries, neighbors) = make_data(n_docs, n_queries, dim, top);
+
+    let engine_config = serde_json::json!([
+        {
+            "name": "dragonfly-co-a",
+            "engine": "dragonfly",
+            "connection_params": {},
+            "collection_params": { "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 200 } },
+            "search_params": [{ "parallel": 1, "top": top, "search_params": { "ef": 256 } }],
+            "upload_params": { "parallel": 1, "batch_size": 64 }
+        },
+        {
+            "name": "dragonfly-co-b",
+            "engine": "dragonfly",
+            "connection_params": {},
+            "collection_params": { "hnsw_config": { "M": 4, "EF_CONSTRUCTION": 8 } },
+            "search_params": [{ "parallel": 1, "top": top, "search_params": { "ef": 10 } }],
+            "upload_params": { "parallel": 1, "batch_size": 64 }
+        }
+    ]);
+
+    let root = create_knn_project(
+        "dragonfly-co",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        dim,
+    );
+    let port = test_port().to_string();
+
+    // Phase 1: upload + search BOTH, KEEPING data for the skip-upload phase.
+    assert!(
+        common::run_binary_extra(
+            &root,
+            "dragonfly-co-*",
+            "dragonfly-co",
+            TEST_HOST,
+            &[("DRAGONFLY_PORT", port.as_str())],
+            &["--keep-data"],
+        ),
+        "dragonfly coexistence phase 1 failed"
+    );
+
+    let base_a = common::read_recall(&root, "dragonfly-co-a");
+    let base_b = common::read_recall(&root, "dragonfly-co-b");
+
+    // Deterministic coexistence: `n_docs` keys under EACH per-config prefix, and
+    // both disjoint indexes exist.
+    assert_eq!(
+        count_keys(&mut conn, "dragonfly-co-a:*"),
+        n_docs,
+        "dragonfly-co-a keyspace"
+    );
+    assert_eq!(
+        count_keys(&mut conn, "dragonfly-co-b:*"),
+        n_docs,
+        "dragonfly-co-b keyspace"
+    );
+    assert!(
+        redis::cmd("FT.INFO")
+            .arg("idx:dragonfly-co-a")
+            .query::<redis::Value>(&mut conn)
+            .is_ok(),
+        "idx:dragonfly-co-a must exist"
+    );
+    assert!(
+        redis::cmd("FT.INFO")
+            .arg("idx:dragonfly-co-b")
+            .query::<redis::Value>(&mut conn)
+            .is_ok(),
+        "idx:dragonfly-co-b must exist"
+    );
+
+    delete_search_result_files(&root);
+
+    // Phase 2: --skip-upload search of both against the coexisting indexes.
+    assert!(
+        common::run_binary_extra(
+            &root,
+            "dragonfly-co-*",
+            "dragonfly-co",
+            TEST_HOST,
+            &[("DRAGONFLY_PORT", port.as_str())],
+            &["--skip-upload", "--keep-data"],
+        ),
+        "dragonfly coexistence phase 2 (--skip-upload) failed"
+    );
+
+    let rec_a = common::read_recall(&root, "dragonfly-co-a");
+    let rec_b = common::read_recall(&root, "dragonfly-co-b");
+
+    assert!(
+        (rec_a - base_a).abs() < 1e-9,
+        "dragonfly-co-a skip-upload recall {} != baseline {}",
+        rec_a,
+        base_a
+    );
+    assert!(
+        (rec_b - base_b).abs() < 1e-9,
+        "dragonfly-co-b skip-upload recall {} != baseline {}",
+        rec_b,
+        base_b
+    );
+    assert!(
+        (rec_a - rec_b).abs() > 1e-9,
+        "coexisting configs must have distinct recall: a={} b={}",
+        rec_a,
+        rec_b
+    );
+    assert!(
+        rec_a > rec_b,
+        "dense high-ef graph (a={}) should out-recall the sparse one (b={})",
+        rec_a,
+        rec_b
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+/// #151-4 negative (dragonfly mirror): `--skip-upload` with NO prior upload must
+/// FAIL LOUDLY (index-existence guard), never writing a recall-0.0 result file.
+#[test]
+fn test_dragonfly_skip_upload_without_prior_upload_errors() {
+    wait_for_dragonfly();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let n_docs = 500;
+    let n_queries = 20;
+    let top = 10;
+    let (vectors, queries, neighbors) = make_data(n_docs, n_queries, dim, top);
+
+    let engine_config = serde_json::json!([{
+        "name": "dragonfly-noupload",
+        "engine": "dragonfly",
+        "connection_params": {},
+        "collection_params": { "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 } },
+        "search_params": [{ "parallel": 1, "top": top, "search_params": { "ef": 64 } }],
+        "upload_params": { "parallel": 1, "batch_size": 64 }
+    }]);
+
+    let root = create_knn_project(
+        "dragonfly-noupload",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        dim,
+    );
+    let port = test_port().to_string();
+
+    let ok = common::run_binary_extra(
+        &root,
+        "dragonfly-noupload",
+        "dragonfly-noupload",
+        TEST_HOST,
+        &[("DRAGONFLY_PORT", port.as_str())],
+        &["--skip-upload"],
+    );
+    assert!(
+        !ok,
+        "--skip-upload with no prior upload must fail loudly, but exited 0"
+    );
+    let wrote_search = fs::read_dir(root.join("results"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().contains("-search-"))
+        })
+        .unwrap_or(false);
+    assert!(
+        !wrote_search,
+        "guard must prevent any search result file from being written"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}

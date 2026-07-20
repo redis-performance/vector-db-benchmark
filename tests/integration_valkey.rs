@@ -1051,7 +1051,11 @@ fn test_valkey_sub_batched_pipeline_upload_high_dim() {
         let mut pipe_bytes: usize = 0;
 
         for i in chunk_start..chunk_end {
-            let key = ids[i].to_string();
+            // Mirror the engine's now-prefixed key (#151-4) so this byte-accounting
+            // test's RESP wire-size formula and 4096-byte flush boundaries still
+            // track the real sub-batch flush path (a bare key would silently stop
+            // guarding the changed path).
+            let key = format!("valkey-sb:{}", ids[i]);
             let vec_bytes = vec_to_bytes(&vectors[i]);
 
             // Estimate RESP wire size (same formula as engine code)
@@ -1450,4 +1454,228 @@ fn test_binary_valkey_tenancy() {
             r
         );
     }
+}
+
+/// Count keys under a glob (small test keyspace).
+fn count_keys(conn: &mut Connection, pattern: &str) -> usize {
+    redis::cmd("KEYS")
+        .arg(pattern)
+        .query::<Vec<String>>(conn)
+        .map(|k| k.len())
+        .unwrap_or(0)
+}
+
+/// Delete only `*-search-*.json` result files under `root/results`.
+fn delete_search_result_files(root: &std::path::Path) {
+    let dir = root.join("results");
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for entry in rd.filter_map(|e| e.ok()) {
+            if entry.file_name().to_string_lossy().contains("-search-") {
+                fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+}
+
+/// #151-4 regression (valkey mirror): "upload all, then --skip-upload search each"
+/// gives every config its OWN graph. Two configs (dense high-ef vs sparse low-ef)
+/// coexist via disjoint `idx:<config>` indexes + `<config>:` keyspaces. Pre-fix
+/// valkey's create_index FLUSHALL + shared `idx` collapsed both to one graph.
+#[test]
+fn test_valkey_coexistence_skip_upload() {
+    wait_for_valkey();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 32;
+    let count = 2000;
+    let top = 10;
+    let (_, vectors) = generate_test_vectors(count, dim);
+    let queries: Vec<Vec<f32>> = vectors[..20].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([
+        {
+            "name": "valkey-co-a",
+            "engine": "valkey",
+            "algorithm": "hnsw",
+            "collection_params": { "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 200 } },
+            "search_params": [{ "parallel": 1, "search_params": { "ef": 256 }, "top": top }],
+            "upload_params": { "data_type": "FLOAT32", "parallel": 1, "batch_size": 64 }
+        },
+        {
+            "name": "valkey-co-b",
+            "engine": "valkey",
+            "algorithm": "hnsw",
+            "collection_params": { "hnsw_config": { "M": 4, "EF_CONSTRUCTION": 8 } },
+            "search_params": [{ "parallel": 1, "search_params": { "ef": 10 }, "top": top }],
+            "upload_params": { "data_type": "FLOAT32", "parallel": 1, "batch_size": 64 }
+        }
+    ]);
+
+    let root = create_test_project(
+        "valkey-co",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+    let port = test_port().to_string();
+
+    // Phase 1: upload + search BOTH, KEEPING data for the skip-upload phase.
+    assert!(
+        common::run_binary_extra(
+            &root,
+            "valkey-co-*",
+            "valkey-co",
+            TEST_HOST,
+            &[("VALKEY_PORT", port.as_str())],
+            &["--keep-data"],
+        ),
+        "valkey coexistence phase 1 failed"
+    );
+
+    let base_a = common::read_recall(&root, "valkey-co-a");
+    let base_b = common::read_recall(&root, "valkey-co-b");
+
+    // Deterministic coexistence: `count` keys under EACH per-config prefix, and
+    // both disjoint indexes exist.
+    assert_eq!(
+        count_keys(&mut conn, "valkey-co-a:*"),
+        count,
+        "valkey-co-a keyspace"
+    );
+    assert_eq!(
+        count_keys(&mut conn, "valkey-co-b:*"),
+        count,
+        "valkey-co-b keyspace"
+    );
+    assert!(
+        redis::cmd("FT.INFO")
+            .arg("idx:valkey-co-a")
+            .query::<redis::Value>(&mut conn)
+            .is_ok(),
+        "idx:valkey-co-a must exist"
+    );
+    assert!(
+        redis::cmd("FT.INFO")
+            .arg("idx:valkey-co-b")
+            .query::<redis::Value>(&mut conn)
+            .is_ok(),
+        "idx:valkey-co-b must exist"
+    );
+
+    delete_search_result_files(&root);
+
+    // Phase 2: --skip-upload search of both against the coexisting indexes.
+    assert!(
+        common::run_binary_extra(
+            &root,
+            "valkey-co-*",
+            "valkey-co",
+            TEST_HOST,
+            &[("VALKEY_PORT", port.as_str())],
+            &["--skip-upload", "--keep-data"],
+        ),
+        "valkey coexistence phase 2 (--skip-upload) failed"
+    );
+
+    let rec_a = common::read_recall(&root, "valkey-co-a");
+    let rec_b = common::read_recall(&root, "valkey-co-b");
+
+    assert!(
+        (rec_a - base_a).abs() < 1e-9,
+        "valkey-co-a skip-upload recall {} != baseline {}",
+        rec_a,
+        base_a
+    );
+    assert!(
+        (rec_b - base_b).abs() < 1e-9,
+        "valkey-co-b skip-upload recall {} != baseline {}",
+        rec_b,
+        base_b
+    );
+    assert!(
+        (rec_a - rec_b).abs() > 1e-9,
+        "coexisting configs must have distinct recall: a={} b={}",
+        rec_a,
+        rec_b
+    );
+    assert!(
+        rec_a > rec_b,
+        "dense high-ef graph (a={}) should out-recall the sparse one (b={})",
+        rec_a,
+        rec_b
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+/// #151-4 negative (valkey mirror): `--skip-upload` with NO prior upload must FAIL
+/// LOUDLY (index-existence guard), never writing a recall-0.0 result file.
+#[test]
+fn test_valkey_skip_upload_without_prior_upload_errors() {
+    wait_for_valkey();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 200;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([{
+        "name": "valkey-noupload",
+        "engine": "valkey",
+        "algorithm": "hnsw",
+        "collection_params": { "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 } },
+        "search_params": [{ "parallel": 1, "search_params": { "ef": 64 }, "top": top }],
+        "upload_params": { "data_type": "FLOAT32", "parallel": 1, "batch_size": 64 }
+    }]);
+
+    let root = create_test_project(
+        "valkey-noupload",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+    let port = test_port().to_string();
+
+    let ok = common::run_binary_extra(
+        &root,
+        "valkey-noupload",
+        "valkey-noupload",
+        TEST_HOST,
+        &[("VALKEY_PORT", port.as_str())],
+        &["--skip-upload"],
+    );
+    assert!(
+        !ok,
+        "--skip-upload with no prior upload must fail loudly, but exited 0"
+    );
+    let wrote_search = fs::read_dir(root.join("results"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().contains("-search-"))
+        })
+        .unwrap_or(false);
+    assert!(
+        !wrote_search,
+        "guard must prevent any search result file from being written"
+    );
+
+    fs::remove_dir_all(&root).ok();
 }

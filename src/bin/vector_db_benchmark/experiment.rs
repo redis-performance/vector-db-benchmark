@@ -143,6 +143,43 @@ pub fn run(args: &Args) -> Result<(), String> {
         );
     }
 
+    // Collision guard (#151-4): among the selected configs, no two configs of the
+    // same destructive Redis-wire engine (redis/valkey/dragonfly) may derive the
+    // same index namespace, or a sweep would silently overwrite one config's graph
+    // and keyspace with another's (the exact bug this fix closes). Also fires when
+    // an `*_INDEX_NAME_EXACT` pin is set with >1 config for that engine (every
+    // config then resolves to the same verbatim base). In --skip-vector-index mode
+    // the dedup above already leaves one config per engine, so this is a no-op.
+    {
+        use crate::engine::index_naming::{derive_index_name, index_name_exact};
+        let mut seen: std::collections::HashMap<(String, String), String> =
+            std::collections::HashMap::new();
+        for (_name, config) in &engines {
+            let engine_type = config.engine.as_deref().unwrap_or("");
+            let base_env = match engine_type {
+                "redis" => "REDIS_INDEX_NAME",
+                "valkey" => "VALKEY_INDEX_NAME",
+                "dragonfly" => "DRAGONFLY_INDEX_NAME",
+                _ => continue,
+            };
+            let idx = derive_index_name(base_env, "idx", &config.name);
+            if let Some(prev) =
+                seen.insert((engine_type.to_string(), idx.clone()), config.name.clone())
+            {
+                let exact_hint = if index_name_exact(base_env) {
+                    format!(" ({base_env}_EXACT is set — exact mode requires a single config per engine.)")
+                } else {
+                    String::new()
+                };
+                return Err(format!(
+                    "Configs '{}' and '{}' derive the same index namespace '{}'; rename them — \
+                     a sweep would silently overwrite one with the other (issue #151-4).{}",
+                    prev, config.name, idx, exact_hint
+                ));
+            }
+        }
+    }
+
     println!(
         "Found {} datasets, {} engines",
         datasets.len(),
@@ -706,11 +743,25 @@ fn run_single_experiment(
                         });
                     }
                     None => {
-                        eprintln!(
-                            "\tSearch failed (all {} repetition(s)){}",
+                        // Every rep of this search config failed. Under
+                        // exit_on_error (the default) this must abort loudly rather
+                        // than be swallowed with a zero exit — otherwise a hard
+                        // error (e.g. the #151-4 "index not found" guard on a
+                        // --skip-upload run against a config that was never
+                        // uploaded) silently writes nothing and the process exits
+                        // 0, masking wrong/absent results.
+                        let msg = format!(
+                            "search failed (all {} repetition(s)){}",
                             repetitions,
-                            last_err.map(|e| format!(": {}", e)).unwrap_or_default()
+                            last_err
+                                .as_ref()
+                                .map(|e| format!(": {}", e))
+                                .unwrap_or_default()
                         );
+                        eprintln!("\t{}", msg);
+                        if args.exit_on_error {
+                            return Err(msg);
+                        }
                     }
                 }
             }

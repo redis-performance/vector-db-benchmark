@@ -2252,3 +2252,279 @@ fn test_binary_redis_tenancy() {
         );
     }
 }
+
+/// Read `results.mean_recall` for `engine_name` from its search result JSON.
+fn read_search_mean_recall(results_dir: &PathBuf, engine_name: &str) -> f64 {
+    read_search_result_field(results_dir, engine_name, "mean_recall")
+        .and_then(|v| v.as_f64())
+        .unwrap_or_else(|| panic!("no mean_recall for {}", engine_name))
+}
+
+/// FT.INFO num_docs for `index`, or -1 if the index is missing.
+fn ft_info_num_docs(conn: &mut Connection, index: &str) -> i64 {
+    match redis::cmd("FT.INFO").arg(index).query::<redis::Value>(conn) {
+        Ok(info) => extract_ft_info_value(&info, "num_docs").unwrap_or(-1),
+        Err(_) => -1,
+    }
+}
+
+/// Delete only the `*-search-*.json` files under `results_dir` (keeps upload files).
+fn delete_search_result_files(results_dir: &PathBuf) {
+    for entry in fs::read_dir(results_dir).unwrap() {
+        let p = entry.unwrap().path();
+        if p.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("-search-")
+        {
+            fs::remove_file(p).ok();
+        }
+    }
+}
+
+/// #151-4 regression: "upload all, then --skip-upload search each" must give every
+/// config its OWN graph. Two configs (dense high-ef vs sparse low-ef) coexist on
+/// one server; pre-fix they shared index `idx` + keyspace, so the skip-upload
+/// sweep read the last-uploaded graph for BOTH → identical recall. Post-fix they
+/// address disjoint `idx:<config>` indexes + `<config>:` keyspaces → distinct.
+#[test]
+fn test_binary_redis_coexistence_skip_upload() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 32;
+    let count = 2000;
+    let top = 10;
+    let (_, vectors) = generate_test_vectors(count, dim);
+    let queries: Vec<Vec<f32>> = vectors[..20].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([
+        {
+            "name": "redis-co-a",
+            "engine": "redis",
+            "algorithm": "hnsw",
+            "collection_params": { "hnsw_config": { "M": 64, "EF_CONSTRUCTION": 200 } },
+            "search_params": [{ "parallel": 1, "search_params": { "ef": 256 }, "top": top }],
+            "upload_params": { "data_type": "FLOAT32", "parallel": 1, "batch_size": 64 }
+        },
+        {
+            "name": "redis-co-b",
+            "engine": "redis",
+            "algorithm": "hnsw",
+            "collection_params": { "hnsw_config": { "M": 4, "EF_CONSTRUCTION": 8 } },
+            "search_params": [{ "parallel": 1, "search_params": { "ef": 10 }, "top": top }],
+            "upload_params": { "data_type": "FLOAT32", "parallel": 1, "batch_size": 64 }
+        }
+    ]);
+
+    let root = create_test_project(
+        "test-co",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+    let bin = binary_path();
+    let port = TEST_PORT.to_string();
+    let results_dir = root.join("results");
+
+    // Phase 1: upload + search BOTH configs, KEEPING data for the skip-upload phase.
+    let out1 = Command::new(&bin)
+        .args([
+            "--engines",
+            "redis-co-*",
+            "--datasets",
+            "test-co",
+            "--host",
+            "localhost",
+            "--keep-data",
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("REDIS_PORT", &port)
+        .current_dir(&root)
+        .output()
+        .expect("run phase 1");
+    assert!(
+        out1.status.success(),
+        "phase 1 failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out1.stdout),
+        String::from_utf8_lossy(&out1.stderr)
+    );
+
+    let base_a = read_search_mean_recall(&results_dir, "redis-co-a");
+    let base_b = read_search_mean_recall(&results_dir, "redis-co-b");
+
+    // Deterministic coexistence proof: two DISJOINT indexes each hold all `count`
+    // docs, and the keyspace carries `count` keys under EACH per-config prefix.
+    assert_eq!(
+        ft_info_num_docs(&mut conn, "idx:redis-co-a"),
+        count as i64,
+        "idx:redis-co-a must hold all docs"
+    );
+    assert_eq!(
+        ft_info_num_docs(&mut conn, "idx:redis-co-b"),
+        count as i64,
+        "idx:redis-co-b must hold all docs"
+    );
+    let keys_a: i64 = redis::cmd("EVAL")
+        .arg("return #redis.call('keys', KEYS[1])")
+        .arg(1)
+        .arg("redis-co-a:*")
+        .query(&mut conn)
+        .unwrap();
+    let keys_b: i64 = redis::cmd("EVAL")
+        .arg("return #redis.call('keys', KEYS[1])")
+        .arg(1)
+        .arg("redis-co-b:*")
+        .query(&mut conn)
+        .unwrap();
+    assert_eq!(keys_a, count as i64, "redis-co-a: keyspace");
+    assert_eq!(keys_b, count as i64, "redis-co-b: keyspace");
+
+    // Delete ONLY the search result files; keep upload files + the server data.
+    delete_search_result_files(&results_dir);
+
+    // Phase 2: --skip-upload search of both configs against the coexisting indexes.
+    let out2 = Command::new(&bin)
+        .args([
+            "--engines",
+            "redis-co-*",
+            "--datasets",
+            "test-co",
+            "--host",
+            "localhost",
+            "--skip-upload",
+            "--keep-data",
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("REDIS_PORT", &port)
+        .current_dir(&root)
+        .output()
+        .expect("run phase 2");
+    assert!(
+        out2.status.success(),
+        "phase 2 (--skip-upload) failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out2.stdout),
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    let rec_a = read_search_mean_recall(&results_dir, "redis-co-a");
+    let rec_b = read_search_mean_recall(&results_dir, "redis-co-b");
+
+    // Each config read its OWN graph → recall equals its single-invocation baseline.
+    assert!(
+        (rec_a - base_a).abs() < 1e-9,
+        "redis-co-a skip-upload recall {} != baseline {}",
+        rec_a,
+        base_a
+    );
+    assert!(
+        (rec_b - base_b).abs() < 1e-9,
+        "redis-co-b skip-upload recall {} != baseline {}",
+        rec_b,
+        base_b
+    );
+    // The two graphs are distinct (pre-fix these would be identical — last writer
+    // wins). The dense high-ef graph out-recalls the sparse low-ef one.
+    assert!(
+        (rec_a - rec_b).abs() > 1e-9,
+        "coexisting configs must have distinct recall: a={} b={}",
+        rec_a,
+        rec_b
+    );
+    assert!(
+        rec_a > rec_b,
+        "dense high-ef graph (a={}) should out-recall the sparse one (b={})",
+        rec_a,
+        rec_b
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+/// #151-4 negative: `--skip-upload` with NO prior upload must FAIL LOUDLY (the
+/// per-search index-existence guard), never silently writing a recall-0.0 file.
+#[test]
+fn test_binary_redis_skip_upload_without_prior_upload_errors() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 16;
+    let count = 100;
+    let top = 5;
+    let (_, vectors) = generate_test_vectors(count, dim);
+    let queries: Vec<Vec<f32>> = vectors[..10].to_vec();
+    let neighbors: Vec<Vec<i64>> = queries
+        .iter()
+        .map(|q| brute_force_neighbors(q, &vectors, top))
+        .collect();
+
+    let engine_config = serde_json::json!([{
+        "name": "redis-noupload",
+        "engine": "redis",
+        "algorithm": "hnsw",
+        "collection_params": { "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 } },
+        "search_params": [{ "parallel": 1, "search_params": { "ef": 64 }, "top": top }],
+        "upload_params": { "data_type": "FLOAT32", "parallel": 1, "batch_size": 64 }
+    }]);
+
+    let root = create_test_project(
+        "test-noupload",
+        &serde_json::to_string_pretty(&engine_config).unwrap(),
+        &vectors,
+        &queries,
+        &neighbors,
+        "l2",
+        dim,
+    );
+    let bin = binary_path();
+
+    // --skip-upload against a server with no matching index. exit_on_error defaults
+    // true, so the guard's hard error must fail the process.
+    let out = Command::new(&bin)
+        .args([
+            "--engines",
+            "redis-noupload",
+            "--datasets",
+            "test-noupload",
+            "--host",
+            "localhost",
+            "--skip-upload",
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .current_dir(&root)
+        .output()
+        .expect("run skip-upload-no-index");
+
+    assert!(
+        !out.status.success(),
+        "--skip-upload with no prior upload must fail loudly, but exited 0"
+    );
+    // And it must NOT have written a recall-0.0 search result file.
+    let wrote_search = fs::read_dir(root.join("results"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok()).any(|e| {
+                e.file_name().to_string_lossy().contains("redis-noupload-")
+                    && e.file_name().to_string_lossy().contains("-search-")
+            })
+        })
+        .unwrap_or(false);
+    assert!(
+        !wrote_search,
+        "guard must prevent any search result file from being written"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
