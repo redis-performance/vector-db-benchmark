@@ -541,6 +541,72 @@ fn test_binary_pgvector_match_any() {
     );
 }
 
+/// Bool-field equality filter end-to-end. Regression for the missing-column bug:
+/// `pg_column_type("bool")` returned None so no column was created and the filter
+/// referenced a non-existent column (SQL error). With a BOOLEAN column, COPY
+/// coerces the reader's "true"/"false" string and `flag = $1` selects the evens.
+#[test]
+fn test_binary_pgvector_bool() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-bool", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_bool_project("bool-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-bool",
+            "bool-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector bool run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-bool");
+    println!("pgvector bool recall={:.3}", recall);
+    assert!(recall >= 0.9, "pgvector bool recall {:.3} < 0.9", recall);
+}
+
+/// Datetime range filter end-to-end. Regression for two bugs: no TIMESTAMPTZ
+/// column was created, and the range builder inlined the ISO bound as a bare
+/// (identifier-quoted) token → SQL error. With a TIMESTAMPTZ column and a
+/// `$n::timestamptz` bind, the `[day 100, day 300)` window is selected.
+#[test]
+fn test_binary_pgvector_datetime() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-dt", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_datetime_project("dt-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-dt",
+            "dt-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector datetime run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-dt");
+    println!("pgvector datetime recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector datetime recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88). The
 /// ';'-joined TEXT column is filtered with array-overlap (`match_any`) and set
 /// membership (exact-match); this exercises the full binary path against a live
