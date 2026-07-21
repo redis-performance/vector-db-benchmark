@@ -531,14 +531,28 @@ fn build_batch_index_body(
     })
 }
 
-/// UpdateIndex body that points a BATCH_UPDATE index at a staged GCS folder.
-/// Paired with `updateMask=metadata.contentsDeltaUri` on the PATCH URL so only
-/// the delta URI is updated (the config is left untouched). Vertex reads ALL
-/// files directly under the folder named here, so callers pass the *folder*
-/// URI, not the object URI.
-fn build_batch_update_body(contents_delta_uri: &str) -> serde_json::Value {
+/// UpdateIndex body that points a BATCH_UPDATE index at a staged GCS folder and
+/// triggers a rebuild. Vertex reads ALL files directly under the folder named
+/// here, so callers pass the *folder* URI, not the object URI.
+///
+/// CRITICAL (confirmed against live Vertex): `contentsDeltaUri` lives inside the
+/// Struct-typed `metadata` field, and a GCP field mask does NOT descend into a
+/// Struct. Masking `metadata.contentsDeltaUri` is silently accepted but no-ops —
+/// the operation returns `done:true` in ~0s and ingests ZERO vectors. The PATCH
+/// must therefore mask the WHOLE `metadata` (`updateMask=metadata`) and resend
+/// the existing `config` alongside the delta URI (masking `metadata` replaces
+/// the entire struct, so omitting `config` would wipe it). `isCompleteOverwrite`
+/// rebuilds the index from exactly the staged files.
+fn build_batch_update_body(
+    config: &serde_json::Value,
+    contents_delta_uri: &str,
+) -> serde_json::Value {
     serde_json::json!({
-        "metadata": { "contentsDeltaUri": contents_delta_uri },
+        "metadata": {
+            "config": config,
+            "contentsDeltaUri": contents_delta_uri,
+            "isCompleteOverwrite": true,
+        },
     })
 }
 
@@ -1122,16 +1136,19 @@ impl VertexEngine {
 
     /// Bulk-ingest via GCS `contentsDeltaUri` (#187). Serializes every datapoint
     /// to a single JSONL object under `gs://<bucket>/<folder>/`, then issues
-    /// UpdateIndex with `metadata.contentsDeltaUri` pointing at that folder and
-    /// blocks on the returned LRO while Vertex rebuilds the index.
+    /// UpdateIndex (masking the whole `metadata`, see `build_batch_update_body`)
+    /// pointing at that folder and blocks on the returned LRO while Vertex
+    /// rebuilds the index.
     ///
-    /// GCP-UNVALIDATED: this path is written from the Vertex batch-import docs
-    /// but has NOT been exercised against a live GCS bucket + BATCH_UPDATE
-    /// index. Open items flagged in the PR: the exact batch-file field names
-    /// (`allow` vs `allowList`, `numeric_restricts` vs `numericRestricts`), the
-    /// contentsDeltaUri folder-vs-object layout, and whether UpdateIndex or a
-    /// dedicated import RPC is the correct trigger. Do not merge without a live
-    /// run.
+    /// LIVE-VALIDATED (project redislabs-cto, 2026-07-21): a 1000×8d batch of
+    /// this exact JSONL + request shape ingested to `vectorsCount=1000` in ~1min
+    /// on a fresh BATCH_UPDATE index. The batch-file schema (`id`/`embedding`,
+    /// `restricts[].allow`, `numeric_restricts[].value_int`/`value_float`) parses
+    /// cleanly and the folder-URI layout is correct. The one correction the live
+    /// run forced is captured in `build_batch_update_body` (mask whole `metadata`,
+    /// not `metadata.contentsDeltaUri`). Query-time restriction matching over a
+    /// deployed endpoint is not asserted here (endpoint deploy is billable), but
+    /// the restrictions ingested without a parse error.
     fn batch_upload(
         &self,
         ids: &[i64],
@@ -1185,14 +1202,28 @@ impl VertexEngine {
         }
 
         // 2. Point the index at the staged folder and trigger the rebuild.
+        //    contentsDeltaUri sits inside the Struct-typed `metadata` field, so
+        //    the PATCH must mask the WHOLE `metadata` and resend the existing
+        //    `config` (see build_batch_update_body). Fetch the current config
+        //    from the index describe so we preserve it exactly (this also works
+        //    in reuse-index mode, where we never built the config locally).
+        let token = self.access_token()?;
+        let describe =
+            self.get_json(&format!("{}/{}", self.base_url(), self.index_name), &token)?;
+        let config = describe
+            .get("metadata")
+            .and_then(|m| m.get("config"))
+            .cloned()
+            .ok_or("index describe missing metadata.config; cannot preserve it on batch update")?;
+
         println!("Updating index with contentsDeltaUri={contents_delta_uri}...");
         let update_url = format!(
-            "{}/{}?updateMask=metadata.contentsDeltaUri",
+            "{}/{}?updateMask=metadata",
             self.base_url(),
             self.index_name
         );
         let token = self.access_token()?;
-        let body = build_batch_update_body(&contents_delta_uri);
+        let body = build_batch_update_body(&config, &contents_delta_uri);
         let resp = self
             .client
             .patch(&update_url)
@@ -2762,15 +2793,25 @@ mod tests {
     }
 
     #[test]
-    fn batch_update_body_sets_only_contents_delta_uri() {
-        let b = build_batch_update_body("gs://my-bucket/vdbb-batch/bench");
+    fn batch_update_body_masks_whole_metadata_and_preserves_config() {
+        // A field mask does NOT descend into the Struct-typed `metadata`, so the
+        // update body must carry the delta URI AND the preserved config together
+        // under `metadata` (paired with updateMask=metadata). Masking only
+        // metadata.contentsDeltaUri no-ops on live Vertex (ingests nothing).
+        let config = json!({
+            "dimensions": 8,
+            "distanceMeasureType": "COSINE_DISTANCE",
+            "algorithmConfig": { "treeAhConfig": { "leafNodeEmbeddingCount": "100" } }
+        });
+        let b = build_batch_update_body(&config, "gs://my-bucket/vdbb-batch/bench");
         assert_eq!(
             b["metadata"]["contentsDeltaUri"],
             "gs://my-bucket/vdbb-batch/bench"
         );
-        // Nothing else — the PATCH updateMask is metadata.contentsDeltaUri, so
-        // sending a config here would either be ignored or rejected.
-        assert!(b["metadata"].get("config").is_none());
+        // config is resent verbatim so masking `metadata` doesn't wipe it.
+        assert_eq!(b["metadata"]["config"], config);
+        // isCompleteOverwrite forces a clean rebuild from exactly the staged files.
+        assert_eq!(b["metadata"]["isCompleteOverwrite"], true);
         assert!(b.get("displayName").is_none());
     }
 
