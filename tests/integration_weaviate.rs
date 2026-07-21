@@ -658,6 +658,21 @@ fn test_binary_weaviate_bool() {
     assert!(recall >= 0.9, "weaviate bool recall {:.3} < 0.9", recall);
 }
 
+/// UUID exact-match filter end-to-end. Regression: `uuid` hit the property
+/// builder's `_ => return None`, so no property was created and the filter
+/// matched nothing. Now `uuid` -> `text` property with `field` tokenization
+/// (whole-value equality), and `Equal uid == UUIDS[0]` selects the quarter of
+/// docs it should.
+#[test]
+fn test_binary_weaviate_uuid() {
+    wait_for_weaviate();
+    let proj = common::write_uuid_project("uuid-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "uuid-test", "BenchUuid");
+    println!("weaviate uuid recall={:.3}", recall);
+    assert!(recall >= 0.9, "weaviate uuid recall {:.3} < 0.9", recall);
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies Weaviate
 /// composes two conditions of different types into one `Filters.And` operand
 /// (`Equal color` AND `GreaterThanEqual size`), not just a single clause.

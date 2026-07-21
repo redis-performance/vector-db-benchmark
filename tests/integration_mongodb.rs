@@ -1191,6 +1191,50 @@ fn test_binary_mongodb_match_any() {
     );
 }
 
+/// UUID exact-match filter end-to-end. MongoDB stores `uuid` values as plain
+/// BSON strings (no special schema type), so a `uid == UUIDS[0]` `$vectorSearch`
+/// filter is a straight string equality. This confirms uuid works out of the box
+/// (unlike ES/OS/pgvector/weaviate/milvus, which needed a schema-type fix).
+#[test]
+fn test_binary_mongodb_uuid() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-uuid", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_uuid_project("uuid-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "mongo-uuid",
+            "uuid-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+        ),
+        "mongodb uuid run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "mongo-uuid");
+    println!("mongodb uuid recall={:.3}", recall);
+    assert!(recall >= 0.9, "mongodb uuid recall {:.3} < 0.9", recall);
+    drop_test_collection();
+    fs::remove_dir_all(&proj.root).ok();
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies MongoDB
 /// composes two conditions of different types into one `$vectorSearch` filter
 /// (`color == "red"` AND `size >= 50` via `$and`/`$gte`), not just a single

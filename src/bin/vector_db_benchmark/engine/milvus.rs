@@ -195,7 +195,11 @@ impl MilvusEngine {
                     } else {
                         let milvus_type = match ft {
                             "int" => "Int64",
-                            "keyword" | "text" => "VarChar",
+                            // A `uuid` is an exact-match opaque string → a plain
+                            // VarChar (no analyzer), same as keyword. Without this
+                            // arm it hit `_ => continue`, so no field was created
+                            // and every uuid filter silently broke.
+                            "keyword" | "text" | "uuid" => "VarChar",
                             "float" => "Double",
                             // Milvus has a native Bool type. No native date type, so
                             // datetimes are stored as Int64 epoch seconds (upload +
