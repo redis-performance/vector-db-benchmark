@@ -985,6 +985,19 @@ fn parse_weaviate_conditions(conditions: &serde_json::Value) -> Option<serde_jso
 
 fn build_weaviate_entry_filter(entry: &serde_json::Value) -> Option<serde_json::Value> {
     let entry_obj = entry.as_object()?;
+
+    // Nested group: an and/or array element that is itself an {and:[...]} /
+    // {or:[...]} subtree is NOT a field leaf. Recurse through
+    // `parse_weaviate_conditions`, which wraps it in its own native
+    // `Filters.And` / `Filters.Or` operand — so the parent combines this group
+    // as one nested sub-clause instead of mis-flattening its children into the
+    // parent's operand list. Both transports nest natively: the gRPC translator
+    // (`where_json_to_grpc_filters`) recurses over operands and the GraphQL
+    // serializer (`json_to_graphql_literal`) nests operator objects.
+    if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+        return parse_weaviate_conditions(entry);
+    }
+
     let mut filters = Vec::new();
 
     for (field_name, field_filters) in entry_obj {

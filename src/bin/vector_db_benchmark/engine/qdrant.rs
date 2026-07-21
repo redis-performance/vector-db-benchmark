@@ -761,13 +761,32 @@ fn parse_qdrant_conditions(conditions: &serde_json::Value) -> Option<Filter> {
 fn build_qdrant_subfilters(entries: &[serde_json::Value]) -> Vec<Condition> {
     let mut filters = Vec::new();
     for entry in entries {
-        if let Some(entry_obj) = entry.as_object() {
-            for (field_name, field_filters) in entry_obj {
-                if let Some(filter_obj) = field_filters.as_object() {
-                    for (cond_type, criteria) in filter_obj {
-                        if let Some(f) = build_qdrant_filter(field_name, cond_type, criteria) {
-                            filters.push(f);
-                        }
+        let Some(entry_obj) = entry.as_object() else {
+            continue;
+        };
+        // NESTED GROUP: an entry that is itself an `{and:[...]}` / `{or:[...]}`
+        // sub-tree must be built as its OWN sub-Filter and nested via a Filter
+        // condition, so grouping is preserved natively — e.g.
+        // `(color==red AND size>=50) OR (color==blue AND size<10)` becomes a
+        // top-level `should` of two nested Filters, each with its own `must`.
+        // Flattening the sub-tree's leaves into the parent must/should would
+        // change the boolean meaning and collapse recall.
+        if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+            if let Some(sub) = parse_qdrant_conditions(entry) {
+                filters.push(Condition {
+                    condition_one_of: Some(
+                        qdrant_client::qdrant::condition::ConditionOneOf::Filter(sub),
+                    ),
+                });
+            }
+            continue;
+        }
+        // LEAF: `{ field: { op: criteria } }`.
+        for (field_name, field_filters) in entry_obj {
+            if let Some(filter_obj) = field_filters.as_object() {
+                for (cond_type, criteria) in filter_obj {
+                    if let Some(f) = build_qdrant_filter(field_name, cond_type, criteria) {
+                        filters.push(f);
                     }
                 }
             }

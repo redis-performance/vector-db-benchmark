@@ -1410,6 +1410,18 @@ fn test_binary_valkey_or_filter() {
     run_filter_recall_test("valkey-or", "or-test", common::write_or_filter_project);
 }
 
+/// Nested boolean: `(color==red AND size>=50) OR (color==blue AND size<10)` —
+/// verifies the parser recurses into grouped sub-conditions rather than
+/// flattening the tree (which would match a wildly different doc set).
+#[test]
+fn test_binary_valkey_nested_filter() {
+    run_filter_recall_test(
+        "valkey-nested",
+        "nested-test",
+        common::write_nested_filter_project,
+    );
+}
+
 /// Multi-tenancy: many tenants share ONE index and every query is scoped to a
 /// single tenant via a keyword-equality filter on a `tenant` field, with ground
 /// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG

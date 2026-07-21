@@ -804,6 +804,52 @@ fn test_binary_qdrant_or_filter() {
     assert!(recall >= 0.9, "qdrant or-filter recall {:.3} < 0.9", recall);
 }
 
+/// Nested/grouped boolean filter — `(color == "red" AND size >= 50) OR
+/// (color == "blue" AND size < 10)`. The condition is a top-level `or` whose two
+/// arms are themselves `and` GROUPS, so it can only be answered by nesting each
+/// group as its OWN sub-Filter (Filter.must) inside the parent Filter.should. A
+/// builder that mis-flattens the sub-trees matches a wildly different doc set, so
+/// recall >= 0.9 proves the native nesting is correct.
+#[test]
+fn test_binary_qdrant_nested_filter() {
+    wait_for_qdrant();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-nested", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_nested_filter_project(
+        "nested-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-nested",
+            "nested-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant nested-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "qdrant-nested");
+    println!("qdrant nested-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "qdrant nested-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// UUID exact-match filter end-to-end. Qdrant maps the `uuid` schema type to its
 /// dedicated `FieldType::Uuid` payload index (distinct from keyword), which was
 /// otherwise untested — this proves an exact `uid == UUIDS[0]` match selects the

@@ -713,6 +713,18 @@ fn parse_milvus_conditions(conditions: &serde_json::Value) -> Option<String> {
 
 fn build_milvus_entry_filter(entry: &serde_json::Value) -> Option<String> {
     let entry_obj = entry.as_object()?;
+
+    // A nested group (an entry that is itself a `{and:[...]}` / `{or:[...]}`
+    // tree) is built as its own PARENTHESISED boolean-expr sub-string via the
+    // top-level parser, then combined by the parent's && / ||. Without this the
+    // group falls through to the leaf path below, where `field_name` is "and"/
+    // "or" and `field_filters` is an array (not an object), so `as_object()`
+    // fails, nothing is emitted, and the whole clause silently collapses to
+    // "no filter" — returning every row instead of the nested union.
+    if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+        return parse_milvus_conditions(entry).map(|f| format!("({})", f));
+    }
+
     let mut filters = Vec::new();
 
     for (field_name, field_filters) in entry_obj {

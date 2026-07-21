@@ -841,6 +841,49 @@ fn test_binary_opensearch_or_filter() {
     );
 }
 
+/// Nested/grouped boolean filter end-to-end:
+/// `(color == "red" AND size >= 50) OR (color == "blue" AND size < 10)`.
+/// Verifies OpenSearch nests each OR arm as its own `{bool:{must:[...]}}` inside
+/// the outer `should` (native bool nesting) rather than flattening the tree into
+/// one clause list — a mis-flattened builder matches a wildly different doc set,
+/// so a high recall vs the nested-union ground truth proves correct nesting.
+#[test]
+fn test_binary_opensearch_nested_filter() {
+    wait_for_opensearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-nested", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_nested_filter_project(
+        "nested-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-nested",
+            "nested-test",
+            "http://127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_nested")
+            ],
+        ),
+        "opensearch nested-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "os-nested");
+    println!("opensearch nested-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "opensearch nested-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// UUID exact-match filter end-to-end. Regression for the schema-type bug:
 /// "uuid" is not a valid OS type; forwarding it verbatim made index creation
 /// reject the whole mapping. With "uuid" -> "keyword" OS does an exact term

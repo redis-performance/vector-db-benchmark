@@ -1102,6 +1102,41 @@ fn test_binary_elasticsearch_or_filter() {
     assert!(recall >= 0.9, "es or-filter recall {:.3} < 0.9", recall);
 }
 
+/// Nested/grouped boolean filter: `(color==red AND size>=50) OR (color==blue
+/// AND size<10)`. Verifies ES nests each AND-group as its OWN `bool.must`
+/// inside the parent `bool.should` (minimum_should_match 1) instead of
+/// flattening the four leaves — a mis-flattened builder searches a wildly
+/// different set and recall collapses, so recall >= 0.9 proves native nesting.
+#[test]
+fn test_binary_elasticsearch_nested_filter() {
+    wait_for_elasticsearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "es-nested", "engine": "elasticsearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_nested_filter_project(
+        "nested-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "es-nested",
+            "nested-test",
+            "127.0.0.1",
+            &[("ELASTIC_PORT", "9201"), ("ELASTIC_INDEX", "bench_nested")],
+        ),
+        "es nested-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "es-nested");
+    println!("es nested-filter recall={:.3}", recall);
+    assert!(recall >= 0.9, "es nested-filter recall {:.3} < 0.9", recall);
+}
+
 /// Selectivity ladder: one `rank < K` range query per rung, sweeping filter
 /// selectivity from ~3% to ~99% in a single dataset. Verifies ES's pre-filtered
 /// kNN keeps recall across the whole selectivity range (recall vs per-rung

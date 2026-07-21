@@ -1335,6 +1335,58 @@ fn test_binary_mongodb_or_filter() {
     fs::remove_dir_all(&proj.root).ok();
 }
 
+/// Nested/grouped boolean filter — `(color==red AND size>=50) OR (color==blue
+/// AND size<10)` — verifies MongoDB builds the nested `{$or:[{$and:...},
+/// {$and:...}]}` filter natively rather than mis-flattening the two AND groups.
+/// Ground truth is brute-forced over the nested union, so a builder that
+/// flattens the tree matches a wildly different set and recall collapses.
+#[test]
+fn test_binary_mongodb_nested_filter() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-nested", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_nested_filter_project(
+        "nested-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "mongo-nested",
+            "nested-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+        ),
+        "mongodb nested-filter run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "mongo-nested");
+    println!("mongodb nested-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "mongodb nested-filter recall {:.3} < 0.9",
+        recall
+    );
+    drop_test_collection();
+    fs::remove_dir_all(&proj.root).ok();
+}
+
 /// End-to-end `match_any` on the INT `size` field. Proves the numeric `$in`
 /// filter matches natively-stored integers end-to-end. Ground truth is
 /// brute-forced over ONLY the docs whose `size` is in the IN-set (a strict

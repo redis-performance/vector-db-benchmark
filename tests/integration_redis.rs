@@ -2299,6 +2299,19 @@ fn test_binary_redis_or_filter() {
     run_filter_recall_test("redis-or", "or-test", common::write_or_filter_project);
 }
 
+/// Nested boolean: `(color==red AND size>=50) OR (color==blue AND size<10)` —
+/// verifies the parser recurses into grouped sub-conditions (parenthesised
+/// RediSearch clause) instead of flattening the tree. A flattening parser matches
+/// a wildly different doc set, so recall collapses.
+#[test]
+fn test_binary_redis_nested_filter() {
+    run_filter_recall_test(
+        "redis-nested",
+        "nested-test",
+        common::write_nested_filter_project,
+    );
+}
+
 /// Selectivity ladder: one `rank < K` range query per rung, sweeping filter
 /// selectivity from ~3% to ~99% in a single dataset. Verifies the numeric-range
 /// filter path stays correct (recall vs per-rung ground truth) across the whole
