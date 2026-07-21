@@ -1095,6 +1095,20 @@ fn build_weaviate_filter(
                 });
             }
 
+            // Full-text match: `{match:{text}}` over a word-tokenized `text`
+            // property. Weaviate `Equal` on a token matches objects whose property
+            // CONTAINS that token (verified: Equal "quick" matches "the quick brown
+            // fox"), so route it to the same Equal path. Dropping the clause would
+            // run the kNN query UNFILTERED while recall is scored against filtered
+            // ground truth.
+            if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+                return Some(serde_json::json!({
+                    "path": [field_name],
+                    "operator": "Equal",
+                    "valueText": text,
+                }));
+            }
+
             let value = criteria.get("value")?;
             // Guard non-scalar: an array/object/null under `value` is malformed
             // input — the canonical model uses `match.any` for lists. Without
