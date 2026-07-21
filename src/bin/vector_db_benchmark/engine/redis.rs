@@ -53,12 +53,67 @@ pub struct RedisEngineConfig {
     /// config owns a disjoint keyspace and its `FT.DROPINDEX ... DD` teardown
     /// touches only its own docs.
     pub key_prefix: String,
+    /// Shared-corpus mode (#188): true when `REDIS_KEY_PREFIX` is set, making ALL
+    /// sweep configs share ONE key prefix (one corpus) instead of per-config
+    /// disjoint keyspaces. Lets a sweep over one dataset upload the (identical)
+    /// corpus ONCE and build many per-config indexes over it (N× ingest -> 1×).
+    /// In this mode the index is dropped WITHOUT `DD` (the shared docs survive
+    /// across configs) and a re-upload is skipped when the corpus is already
+    /// populated. Off by default -> per-config isolation is unchanged.
+    pub shared_corpus: bool,
     /// Schema field names declared as `datetime`. Values for these fields are
     /// ISO-8601 strings in the payload; they are converted to epoch seconds at
     /// HSET time so the NUMERIC index/range filters match. Populated in
     /// `configure()` from the dataset schema. Wrapped in `Arc` so the per-thread
     /// config clones share one set.
     pub datetime_fields: Arc<HashSet<String>>,
+}
+
+/// The shared corpus key prefix for #188 (upload-once / build-many), read from
+/// `REDIS_KEY_PREFIX`. When set, every sweep config shares this one prefix (a
+/// single uploaded corpus); when unset, each config keeps its own `<config>:`
+/// prefix and disjoint keyspace. A trailing `:` is appended if missing so the
+/// value is a clean key namespace. Resolved in `new()`, never in a timed window.
+fn shared_key_prefix() -> Option<String> {
+    let s = std::env::var("REDIS_KEY_PREFIX").ok()?;
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else if s.ends_with(':') {
+        Some(s.to_string())
+    } else {
+        Some(format!("{s}:"))
+    }
+}
+
+/// Count keys matching `<prefix>*` via cursor-based SCAN (non-blocking; the
+/// prefix is sanitized so `*` is the only glob metachar). Used by shared-corpus
+/// mode (#188) to detect whether the corpus is already fully uploaded so a
+/// sweep's later configs can skip the re-upload.
+fn count_prefix_keys(conn: &mut Connection, prefix: &str) -> usize {
+    let pattern = format!("{prefix}*");
+    let mut cursor: u64 = 0;
+    let mut count = 0usize;
+    loop {
+        let res: Result<(u64, Vec<String>), redis::RedisError> = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(&pattern)
+            .arg("COUNT")
+            .arg(1000)
+            .query(conn);
+        match res {
+            Ok((next, keys)) => {
+                count += keys.len();
+                if next == 0 {
+                    break;
+                }
+                cursor = next;
+            }
+            Err(_) => break,
+        }
+    }
+    count
 }
 
 pub struct RedisEngine {
@@ -185,7 +240,13 @@ impl RedisEngine {
                 svs_compression,
                 svs_reduce,
                 index_name: derive_index_name("REDIS_INDEX_NAME", "idx", &engine_config.name),
-                key_prefix: derive_key_prefix(&engine_config.name),
+                // Shared-corpus mode (#188): REDIS_KEY_PREFIX overrides the
+                // per-config prefix with ONE shared prefix across all sweep
+                // configs. Default (unset) keeps the per-config `<config>:` prefix
+                // and full isolation.
+                key_prefix: shared_key_prefix()
+                    .unwrap_or_else(|| derive_key_prefix(&engine_config.name)),
+                shared_corpus: shared_key_prefix().is_some(),
                 datetime_fields: Arc::new(HashSet::new()),
             },
             search_params: engine_config.search_params.clone().unwrap_or_default(),
@@ -202,13 +263,20 @@ impl RedisEngine {
         let distance = dataset.distance();
         let vector_size = dataset.vector_size();
 
-        // Drop existing index if any. DD deletes the indexed docs too; because the
-        // index PREFIX is now this config's `<config>:` (not `""`), DD removes only
-        // this config's keys — sibling configs' indexes/keys are untouched (#151-4).
-        let _ = redis::cmd("FT.DROPINDEX")
-            .arg(&self.config.index_name)
-            .arg("DD")
-            .query::<()>(conn);
+        // Drop existing index if any. Normally with DD, which deletes the indexed
+        // docs too; because the index PREFIX is this config's `<config>:`, DD
+        // removes only this config's keys — siblings untouched (#151-4). In
+        // shared-corpus mode (#188) the docs are SHARED across configs and
+        // uploaded once, so drop the index WITHOUT DD to preserve them for the
+        // other configs' indexes (build-many over one corpus).
+        {
+            let mut cmd = redis::cmd("FT.DROPINDEX");
+            cmd.arg(&self.config.index_name);
+            if !self.config.shared_corpus {
+                cmd.arg("DD");
+            }
+            let _ = cmd.query::<()>(conn);
+        }
 
         // Map distance metric
         let distance_metric = map_distance_metric(distance);
@@ -1736,6 +1804,35 @@ impl Engine for RedisEngine {
     }
 
     fn upload(&mut self, dataset: &Dataset) -> Result<UploadStats, String> {
+        // Shared-corpus mode (#188): if the shared prefix is already populated
+        // with the full corpus (a prior config in the sweep uploaded it), skip the
+        // re-upload entirely and just report it — this is what turns an N-config
+        // sweep's ingest from N× into 1×. The index for THIS config was already
+        // (re)built over the shared corpus in configure()/create_index. The check
+        // requires the dataset's known vector_count; without it we can't confirm a
+        // COMPLETE corpus, so we fall through and upload normally.
+        if self.config.shared_corpus {
+            if let Some(expected) = dataset.config.vector_count.filter(|&n| n > 0) {
+                let mut conn = self.get_connection()?;
+                let existing = count_prefix_keys(&mut conn, &self.config.key_prefix);
+                if existing >= expected as usize {
+                    println!(
+                        "Shared corpus already populated ({existing} keys under prefix '{}'); \
+                         skipping re-upload (#188 upload-once/build-many).",
+                        self.config.key_prefix
+                    );
+                    return Ok(UploadStats {
+                        upload_time: 0.0,
+                        total_time: 0.0,
+                        upload_count: existing,
+                        parallel: self.config.parallel,
+                        batch_size: self.config.batch_size,
+                        memory_usage: None,
+                    });
+                }
+            }
+        }
+
         let normalize = dataset.needs_normalization();
 
         let dataset_path = dataset.get_path()?;
@@ -2509,10 +2606,16 @@ impl Engine for RedisEngine {
 
     fn delete(&mut self) -> Result<(), String> {
         let mut conn = self.get_connection()?;
-        let _ = redis::cmd("FT.DROPINDEX")
-            .arg(&self.config.index_name)
-            .arg("DD")
-            .query::<()>(&mut conn);
+        // Normally DD (drop index + this config's docs). In shared-corpus mode
+        // (#188) the docs are shared across configs, so drop the index only and
+        // leave the corpus for the remaining configs / a later --skip-upload run.
+        // The shared corpus is the user's to flush when the sweep is done.
+        let mut cmd = redis::cmd("FT.DROPINDEX");
+        cmd.arg(&self.config.index_name);
+        if !self.config.shared_corpus {
+            cmd.arg("DD");
+        }
+        let _ = cmd.query::<()>(&mut conn);
         Ok(())
     }
 
@@ -2804,6 +2907,7 @@ mod tests {
             svs_reduce: None,
             index_name: "idx:test".to_string(),
             key_prefix: "test:".to_string(),
+            shared_corpus: false,
             datetime_fields: Arc::new(dt),
         };
         // datetime field → epoch seconds string

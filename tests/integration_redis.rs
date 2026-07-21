@@ -2370,6 +2370,91 @@ fn test_binary_redis_keep_data_sweep_frees_prior_configs() {
     flush_db(&mut conn);
 }
 
+/// #188 upload-once/build-many: with `REDIS_KEY_PREFIX` set, all sweep configs
+/// share ONE corpus keyspace, so a config after the first must SKIP the (identical)
+/// re-upload and just build its index over the shared corpus. Runs a 2-config
+/// sweep with the shared prefix and asserts (a) the second config logs the
+/// "skipping re-upload" path, (b) BOTH configs' indexes return correct results
+/// over the shared corpus (recall >= 0.9), and (c) the corpus exists once under
+/// the shared prefix. Default (no REDIS_KEY_PREFIX) keeps per-config isolation —
+/// covered by test_binary_redis_coexistence_skip_upload.
+#[test]
+fn test_binary_redis_shared_corpus_upload_once() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 8;
+    let configs = serde_json::json!([
+        {
+            "name": "redis-sc-a", "engine": "redis",
+            "search_params": [{"parallel": 1, "search_params": {"ef": 128}}],
+            "upload_params": {"parallel": 1, "batch_size": 100}
+        },
+        {
+            "name": "redis-sc-b", "engine": "redis",
+            "search_params": [{"parallel": 1, "search_params": {"ef": 128}}],
+            "upload_params": {"parallel": 1, "batch_size": 100}
+        }
+    ]);
+    let proj =
+        common::write_bool_project("sc-test", &serde_json::to_string(&configs).unwrap(), dim);
+
+    let out = Command::new(binary_path())
+        .args([
+            "--engines",
+            "redis-sc*",
+            "--datasets",
+            "sc-test",
+            "--host",
+            "localhost",
+            "--keep-data",
+            "--skip-if-exists",
+            "false",
+        ])
+        .env("REDIS_PORT", TEST_PORT.to_string())
+        .env("REDIS_KEY_PREFIX", "shared_sc:")
+        .current_dir(&proj.root)
+        .output()
+        .expect("run shared-corpus sweep");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "shared-corpus sweep failed.\nstdout:\n{}\nstderr:\n{}",
+        stdout,
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The second config must have SKIPPED the re-upload (the #188 win).
+    assert!(
+        stdout.contains("skipping re-upload"),
+        "expected an upload-once skip for the 2nd config; stdout:\n{}",
+        stdout
+    );
+
+    // Both configs' indexes work over the shared corpus.
+    let ra = common::read_recall(&proj.root, "redis-sc-a");
+    let rb = common::read_recall(&proj.root, "redis-sc-b");
+    println!("shared-corpus recall a={:.3} b={:.3}", ra, rb);
+    assert!(ra >= 0.9, "redis-sc-a recall {:.3} < 0.9", ra);
+    assert!(rb >= 0.9, "redis-sc-b recall {:.3} < 0.9", rb);
+
+    // The corpus exists once under the shared prefix (400 docs), not per-config.
+    let keys: i64 = redis::cmd("EVAL")
+        .arg("return #redis.call('keys', KEYS[1])")
+        .arg(1)
+        .arg("shared_sc:*")
+        .query(&mut conn)
+        .unwrap();
+    println!("shared corpus keys={}", keys);
+    assert!(
+        keys >= 400,
+        "shared corpus should hold the 400-doc corpus (got {keys})"
+    );
+
+    flush_db(&mut conn);
+}
+
 /// Nested boolean: `(color==red AND size>=50) OR (color==blue AND size<10)` —
 /// verifies the parser recurses into grouped sub-conditions (parenthesised
 /// RediSearch clause) instead of flattening the tree. A flattening parser matches
