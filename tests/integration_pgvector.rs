@@ -607,6 +607,42 @@ fn test_binary_pgvector_datetime() {
     );
 }
 
+/// Full-text filter end-to-end. Regression: a `{match:{text}}` clause was dropped
+/// (the match arm only handled `value`/`any`), so the kNN query ran UNFILTERED
+/// while recall was scored against the filtered ground truth. Now the TEXT column
+/// is filtered with Postgres FTS (`to_tsvector @@ plainto_tsquery`), selecting the
+/// docs whose body contains the query token.
+#[test]
+fn test_binary_pgvector_fulltext() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-ft", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_fulltext_project("ft-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-ft",
+            "ft-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector fulltext run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-ft");
+    println!("pgvector fulltext recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector fulltext recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88). The
 /// ';'-joined TEXT column is filtered with array-overlap (`match_any`) and set
 /// membership (exact-match); this exercises the full binary path against a live

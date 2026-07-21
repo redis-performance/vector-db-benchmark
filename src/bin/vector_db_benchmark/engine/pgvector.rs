@@ -779,6 +779,17 @@ fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Op
                             // As the sole condition this leaves `parts` empty →
                             // the builder returns None.
                         }
+                    } else if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+                        // Full-text match: a `{match:{text}}` clause over a TEXT
+                        // column. Postgres FTS token containment via
+                        // `to_tsvector(col) @@ plainto_tsquery(term)`. Dropping the
+                        // clause would run the kNN query UNFILTERED while recall is
+                        // scored against the filtered ground truth.
+                        let ph = builder.bind(PgValue::Text(text.to_string()));
+                        parts.push(format!(
+                            "to_tsvector('english', \"{}\") @@ plainto_tsquery('english', {})",
+                            field_name, ph
+                        ));
                     }
                 }
                 "range" => {
