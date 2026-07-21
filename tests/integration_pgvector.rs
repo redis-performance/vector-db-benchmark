@@ -643,6 +643,38 @@ fn test_binary_pgvector_fulltext() {
     );
 }
 
+/// Geo-radius filter end-to-end. Regression: `geo` had no column type and no
+/// filter arm, so it was dropped and the search ran unfiltered. Now the point is
+/// stored as a "lat,lon" TEXT scalar and filtered with the earthdistance
+/// extension (`earth_distance(ll_to_earth(...)) <= radius`), selecting the docs
+/// within the query radius.
+#[test]
+fn test_binary_pgvector_geo() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-geo", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_geo_project("geo-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-geo",
+            "geo-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector geo run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-geo");
+    println!("pgvector geo recall={:.3}", recall);
+    assert!(recall >= 0.9, "pgvector geo recall {:.3} < 0.9", recall);
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88). The
 /// ';'-joined TEXT column is filtered with array-overlap (`match_any`) and set
 /// membership (exact-match); this exercises the full binary path against a live

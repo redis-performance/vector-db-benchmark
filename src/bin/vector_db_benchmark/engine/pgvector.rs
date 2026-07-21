@@ -30,6 +30,10 @@ fn pg_column_type(field_type: &str) -> Option<&'static str> {
         // ISO into a TIMESTAMPTZ column, so a plain scalar column filters fine.
         "bool" => Some("BOOLEAN"),
         "datetime" => Some("TIMESTAMPTZ"),
+        // Geo point stored as a "lat,lon" TEXT scalar; filtered with the
+        // earthdistance extension (great-circle metres). A dedicated earth/cube
+        // column would need binary COPY, so the text form keeps the COPY path.
+        "geo" => Some("TEXT"),
         _ => None,
     }
 }
@@ -53,7 +57,9 @@ fn copy_field(meta: Option<&MetadataItem>, column: &str) -> String {
         Some(MetadataValue::Int(n)) => n.to_string(),
         Some(MetadataValue::Float(f)) => f.to_string(),
         Some(MetadataValue::Labels(labels)) => escape_copy_text(&labels.join(";")),
-        // geo / missing → NULL (geo isn't a scalar filter column here)
+        // Geo point -> "lat,lon" TEXT (earthdistance filter splits it back out).
+        Some(MetadataValue::Geo { lon, lat }) => escape_copy_text(&format!("{},{}", lat, lon)),
+        // missing → NULL
         _ => "\\N".to_string(),
     }
 }
@@ -182,6 +188,10 @@ impl Engine for PgVectorEngine {
         println!("Creating vector extension...");
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector", &[])
             .map_err(|e| format!("Failed to create vector extension: {}", e))?;
+        // cube + earthdistance back the geo-radius filter (great-circle metres).
+        // Best-effort: only needed when a dataset has a geo field.
+        let _ = conn.execute("CREATE EXTENSION IF NOT EXISTS cube", &[]);
+        let _ = conn.execute("CREATE EXTENSION IF NOT EXISTS earthdistance", &[]);
 
         // Drop existing table
         println!("Dropping existing items table...");
@@ -832,6 +842,26 @@ fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Op
                         }
                     }
                 }
+                "geo" => {
+                    // Geo-radius over the "lat,lon" TEXT column via earthdistance
+                    // (great-circle metres). lat/lon/radius are dataset numbers
+                    // (not injectable), so inline them; the stored point is split
+                    // back into (lat, lon) for ll_to_earth.
+                    if let (Some(lat), Some(lon), Some(radius)) = (
+                        criteria.get("lat").and_then(|v| v.as_f64()),
+                        criteria.get("lon").and_then(|v| v.as_f64()),
+                        criteria.get("radius").and_then(|v| v.as_f64()),
+                    ) {
+                        parts.push(format!(
+                            "earth_distance(ll_to_earth(split_part(\"{f}\", ',', 1)::float8, \
+                             split_part(\"{f}\", ',', 2)::float8), ll_to_earth({lat}, {lon})) <= {radius}",
+                            f = field_name,
+                            lat = lat,
+                            lon = lon,
+                            radius = radius
+                        ));
+                    }
+                }
                 _ => {}
             }
         }
@@ -863,7 +893,11 @@ mod tests {
         assert_eq!(pg_column_type("text"), Some("TEXT"));
         assert_eq!(pg_column_type("int"), Some("BIGINT"));
         assert_eq!(pg_column_type("float"), Some("DOUBLE PRECISION"));
-        assert_eq!(pg_column_type("geo"), None);
+        assert_eq!(pg_column_type("bool"), Some("BOOLEAN"));
+        assert_eq!(pg_column_type("datetime"), Some("TIMESTAMPTZ"));
+        // Geo is now stored as a "lat,lon" TEXT scalar (earthdistance filter).
+        assert_eq!(pg_column_type("geo"), Some("TEXT"));
+        assert_eq!(pg_column_type("unknown"), None);
     }
 
     #[test]
@@ -1136,11 +1170,15 @@ mod tests {
     // ── Geo filter (unsupported → None) ────────────────────────────────────
 
     #[test]
-    fn geo_is_unsupported_returns_none() {
-        // pgvector filters on scalar columns only; geo has no clause arm, so the
-        // filter is dropped. Assert None so an accidental future change is caught.
+    fn geo_builds_earthdistance_clause() {
+        // Geo-radius is filtered via earthdistance over the "lat,lon" TEXT column:
+        // earth_distance(ll_to_earth(lat, lon), ll_to_earth(qlat, qlon)) <= radius.
         let cond = json!({"and":[{"loc":{"geo":{"lat":20.0,"lon":10.0,"radius":5}}}]});
-        assert!(parse(&cond).is_none());
+        let (sql, binds) = parse(&cond).expect("geo clause should be built");
+        assert!(sql.contains("earth_distance"), "sql: {sql}");
+        assert!(sql.contains("ll_to_earth(20"), "query point inlined: {sql}");
+        assert!(sql.contains("<= 5"), "radius inlined: {sql}");
+        assert!(binds.is_empty(), "geo inlines its numeric args, no binds");
     }
 
     // ── Distance-metric mapping ────────────────────────────────────────────
