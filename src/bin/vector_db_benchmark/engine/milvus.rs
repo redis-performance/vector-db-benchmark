@@ -209,10 +209,18 @@ impl MilvusEngine {
                             "dataType": milvus_type,
                         });
                         if milvus_type == "VarChar" {
-                            field.as_object_mut().unwrap().insert(
-                                "elementTypeParams".to_string(),
-                                serde_json::json!({"max_length": "500"}),
-                            );
+                            let mut params = serde_json::json!({"max_length": "500"});
+                            if ft == "text" {
+                                // Enable the analyzer + match inverted index so
+                                // TEXT_MATCH full-text filtering works on this field.
+                                let p = params.as_object_mut().unwrap();
+                                p.insert("enable_analyzer".to_string(), serde_json::json!(true));
+                                p.insert("enable_match".to_string(), serde_json::json!(true));
+                            }
+                            field
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("elementTypeParams".to_string(), params);
                         }
                         field
                     };
@@ -772,6 +780,18 @@ fn build_milvus_filter(
                     ));
                 }
                 return Some(format!("{} in [{}]", field_name, items.join(", ")));
+            }
+            // Full-text: `{match:{text}}` -> Milvus TEXT_MATCH over an
+            // analyzer-enabled VarChar field (schema creation sets
+            // enable_analyzer/enable_match for `text` fields). Matches rows whose
+            // analyzed field CONTAINS the token; dropping the clause would run the
+            // search UNFILTERED while recall is scored against filtered truth.
+            if let Some(text) = criteria.get("text").and_then(|v| v.as_str()) {
+                return Some(format!(
+                    "TEXT_MATCH({}, {})",
+                    field_name,
+                    quote_milvus_string(text)
+                ));
             }
             let value = criteria.get("value")?;
             if let Some(s) = value.as_str() {
