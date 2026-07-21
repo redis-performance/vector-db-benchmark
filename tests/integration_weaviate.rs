@@ -676,6 +676,18 @@ fn test_binary_weaviate_datetime() {
     );
 }
 
+/// Geo-radius filter end-to-end (previously untested for Weaviate). `geo` ->
+/// geoCoordinates property + `WithinGeoRange`; recall vs haversine ground truth.
+#[test]
+fn test_binary_weaviate_geo() {
+    wait_for_weaviate();
+    let proj = common::write_geo_project("geo-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "geo-test", "BenchGeo");
+    println!("weaviate geo recall={:.3}", recall);
+    assert!(recall >= 0.9, "weaviate geo recall {:.3} < 0.9", recall);
+}
+
 /// Full-text filter end-to-end. Regression: a `{match:{text}}` clause was dropped
 /// (the match arm required a `value` key), so the kNN ran UNFILTERED. Now `text`
 /// routes to `Equal valueText` on the word-tokenized `text` property, which
