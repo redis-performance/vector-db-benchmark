@@ -95,6 +95,146 @@ fn analyze_precision_performance(entries: &[SearchEntry]) -> Vec<PrecisionBucket
     result
 }
 
+/// One concurrency level on a throughput-vs-concurrency curve.
+#[derive(Debug, Clone)]
+struct ConcurrencyPoint {
+    parallel: i64,
+    qps: f64,
+    p50_ms: f64,
+    p95_ms: f64,
+    p99_ms: f64,
+    recall: f64,
+    saturated: bool,
+}
+
+/// A throughput-vs-concurrency curve at ONE quality operating point (`ef`).
+/// This is the saturation curve every external tool (VectorDBBench, VSB,
+/// qdrant-bench) reports and we did not: sweeping the client concurrency while
+/// holding the index/query config fixed reveals the throughput knee — the
+/// concurrency at which QPS peaks and beyond which more clients stop buying
+/// throughput (and latency inflates).
+#[derive(Debug, Clone)]
+struct ConcurrencyCurve {
+    ef: String,
+    points: Vec<ConcurrencyPoint>,
+    /// Peak QPS across the swept levels.
+    max_qps: f64,
+    /// Concurrency at which the peak QPS occurs (smallest, on ties).
+    max_qps_parallel: i64,
+    /// Concurrency where throughput saturates: `Some(max_qps_parallel)` when the
+    /// peak is BELOW the highest level tested (adding concurrency past it did not
+    /// help). `None` when QPS was still climbing at the top of the swept range —
+    /// the knee is beyond what was tested, so sweep higher to find it.
+    knee_parallel: Option<i64>,
+}
+
+/// Build throughput-vs-concurrency curves from the run entries. Entries are
+/// grouped by quality operating point (`ef`); within each group the distinct
+/// `parallel` levels form the curve (on a repeated `(ef, parallel)` the better
+/// point wins — a non-saturated one over a saturated one, else higher QPS). Only
+/// groups with >= 2 distinct concurrency levels are returned (a single point is
+/// not a sweep). Curves are ordered by `ef`, points by ascending concurrency.
+fn concurrency_curves(entries: &[SearchEntry]) -> Vec<ConcurrencyCurve> {
+    // ef -> (parallel -> best entry)
+    let mut groups: BTreeMap<String, BTreeMap<i64, ConcurrencyPoint>> = BTreeMap::new();
+    for e in entries {
+        // Filter-only runs have no precision/recall curve to speak of; skip them.
+        if e.results.mean_precision < 0.0 {
+            continue;
+        }
+        let point = ConcurrencyPoint {
+            parallel: e.parallel,
+            qps: e.results.rps,
+            p50_ms: e.results.p50_time * 1000.0,
+            p95_ms: e.results.p95_time * 1000.0,
+            p99_ms: e.results.p99_time * 1000.0,
+            recall: e.results.mean_recall,
+            saturated: e.results.client_saturated,
+        };
+        let by_parallel = groups.entry(e.ef.clone()).or_default();
+        let replace = match by_parallel.get(&e.parallel) {
+            Some(existing) => match (point.saturated, existing.saturated) {
+                (false, true) => true,
+                (true, false) => false,
+                _ => point.qps > existing.qps,
+            },
+            None => true,
+        };
+        if replace {
+            by_parallel.insert(e.parallel, point);
+        }
+    }
+
+    let mut curves = Vec::new();
+    for (ef, by_parallel) in groups {
+        if by_parallel.len() < 2 {
+            continue; // not a sweep
+        }
+        let points: Vec<ConcurrencyPoint> = by_parallel.into_values().collect(); // BTreeMap → sorted by parallel
+                                                                                 // Peak QPS and the smallest concurrency achieving it.
+        let mut max_qps = f64::NEG_INFINITY;
+        let mut max_qps_parallel = points[0].parallel;
+        for p in &points {
+            if p.qps > max_qps {
+                max_qps = p.qps;
+                max_qps_parallel = p.parallel;
+            }
+        }
+        let highest = points.last().unwrap().parallel;
+        let knee_parallel = if max_qps_parallel < highest {
+            Some(max_qps_parallel)
+        } else {
+            None
+        };
+        curves.push(ConcurrencyCurve {
+            ef,
+            points,
+            max_qps,
+            max_qps_parallel,
+            knee_parallel,
+        });
+    }
+    curves
+}
+
+/// Render the concurrency curves as a compact text table (only when a sweep
+/// exists). Shows QPS/latency per concurrency level and calls out the knee.
+fn print_concurrency_curves(curves: &[ConcurrencyCurve]) {
+    if curves.is_empty() {
+        return;
+    }
+    println!("\nTHROUGHPUT vs CONCURRENCY (saturation curve):");
+    for c in curves {
+        println!(
+            "  ef={} — peak {:.1} QPS @ parallel {}{}",
+            c.ef,
+            c.max_qps,
+            c.max_qps_parallel,
+            match c.knee_parallel {
+                Some(k) =>
+                    format!(" (throughput knee at parallel {k}; higher concurrency did not help)"),
+                None => " (still climbing at top of swept range — sweep higher to find the knee)"
+                    .to_string(),
+            }
+        );
+        println!(
+            "    {:>8}  {:>10}  {:>9}  {:>9}  {:>9}  {:>6}",
+            "parallel", "QPS", "p50 ms", "p95 ms", "p99 ms", "sat?"
+        );
+        for p in &c.points {
+            println!(
+                "    {:>8}  {:>10.1}  {:>9.3}  {:>9.3}  {:>9.3}  {:>6}",
+                p.parallel,
+                p.qps,
+                p.p50_ms,
+                p.p95_ms,
+                p.p99_ms,
+                if p.saturated { "YES" } else { "-" }
+            );
+        }
+    }
+}
+
 /// Detect and describe client/throughput-saturation problems across a set of
 /// runs. Two independent signals:
 ///  1. any single run the client-CPU coverage flagged (`client_saturated`); and
@@ -374,11 +514,36 @@ pub fn save_summary(
         })
         .collect();
 
+    // Throughput-vs-concurrency curves (only present when the config swept >= 2
+    // parallel levels at some ef). Surfaces max_qps + the saturation knee.
+    let curves = concurrency_curves(entries);
+    let concurrency_curve: Vec<serde_json::Value> = curves
+        .iter()
+        .map(|c| {
+            json!({
+                "ef": c.ef,
+                "max_qps": (c.max_qps * 10.0).round() / 10.0,
+                "max_qps_parallel": c.max_qps_parallel,
+                "knee_parallel": c.knee_parallel,
+                "points": c.points.iter().map(|p| json!({
+                    "parallel": p.parallel,
+                    "qps": (p.qps * 10.0).round() / 10.0,
+                    "p50_ms": (p.p50_ms * 1000.0).round() / 1000.0,
+                    "p95_ms": (p.p95_ms * 1000.0).round() / 1000.0,
+                    "p99_ms": (p.p99_ms * 1000.0).round() / 1000.0,
+                    "recall": (p.recall * 10000.0).round() / 10000.0,
+                    "client_saturated": p.saturated,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
     let mut summary = json!({
         "engine": engine_name,
         "dataset": dataset_name,
         "search_results": search_results,
         "precision_summary": precision_summary,
+        "concurrency_curve": concurrency_curve,
     });
 
     if let Some(upload) = upload_json {
@@ -387,6 +552,8 @@ pub fn save_summary(
             .unwrap()
             .insert("upload".to_string(), upload.clone());
     }
+
+    print_concurrency_curves(&curves);
 
     let filename = format!("{}-{}-summary.json", engine_name, dataset_name);
     let path = results_dir.join(&filename);
@@ -718,5 +885,100 @@ mod tests {
         let mut keys = vec!["4:1", "search", "1:1"];
         keys.sort_by(|a, b| ratio_sort_key(a).partial_cmp(&ratio_sort_key(b)).unwrap());
         assert_eq!(keys, vec!["search", "1:1", "4:1"]);
+    }
+
+    // ── concurrency-curve (saturation) tests ────────────────────────────────
+
+    #[test]
+    fn concurrency_curve_finds_peak_and_knee() {
+        // QPS rises then falls: peak at parallel 4, and 4 < highest (8) → the
+        // throughput knee is at 4.
+        let entries = vec![
+            entry("64", 1, 100.0, 0.01, ""),
+            entry("64", 2, 190.0, 0.02, ""),
+            entry("64", 4, 300.0, 0.03, ""),
+            entry("64", 8, 290.0, 0.06, ""),
+        ];
+        let curves = concurrency_curves(&entries);
+        assert_eq!(curves.len(), 1);
+        let c = &curves[0];
+        assert_eq!(c.points.len(), 4);
+        // sorted ascending by parallel
+        assert_eq!(
+            c.points.iter().map(|p| p.parallel).collect::<Vec<_>>(),
+            vec![1, 2, 4, 8]
+        );
+        assert!((c.max_qps - 300.0).abs() < 1e-9);
+        assert_eq!(c.max_qps_parallel, 4);
+        assert_eq!(c.knee_parallel, Some(4));
+    }
+
+    #[test]
+    fn concurrency_curve_still_climbing_has_no_knee() {
+        // Monotonically rising QPS: peak is at the HIGHEST level tested, so the
+        // knee is beyond the swept range → None.
+        let entries = vec![
+            entry("64", 1, 100.0, 0.01, ""),
+            entry("64", 2, 200.0, 0.01, ""),
+            entry("64", 4, 300.0, 0.01, ""),
+            entry("64", 8, 400.0, 0.01, ""),
+        ];
+        let c = &concurrency_curves(&entries)[0];
+        assert!((c.max_qps - 400.0).abs() < 1e-9);
+        assert_eq!(c.max_qps_parallel, 8);
+        assert_eq!(c.knee_parallel, None);
+    }
+
+    #[test]
+    fn concurrency_curve_requires_two_levels() {
+        // A single concurrency level is not a sweep → no curve.
+        let entries = vec![entry("64", 4, 300.0, 0.03, "")];
+        assert!(concurrency_curves(&entries).is_empty());
+    }
+
+    #[test]
+    fn concurrency_curve_groups_by_ef() {
+        // Two operating points (ef 64 and ef 128), each swept over 2 levels →
+        // two independent curves.
+        let entries = vec![
+            entry("64", 1, 100.0, 0.01, ""),
+            entry("64", 2, 150.0, 0.02, ""),
+            entry("128", 1, 80.0, 0.01, ""),
+            entry("128", 2, 120.0, 0.02, ""),
+        ];
+        let curves = concurrency_curves(&entries);
+        assert_eq!(curves.len(), 2);
+        assert_eq!(
+            curves.iter().map(|c| c.ef.as_str()).collect::<Vec<_>>(),
+            vec!["128", "64"]
+        );
+    }
+
+    #[test]
+    fn concurrency_curve_dedups_repeated_level_preferring_nonsaturated() {
+        // Same (ef, parallel) twice: a saturated point with higher QPS and a
+        // clean point with lower QPS. The clean one must win so the curve is not
+        // built from a client-bound data point.
+        let entries = vec![
+            entry("64", 1, 100.0, 0.01, ""),
+            entry("64", 2, 400.0, 0.02, "client cpu"), // saturated, higher qps
+            entry("64", 2, 250.0, 0.02, ""),           // clean, lower qps
+        ];
+        let c = &concurrency_curves(&entries)[0];
+        assert_eq!(c.points.len(), 2);
+        let p2 = c.points.iter().find(|p| p.parallel == 2).unwrap();
+        assert!(!p2.saturated, "clean point must win over saturated one");
+        assert!((p2.qps - 250.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn concurrency_curve_excludes_filter_only_runs() {
+        // Filter-only runs carry mean_precision == -1.0 (sentinel) and have no
+        // recall/precision curve — they must not appear in the saturation curve.
+        let mut a = entry("64", 1, 100.0, 0.01, "");
+        let mut b = entry("64", 2, 200.0, 0.01, "");
+        a.results.mean_precision = -1.0;
+        b.results.mean_precision = -1.0;
+        assert!(concurrency_curves(&[a, b]).is_empty());
     }
 }
