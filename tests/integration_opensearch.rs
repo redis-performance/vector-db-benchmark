@@ -805,6 +805,40 @@ fn test_binary_opensearch_and_filter() {
     );
 }
 
+/// UUID exact-match filter end-to-end. Regression for the schema-type bug:
+/// "uuid" is not a valid OS type; forwarding it verbatim made index creation
+/// reject the whole mapping. With "uuid" -> "keyword" OS does an exact term
+/// match, selecting the quarter of docs whose `uid` equals UUIDS[0].
+#[test]
+fn test_binary_opensearch_uuid() {
+    wait_for_opensearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-uuid", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_uuid_project("uuid-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-uuid",
+            "uuid-test",
+            "http://127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_uuid")
+            ],
+        ),
+        "opensearch uuid run failed"
+    );
+    let recall = common::read_recall(&proj.root, "os-uuid");
+    println!("opensearch uuid recall={:.3}", recall);
+    assert!(recall >= 0.9, "opensearch uuid recall {:.3} < 0.9", recall);
+}
+
 /// Datetime range filter end-to-end. Regression for the schema-type bug:
 /// "datetime" is not a valid OS type; with "datetime" -> "date" OS parses the
 /// reader's ISO-8601 strings and selects the [day 100, day 300) window.

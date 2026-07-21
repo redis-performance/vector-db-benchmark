@@ -769,6 +769,43 @@ fn test_binary_qdrant_and_filter() {
     );
 }
 
+/// UUID exact-match filter end-to-end. Qdrant maps the `uuid` schema type to its
+/// dedicated `FieldType::Uuid` payload index (distinct from keyword), which was
+/// otherwise untested — this proves an exact `uid == UUIDS[0]` match selects the
+/// quarter of docs it should through that special index.
+#[test]
+fn test_binary_qdrant_uuid() {
+    wait_for_qdrant();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-uuid", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_uuid_project("uuid-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-uuid",
+            "uuid-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant uuid run failed"
+    );
+    let recall = common::read_recall(&proj.root, "qdrant-uuid");
+    println!("qdrant uuid recall={:.3}", recall);
+    assert!(recall >= 0.9, "qdrant uuid recall {:.3} < 0.9", recall);
+}
+
 /// Selectivity ladder: one `rank < K` range query per rung, sweeping filter
 /// selectivity from ~3% to ~99% in a single dataset. Verifies qdrant's
 /// filterable HNSW keeps recall across the whole selectivity range (recall vs

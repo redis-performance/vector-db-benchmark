@@ -173,6 +173,12 @@ impl OpenSearchEngine {
                         // whole mapping.
                         "bool" => "boolean",
                         "datetime" => "date",
+                        // A `uuid` is an exact-match opaque string; "uuid" is not a
+                        // valid OS type, so (like bool/datetime above) forwarding it
+                        // verbatim made index creation reject the whole mapping,
+                        // silently breaking every uuid-equality filter. Map it to
+                        // `keyword` (exact term match, no analysis).
+                        "uuid" => "keyword",
                         other => other,
                     };
                     props.insert(
