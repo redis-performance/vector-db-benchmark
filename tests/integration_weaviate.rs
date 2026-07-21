@@ -658,6 +658,23 @@ fn test_binary_weaviate_bool() {
     assert!(recall >= 0.9, "weaviate bool recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies Weaviate
+/// composes two conditions of different types into one `Filters.And` operand
+/// (`Equal color` AND `GreaterThanEqual size`), not just a single clause.
+#[test]
+fn test_binary_weaviate_and_filter() {
+    wait_for_weaviate();
+    let proj = common::write_and_filter_project("and-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "and-test", "BenchAnd");
+    println!("weaviate and-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate and-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Datetime range filter end-to-end. Regression: `datetime` was dropped and the
 /// range builder only emitted valueInt/valueNumber. Now `datetime` -> `date`
 /// property and the ISO bound is sent as `valueText` (Weaviate compares dates

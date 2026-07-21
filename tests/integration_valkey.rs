@@ -1386,6 +1386,14 @@ fn test_binary_valkey_datetime() {
     run_filter_recall_test("valkey-dt", "dt-test", common::write_datetime_project);
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies Valkey Search
+/// composes two conditions of different types into one intersecting FT.SEARCH
+/// filter (`@color:{red} @size:[50 +inf]`), not just a single clause.
+#[test]
+fn test_binary_valkey_and_filter() {
+    run_filter_recall_test("valkey-and", "and-test", common::write_and_filter_project);
+}
+
 /// Multi-tenancy: many tenants share ONE index and every query is scoped to a
 /// single tenant via a keyword-equality filter on a `tenant` field, with ground
 /// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG

@@ -1191,6 +1191,58 @@ fn test_binary_mongodb_match_any() {
     );
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies MongoDB
+/// composes two conditions of different types into one `$vectorSearch` filter
+/// (`color == "red"` AND `size >= 50` via `$and`/`$gte`), not just a single
+/// clause. Recall is brute-forced over only the intersecting docs, so an engine
+/// that drops or mis-joins either clause scores low.
+#[test]
+fn test_binary_mongodb_and_filter() {
+    wait_for_mongodb();
+    drop_test_collection();
+
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "mongo-and", "engine": "mongodb",
+        "connection_params": {}, "collection_params": {},
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_and_filter_project(
+        "and-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+
+    let port = std::env::var("MONGODB_PORT").unwrap_or_else(|_| MONGODB_PORT.to_string());
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "mongo-and",
+            "and-test",
+            MONGODB_HOST,
+            &[
+                ("MONGODB_PORT", port.as_str()),
+                ("MONGODB_DB", TEST_DB),
+                ("MONGODB_COLLECTION", TEST_COLLECTION),
+                ("MONGODB_INDEX_NAME", TEST_INDEX),
+            ],
+        ),
+        "mongodb and-filter run failed"
+    );
+
+    let recall = common::read_recall(&proj.root, "mongo-and");
+    println!("mongodb and-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "mongodb and-filter recall {:.3} < 0.9",
+        recall
+    );
+    drop_test_collection();
+    fs::remove_dir_all(&proj.root).ok();
+}
+
 /// End-to-end `match_any` on the INT `size` field. Proves the numeric `$in`
 /// filter matches natively-stored integers end-to-end. Ground truth is
 /// brute-forced over ONLY the docs whose `size` is in the IN-set (a strict
