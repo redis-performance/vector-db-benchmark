@@ -1474,7 +1474,19 @@ impl Engine for WeaviateEngine {
         let graphql_bodies = Arc::new(graphql_bodies);
         let grpc_requests = Arc::new(grpc_requests);
 
-        let start_time = Instant::now();
+        // Barrier-synchronized start so connection setup AND the cold first query
+        // fall OUTSIDE the measured window (mirrors redis.rs / vertex.rs). Every
+        // worker connects + primes one discarded query, then blocks on `ready`;
+        // the main thread stamps the shared start instant into `start_cell` and
+        // releases `go`, so the measurement clock starts only once all workers are
+        // warm and poised. A worker that fails to connect MUST still cross both
+        // barriers before returning, or the run would deadlock. `total_time` is
+        // read from `start_cell` below, so it excludes connection setup and the
+        // cold first query. Both transports (gRPC tasks / GraphQL threads) use the
+        // same `parallel + 1` barrier counts (main thread is the +1).
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
 
         // Per-thread sample buffers merged after the workers finish — no per-query
         // Mutex<Vec> contention in the timed loop (see redis.rs::search). Both the
@@ -1493,7 +1505,12 @@ impl Engine for WeaviateEngine {
             //     connection, awaiting searches off a shared atomic work queue.
             //     This scales with concurrency (unlike thread-per-block_on). ──
             let endpoint = grpc_ep.unwrap();
+            // Size the pool at `parallel + 1` so every worker task can block on the
+            // std start-barrier concurrently (the main future is the +1). With the
+            // default (num-CPU) pool a `parallel` larger than the CPU count would
+            // strand un-scheduled tasks behind barrier-blocked threads and deadlock.
             let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(parallel + 1)
                 .enable_all()
                 .build()
                 .map_err(|e| format!("failed to build tokio runtime: {}", e))?;
@@ -1506,6 +1523,8 @@ impl Engine for WeaviateEngine {
                     let neighbors = Arc::clone(&neighbors);
                     let tops = Arc::clone(&tops);
                     let query_idx = Arc::clone(&query_idx);
+                    let ready = Arc::clone(&ready);
+                    let go = Arc::clone(&go);
                     let pb = pb.clone();
                     tasks.push(tokio::spawn(async move {
                         let mut t = Vec::new();
@@ -1518,10 +1537,28 @@ impl Engine for WeaviateEngine {
                             Ok(c) => c,
                             Err(e) => {
                                 eprintln!("gRPC connect failed: {}", e);
+                                // Still cross both barriers so peers + main aren't
+                                // stranded (the barrier count includes this task).
+                                ready.wait();
+                                go.wait();
                                 return (t, p, r, mr, nd);
                             }
                         };
                         let mut client = WeaviateClient::new(channel);
+
+                        // Prime this connection with ONE discarded search (query 0)
+                        // so the cold first round-trip + server JIT/cache warm-up is
+                        // outside the measured window. Best effort: result ignored,
+                        // no sample recorded. Reuses the normal per-query RPC path.
+                        if !grpc_requests.is_empty() {
+                            let prime = grpc_requests[0].clone();
+                            let _ = grpc_search(&mut client, prime, api_key.as_deref()).await;
+                        }
+
+                        // Signal "connected + primed", then block until the main
+                        // thread stamps the shared start and releases everyone.
+                        ready.wait();
+                        go.wait();
                         loop {
                             let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                             if idx >= num_to_run {
@@ -1558,6 +1595,12 @@ impl Engine for WeaviateEngine {
                         (t, p, r, mr, nd)
                     }));
                 }
+                // All tasks have connected + primed and are poised on `ready`.
+                // Stamp the measurement start, then release everyone via `go`; the
+                // barrier count includes this main future (the +1).
+                ready.wait();
+                start_cell.set(Instant::now()).ok();
+                go.wait();
                 let mut out = Vec::with_capacity(tasks.len());
                 for task in tasks {
                     match task.await {
@@ -1587,6 +1630,8 @@ impl Engine for WeaviateEngine {
                     let tops = Arc::clone(&tops);
                     let graphql_bodies = Arc::clone(&graphql_bodies);
                     let query_idx = Arc::clone(&query_idx);
+                    let ready = Arc::clone(&ready);
+                    let go = Arc::clone(&go);
                     let pb = &pb;
 
                     handles.push(s.spawn(move || {
@@ -1601,8 +1646,32 @@ impl Engine for WeaviateEngine {
                             .build()
                         {
                             Ok(c) => c,
-                            Err(_) => return (t, p, r, mr, nd),
+                            Err(_) => {
+                                // Still cross both barriers so peers + main aren't
+                                // stranded (the barrier count includes this worker).
+                                ready.wait();
+                                go.wait();
+                                return (t, p, r, mr, nd);
+                            }
                         };
+
+                        // Prime this client with ONE discarded search (query 0) so
+                        // the cold first round-trip (TCP/TLS + server warm-up) is
+                        // outside the measured window. Best effort: result ignored,
+                        // no sample recorded. Reuses the normal per-query HTTP path.
+                        if !graphql_bodies.is_empty() {
+                            let _ = send_graphql(
+                                &client,
+                                &base_url,
+                                api_key.as_deref(),
+                                &graphql_bodies[0],
+                            );
+                        }
+
+                        // Signal "connected + primed", then block until the main
+                        // thread stamps the shared start and releases everyone.
+                        ready.wait();
+                        go.wait();
                         loop {
                             let idx = query_idx.fetch_add(1, Ordering::Relaxed);
                             if idx >= num_to_run {
@@ -1644,6 +1713,12 @@ impl Engine for WeaviateEngine {
                         (t, p, r, mr, nd)
                     }));
                 }
+                // All workers have connected + primed and are poised on `ready`.
+                // Stamp the measurement start, then release everyone via `go`; the
+                // barrier count includes this main thread (the +1).
+                ready.wait();
+                start_cell.set(Instant::now()).ok();
+                go.wait();
                 for h in handles {
                     let (t, p, r, mr, nd) = h.join().unwrap();
                     times.extend(t);
@@ -1656,7 +1731,12 @@ impl Engine for WeaviateEngine {
         }
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // total_time is measured from the barrier release (start_cell), so it
+        // excludes connection setup and the cold first (primed) query.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(

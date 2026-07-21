@@ -444,9 +444,19 @@ impl Engine for PgVectorEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
         let conn_str = self.connection_string();
         let distance_op = self.distance_op.clone();
+
+        // Barrier-synchronized start so per-worker connection setup AND the cold
+        // first query fall OUTSIDE the measured window (mirrors redis/vertex).
+        // Every worker connects + primes, then blocks on `ready`; the main thread
+        // stamps the shared start instant into `start_cell` and releases `go`, so
+        // the measurement clock starts only once all workers are warm and poised.
+        // A worker that fails to connect MUST still pass both barriers before
+        // returning, or the run would deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
@@ -463,6 +473,8 @@ impl Engine for PgVectorEngine {
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -474,7 +486,12 @@ impl Engine for PgVectorEngine {
 
                     let mut conn = match postgres::Client::connect(&conn_str, postgres::NoTls) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
 
                     // Set ef_search for this connection
@@ -488,6 +505,42 @@ impl Engine for PgVectorEngine {
                     // from the HNSW index until LIMIT is satisfied in exact order,
                     // instead of post-filtering a bounded candidate set.
                     let _ = conn.execute("SET hnsw.iterative_scan = strict_order", &[]);
+
+                    // Prime this connection with ONE discarded query (index 0) so
+                    // the cold first round-trip + plan build is not inside the
+                    // measured window. Best effort: errors ignored, no sample
+                    // recorded. Reuses the exact per-query request path below.
+                    if !queries.is_empty() {
+                        let prime_top = explicit_top.unwrap_or_else(|| {
+                            let n = neighbors[0].len();
+                            if n > 0 { n } else { 10 }
+                        });
+                        let prime_vec = pgvector::Vector::from(queries[0].clone());
+                        let prime_top_param = prime_top as i64;
+                        let prime_filter = parsed_filters[0].as_ref();
+                        let prime_where = prime_filter
+                            .map(|(tmpl, _)| format!(" WHERE {}", tmpl))
+                            .unwrap_or_default();
+                        let prime_sql = format!(
+                            "SELECT id, embedding {} $1 AS _score FROM items{} ORDER BY _score LIMIT $2::bigint",
+                            distance_op, prime_where
+                        );
+                        let mut prime_params: Vec<&(dyn ToSql + Sync)> =
+                            Vec::with_capacity(2 + prime_filter.map(|(_, v)| v.len()).unwrap_or(0));
+                        prime_params.push(&prime_vec);
+                        prime_params.push(&prime_top_param);
+                        if let Some((_, values)) = prime_filter {
+                            for v in values {
+                                prime_params.push(v.as_sql());
+                            }
+                        }
+                        let _ = conn.query(&prime_sql, &prime_params);
+                    }
+
+                    // Signal "connected + primed", then block until the main thread
+                    // stamps the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
@@ -561,6 +614,14 @@ impl Engine for PgVectorEngine {
                 }));
             }
 
+            // All workers spawned. Wait until every one is connected + primed,
+            // stamp the shared start instant, then release them together so the
+            // measurement clock excludes connection setup and the cold first query.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -572,7 +633,12 @@ impl Engine for PgVectorEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // total_time excludes connection setup and the cold first query: it is
+        // measured from the barrier release stamped into `start_cell`.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(

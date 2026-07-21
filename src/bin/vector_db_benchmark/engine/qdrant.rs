@@ -1172,7 +1172,19 @@ impl Engine for QdrantEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
+
+        // Barrier-synchronized start so per-worker client/runtime setup AND the cold
+        // first query fall OUTSIDE the measured window (mirrors redis/vertex). Every
+        // worker builds its runtime + client and primes with one discarded query,
+        // then blocks on `ready`; the main thread stamps the shared start instant
+        // into `start_cell` and releases `go`, so the measurement clock starts only
+        // once all workers are warm and poised. A worker that fails to build its
+        // runtime/client MUST still pass both barriers before returning, or the run
+        // would deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
+
         // Each worker builds its own client/connection (like ES/OpenSearch) rather
         // than sharing one gRPC connection, which would serialize parallel queries.
         let grpc_url = self.grpc_url.clone();
@@ -1197,6 +1209,8 @@ impl Engine for QdrantEngine {
                 let neighbors = &neighbors;
                 let parsed_filters = &parsed_filters;
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1206,36 +1220,10 @@ impl Engine for QdrantEngine {
                     let mut mr = Vec::new();
                     let mut nd = Vec::new();
 
-                    let rt = match tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        Ok(rt) => rt,
-                        Err(_) => return (t, p, r, mr, nd),
-                    };
-
-                    // Per-worker client so each thread has an independent connection.
-                    let client = match rt.block_on(async {
-                        let mut b = Qdrant::from_url(&grpc_url)
-                            .timeout(std::time::Duration::from_secs(timeout));
-                        if let Some(k) = &api_key {
-                            b = b.api_key(k.clone());
-                        }
-                        b.build()
-                    }) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("Qdrant worker client build failed: {}", e);
-                            return (t, p, r, mr, nd);
-                        }
-                    };
-
-                    loop {
-                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
-                        if idx >= num_to_run {
-                            break;
-                        }
-
+                    // Build the fully-configured query for a given query index. Shared
+                    // by the prime (query 0, discarded) and the timed loop so both use
+                    // the exact same per-query request path.
+                    let build_query = |idx: usize| -> QueryPointsBuilder {
                         let top = explicit_top.unwrap_or_else(|| {
                             let n = neighbors[idx].len();
                             if n > 0 {
@@ -1316,6 +1304,70 @@ impl Engine for QdrantEngine {
                             query_builder = query_builder.prefetch(vec![pf.build()]);
                         }
 
+                        query_builder
+                    };
+
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => rt,
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
+                    };
+
+                    // Per-worker client so each thread has an independent connection.
+                    let client = match rt.block_on(async {
+                        let mut b = Qdrant::from_url(&grpc_url)
+                            .timeout(std::time::Duration::from_secs(timeout));
+                        if let Some(k) = &api_key {
+                            b = b.api_key(k.clone());
+                        }
+                        b.build()
+                    }) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Qdrant worker client build failed: {}", e);
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
+                    };
+
+                    // Prime this worker with ONE discarded query (query 0) so the cold
+                    // first round-trip (client warm-up + server caches/JIT) is not
+                    // inside the measured window. Best effort: errors are ignored and
+                    // its sample is NOT recorded.
+                    if num_to_run > 0 {
+                        let _ = rt.block_on(client.query(build_query(0)));
+                    }
+
+                    // Signal "runtime + client built + primed", then block until the
+                    // main thread stamps the shared measurement start and releases all.
+                    ready.wait();
+                    go.wait();
+
+                    loop {
+                        let idx = query_idx.fetch_add(1, Ordering::Relaxed);
+                        if idx >= num_to_run {
+                            break;
+                        }
+
+                        let top = explicit_top.unwrap_or_else(|| {
+                            let n = neighbors[idx].len();
+                            if n > 0 {
+                                n
+                            } else {
+                                10
+                            }
+                        });
+
+                        let query_builder = build_query(idx);
+
                         let query_start = Instant::now();
                         let result = rt.block_on(client.query(query_builder));
                         let query_time = query_start.elapsed().as_secs_f64();
@@ -1360,6 +1412,14 @@ impl Engine for QdrantEngine {
                 }));
             }
 
+            // All workers are built + primed and blocked on `go`. Stamp the shared
+            // measurement start and release them simultaneously, so connection setup
+            // and the cold first query are already behind the barrier.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -1371,7 +1431,12 @@ impl Engine for QdrantEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // Measure from the post-barrier start stamp (workers already primed), so
+        // total_time excludes connection setup and the cold first query.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
