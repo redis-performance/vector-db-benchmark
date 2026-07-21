@@ -6,12 +6,19 @@
 //! query syntax `*=>[KNN k @field $blob AS score]`. This engine speaks that
 //! subset over the `redis` crate (same RESP protocol).
 //!
-//! # Scope: pure vector KNN only
+//! # Scope: vector KNN + metadata filtering
 //!
-//! Dragonfly Search is Beta. This engine deliberately implements **only**
-//! unfiltered vector KNN — no metadata filters, no full-text, no mixed
-//! (search+update) workload, no quantization. Every search runs the `*`
-//! (match-all) prefilter.
+//! Dragonfly Search supports the RediSearch TAG / NUMERIC / TEXT / GEO field
+//! types and hybrid filtered KNN (`(prefilter)=>[KNN...]`) — verified live
+//! against `dragonfly:df-v1.38.1`. This engine therefore indexes the dataset's
+//! metadata schema and applies per-query filter `conditions` exactly like
+//! redis.rs / valkey.rs (reusing their RediSearch filter builder): keyword / int
+//! / float / bool / datetime / uuid datatypes, `match` / `match_any` / `range`,
+//! and AND / OR / nested boolean. A query with no conditions still runs the `*`
+//! (match-all) prefilter. GEO is the one unsupported filter type — Dragonfly's
+//! geo-query parser rejects the `$param` placeholders the shared builder emits
+//! (verified live), so geo fields are not indexed (like Chroma/Milvus). Mixed
+//! (search+update) workload and quantization also remain out of scope.
 //!
 //! # Vector data type: FLOAT32 only
 //!
@@ -35,6 +42,7 @@ use std::time::Instant;
 use indicatif::{HumanCount, ProgressBar, ProgressState, ProgressStyle};
 use redis::Connection;
 
+use super::redis::{parse_conditions, ParsedFilter};
 use super::redis_utils;
 
 use crate::config::{EngineConfig, SearchParams};
@@ -42,7 +50,7 @@ use crate::dataset::Dataset;
 use crate::engine::index_naming::{derive_index_name, derive_key_prefix};
 use crate::engine::{Engine, SearchResults, UploadStats};
 use crate::metrics::compute_metrics;
-use vector_db_benchmark::parsers::{doc_key_to_id, doc_key_to_id_opt};
+use vector_db_benchmark::parsers::{datetime_to_epoch_secs, doc_key_to_id, doc_key_to_id_opt};
 use vector_db_benchmark::readers::metadata::MetadataItem;
 
 /// Dragonfly engine configuration.
@@ -187,8 +195,11 @@ impl DragonflyEngine {
 
         let distance_metric = map_distance_metric(distance);
 
-        // Build FT.CREATE: a single VECTOR field `vector`. KNN-only, so no
-        // metadata/filter schema fields are declared.
+        // Build FT.CREATE: the VECTOR field `vector` plus any filterable metadata
+        // fields declared in the dataset schema. Dragonfly Search (df-v1.13+)
+        // supports the RediSearch TAG/NUMERIC/TEXT/GEO field types + hybrid
+        // filtered KNN (`(prefilter)=>[KNN...]`), verified live, so it is no longer
+        // KNN-only.
         let mut cmd = redis::cmd("FT.CREATE");
         cmd.arg(&self.config.index_name)
             .arg("ON")
@@ -211,13 +222,46 @@ impl DragonflyEngine {
         cmd.arg("M").arg(self.config.m);
         cmd.arg("EF_CONSTRUCTION").arg(self.config.ef_construction);
 
+        // Filterable metadata fields (mirrors redis.rs): keyword/uuid/bool exact
+        // strings -> TAG (SEPARATOR ; so multi-valued `labels` match per element);
+        // int/float/datetime (stored as epoch) -> NUMERIC; full-text -> TEXT;
+        // geo point -> GEO.
+        if let Some(schema) = dataset.config.schema.as_ref().and_then(|s| s.as_object()) {
+            for (field_name, field_type) in schema {
+                match field_type.as_str().unwrap_or("") {
+                    "keyword" | "uuid" | "bool" => {
+                        cmd.arg(field_name).arg("TAG").arg("SEPARATOR").arg(";");
+                    }
+                    "int" | "float" | "datetime" => {
+                        cmd.arg(field_name).arg("NUMERIC");
+                    }
+                    "text" => {
+                        cmd.arg(field_name).arg("TEXT");
+                    }
+                    // NOTE: geo is intentionally NOT declared. Dragonfly Search
+                    // accepts a GEO field but its geo-query parser rejects `$param`
+                    // placeholders inside the `[lon lat radius unit]` bracket
+                    // (verified live), and the shared RediSearch filter builder
+                    // emits geo bounds as params — so geo filtering is unsupported
+                    // here (like Chroma/Milvus). Other datatypes work.
+                    _ => {}
+                }
+            }
+        }
+
         cmd.query::<()>(conn)
             .map_err(|e| format!("Failed to create index: {}", e))?;
 
         Ok(())
     }
 
-    fn upload_sequential(&self, ids: &[i64], vectors: &[Vec<f32>]) -> Result<(), String> {
+    fn upload_sequential(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+        datetime_fields: &std::collections::HashSet<String>,
+    ) -> Result<(), String> {
         let mut conn = self.get_connection()?;
         let pb = self.create_progress_bar(ids.len());
 
@@ -227,6 +271,8 @@ impl DragonflyEngine {
                 &mut conn,
                 &ids[batch_start..batch_end],
                 &vectors[batch_start..batch_end],
+                &metadata[batch_start..batch_end],
+                datetime_fields,
                 &self.config.key_prefix,
             )?;
             pb.inc((batch_end - batch_start) as u64);
@@ -236,7 +282,13 @@ impl DragonflyEngine {
         Ok(())
     }
 
-    fn upload_parallel(&self, ids: &[i64], vectors: &[Vec<f32>]) -> Result<(), String> {
+    fn upload_parallel(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+        datetime_fields: &std::collections::HashSet<String>,
+    ) -> Result<(), String> {
         let pb = self.create_progress_bar(ids.len());
         let batches: Vec<(usize, usize)> = (0..ids.len())
             .step_by(self.config.batch_size)
@@ -277,6 +329,8 @@ impl DragonflyEngine {
                             &mut conn,
                             &ids[batch_start..batch_end],
                             &vectors[batch_start..batch_end],
+                            &metadata[batch_start..batch_end],
+                            datetime_fields,
                             &key_prefix,
                         ) {
                             *error.lock().unwrap() = Some(e);
@@ -458,8 +512,12 @@ fn upload_batch_internal(
     conn: &mut Connection,
     ids: &[i64],
     vectors: &[Vec<f32>],
+    metadata: &[Option<MetadataItem>],
+    datetime_fields: &std::collections::HashSet<String>,
     key_prefix: &str,
 ) -> Result<(), String> {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+
     let mut pipe = redis::pipe();
 
     for i in 0..ids.len() {
@@ -467,6 +525,39 @@ fn upload_batch_internal(
         let vec_bytes = encode_query_vector(&vectors[i]);
         let mut hset_cmd = redis::cmd("HSET");
         hset_cmd.arg(key.as_str()).arg("vector").arg(&vec_bytes[..]);
+
+        // Metadata fields for filtering (mirrors redis.rs): bools stay the reader's
+        // "true"/"false" string (TAG match); datetime strings become epoch seconds
+        // (NUMERIC range); numbers/labels/geo map as redis does.
+        if let Some(meta) = &metadata[i] {
+            for (k, v) in &meta.fields {
+                match v {
+                    MetadataValue::String(s) => {
+                        let stored = if datetime_fields.contains(k) {
+                            match datetime_to_epoch_secs(s) {
+                                Some(e) => (e as i64).to_string(),
+                                None => s.clone(),
+                            }
+                        } else {
+                            s.clone()
+                        };
+                        hset_cmd.arg(k.as_str()).arg(stored);
+                    }
+                    MetadataValue::Int(n) => {
+                        hset_cmd.arg(k.as_str()).arg(n.to_string());
+                    }
+                    MetadataValue::Float(f) => {
+                        hset_cmd.arg(k.as_str()).arg(f.to_string());
+                    }
+                    MetadataValue::Labels(labels) => {
+                        hset_cmd.arg(k.as_str()).arg(labels.join(";"));
+                    }
+                    MetadataValue::Geo { lon, lat } => {
+                        hset_cmd.arg(k.as_str()).arg(format!("{},{}", lon, lat));
+                    }
+                }
+            }
+        }
         pipe.add_command(hset_cmd);
     }
 
@@ -504,11 +595,11 @@ fn uses_ef_runtime(algorithm: &str) -> bool {
 /// without it every `ef` in the search sweep runs at the index default. The
 /// query vector is bound as `$vec_param`, so this string is identical across all
 /// queries.
-fn build_knn_query_str(algorithm: &str) -> String {
+fn build_knn_query_str(algorithm: &str, prefilter: &str) -> String {
     if uses_ef_runtime(algorithm) {
-        "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]".to_string()
+        format!("{prefilter}=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]")
     } else {
-        "*=>[KNN $K @vector $vec_param AS vector_score]".to_string()
+        format!("{prefilter}=>[KNN $K @vector $vec_param AS vector_score]")
     }
 }
 
@@ -527,7 +618,9 @@ fn ft_search_knn(
     ef: i64,
     algorithm: &str,
     query_timeout: i64,
+    filter: Option<&ParsedFilter>,
 ) -> Result<Vec<(i64, f64)>, String> {
+    use super::redis::FilterParamValue;
     let mut cmd = redis::cmd("FT.SEARCH");
     cmd.arg(index_name)
         .arg(query_str)
@@ -546,13 +639,26 @@ fn ft_search_knn(
         .arg(query_timeout);
 
     // Params: vec_param(2) + K(2), plus EF(2) only for HNSW (EF_RUNTIME is
-    // HNSW-only; binding it on a FLAT index would be a syntax error).
+    // HNSW-only; binding it on a FLAT index would be a syntax error), plus 2 per
+    // filter param (the prefilter references `$name` placeholders).
     let ef_runtime = uses_ef_runtime(algorithm);
-    cmd.arg("PARAMS").arg(if ef_runtime { 6 } else { 4 });
+    let filter_params = filter.map(|(_, p)| p.len()).unwrap_or(0);
+    let n = 4 + if ef_runtime { 2 } else { 0 } + filter_params * 2;
+    cmd.arg("PARAMS").arg(n);
     cmd.arg("vec_param").arg(vec_bytes);
     cmd.arg("K").arg(top.to_string());
     if ef_runtime {
         cmd.arg("EF").arg(ef.to_string());
+    }
+    if let Some((_, params)) = filter {
+        for (name, value) in params {
+            cmd.arg(name);
+            match value {
+                FilterParamValue::Str(s) => cmd.arg(s),
+                FilterParamValue::Int(i) => cmd.arg(i.to_string()),
+                FilterParamValue::Float(f) => cmd.arg(f.to_string()),
+            };
+        }
     }
 
     // Query the raw Value (not Vec<Value>) so both a RESP2 array and a RESP3 map
@@ -760,9 +866,22 @@ impl Engine for DragonflyEngine {
         let dataset_path = dataset.get_path()?;
         println!("Reading dataset from {}...", dataset_path.display());
         let read_start = Instant::now();
-        // Dragonfly Search is KNN-only here: metadata is read but not indexed.
-        let (ids, vectors, _metadata): (Vec<i64>, Vec<Vec<f32>>, Vec<Option<MetadataItem>>) =
+        let (ids, vectors, metadata): (Vec<i64>, Vec<Vec<f32>>, Vec<Option<MetadataItem>>) =
             dataset.read_vectors(normalize)?;
+        // `datetime` schema fields are stored as NUMERIC epoch seconds (like
+        // redis/valkey) so range filters over them work.
+        let datetime_fields: std::collections::HashSet<String> = dataset
+            .config
+            .schema
+            .as_ref()
+            .and_then(|s| s.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter(|(_, t)| t.as_str() == Some("datetime"))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let read_time = read_start.elapsed().as_secs_f64();
 
         println!(
@@ -780,9 +899,9 @@ impl Engine for DragonflyEngine {
         let upload_start = Instant::now();
 
         if self.config.parallel <= 1 {
-            self.upload_sequential(&ids, &vectors)?;
+            self.upload_sequential(&ids, &vectors, &metadata, &datetime_fields)?;
         } else {
-            self.upload_parallel(&ids, &vectors)?;
+            self.upload_parallel(&ids, &vectors, &metadata, &datetime_fields)?;
         }
 
         let upload_time = upload_start.elapsed().as_secs_f64();
@@ -854,7 +973,15 @@ impl Engine for DragonflyEngine {
         let query_path = dataset.get_path()?;
         println!("\tReading queries from {}...", query_path.display());
         // KNN-only: filter conditions are ignored (never built into the query).
-        let (queries, neighbors, _conditions) = dataset.read_queries()?;
+        let (queries, neighbors, conditions) = dataset.read_queries()?;
+
+        // Per-query prefilters, reusing redis's RediSearch filter builder (same
+        // FT.SEARCH syntax). Dragonfly Search supports hybrid filtered KNN, so a
+        // query with `conditions` runs `(prefilter)=>[KNN...]` instead of `*`.
+        let parsed_filters: Vec<Option<ParsedFilter>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(parse_conditions))
+            .collect();
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let num_to_run = if num_queries > 0 {
@@ -866,12 +993,18 @@ impl Engine for DragonflyEngine {
         // Precompute client-side request construction BEFORE the timed region so
         // the per-query window wraps ONLY the RPC round-trip + reply parse
         // (matching redis.rs/valkey.rs). Encoding the FLOAT32 blob is client
-        // work, not server latency. The query string is unfiltered and identical
-        // across all queries. Shared read-only across workers.
+        // work, not server latency. Query strings are per-query (each embeds its
+        // own prefilter). Shared read-only across workers.
         let encoded_queries: Vec<Vec<u8>> =
             queries.iter().map(|q| encode_query_vector(q)).collect();
         let algorithm = self.config.algorithm.clone();
-        let query_str = build_knn_query_str(&algorithm);
+        let query_strs: Vec<String> = parsed_filters
+            .iter()
+            .map(|f| {
+                let prefilter = f.as_ref().map(|(expr, _)| expr.as_str()).unwrap_or("*");
+                build_knn_query_str(&algorithm, prefilter)
+            })
+            .collect();
         // Resolve the per-config index name once (not per query / per worker).
         let index_name = self.config.index_name.clone();
 
@@ -896,7 +1029,8 @@ impl Engine for DragonflyEngine {
                 let port = self.port;
                 let neighbors = &neighbors;
                 let encoded_queries = &encoded_queries;
-                let query_str = query_str.as_str();
+                let query_strs = &query_strs;
+                let parsed_filters = &parsed_filters;
                 let algorithm = algorithm.as_str();
                 let index_name = index_name.as_str();
                 let query_idx = Arc::clone(&query_idx);
@@ -937,11 +1071,12 @@ impl Engine for DragonflyEngine {
                             &mut conn,
                             index_name,
                             &encoded_queries[idx],
-                            query_str,
+                            &query_strs[idx],
                             top,
                             ef,
                             algorithm,
                             query_timeout,
+                            parsed_filters[idx].as_ref(),
                         );
                         let query_time = query_start.elapsed().as_secs_f64();
 
@@ -1107,15 +1242,15 @@ mod tests {
         // HNSW emits EF_RUNTIME (per-query ef sweep); FLAT must NOT (it would be
         // a syntax error on a FLAT index).
         assert_eq!(
-            build_knn_query_str("hnsw"),
+            build_knn_query_str("hnsw", "*"),
             "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
         );
         assert_eq!(
-            build_knn_query_str("HNSW"),
+            build_knn_query_str("HNSW", "*"),
             "*=>[KNN $K @vector $vec_param EF_RUNTIME $EF AS vector_score]"
         );
         assert_eq!(
-            build_knn_query_str("flat"),
+            build_knn_query_str("flat", "*"),
             "*=>[KNN $K @vector $vec_param AS vector_score]"
         );
         assert!(uses_ef_runtime("hnsw") && !uses_ef_runtime("flat"));

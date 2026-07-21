@@ -4,9 +4,11 @@
 //! Start with: docker compose -f tests/docker-compose.test.yml up -d dragonfly
 //! Run with:   DRAGONFLY_PORT=6385 cargo test --test integration_dragonfly -- --test-threads=1
 //!
-//! Scope: pure vector KNN only (the engine implements no filters). The fixtures
-//! therefore use whole-corpus COSINE ground truth so recall reflects the vector
-//! index quality alone, matching the `DISTANCE_METRIC COSINE` the engine builds.
+//! Scope: vector KNN (whole-corpus COSINE ground truth, so recall reflects index
+//! quality alone) PLUS metadata filtering — Dragonfly Search supports hybrid
+//! filtered KNN, so the `test_binary_dragonfly_*` tests exercise the filter path
+//! (bool/uuid/datetime/full-text/AND/OR/nested) against filtered ground truth.
+//! GEO is unsupported (Dragonfly's geo parser rejects the builder's `$param`s).
 
 use std::fs;
 use std::path::PathBuf;
@@ -253,6 +255,109 @@ fn test_dragonfly_knn_recall_parallel() {
         recall >= 0.9,
         "dragonfly KNN recall (parallel=4) {:.3} < 0.9",
         recall
+    );
+}
+
+/// Run one metadata-filter fixture end-to-end and assert recall >= 0.9 vs the
+/// filtered ground truth — proving Dragonfly Search applies the filter (a dropped
+/// or mis-built filter runs kNN over the wrong doc set and recall collapses).
+fn run_dragonfly_filter_test(
+    name: &str,
+    dataset: &str,
+    build: impl Fn(&str, &str, usize) -> common::FilterProject,
+) {
+    wait_for_dragonfly();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": name, "engine": "dragonfly", "algorithm": "hnsw",
+        "collection_params": { "hnsw_config": { "M": 16, "EF_CONSTRUCTION": 128 } },
+        "search_params": [{ "parallel": 1, "search_params": { "ef": 256 } }],
+        "upload_params": { "parallel": 1, "batch_size": 64 }
+    }]);
+    let proj = build(dataset, &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(
+        proj.matching_docs >= proj.top,
+        "fixture must have >= top matching docs (got {})",
+        proj.matching_docs
+    );
+    let port = test_port().to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            name,
+            dataset,
+            TEST_HOST,
+            &[("DRAGONFLY_PORT", port.as_str())],
+        ),
+        "dragonfly {} run failed",
+        name
+    );
+    let recall = common::read_recall(&proj.root, name);
+    println!("dragonfly {} recall={:.3}", name, recall);
+    assert!(
+        recall >= 0.9,
+        "dragonfly {} recall {:.3} < 0.9",
+        name,
+        recall
+    );
+}
+
+/// Bool-equality filter — Dragonfly now indexes `bool` as a TAG and applies the
+/// `@flag:{true}` prefilter (previously KNN-only).
+#[test]
+fn test_binary_dragonfly_bool() {
+    run_dragonfly_filter_test("dragonfly-bool", "bool-test", common::write_bool_project);
+}
+
+/// UUID exact-match (TAG).
+#[test]
+fn test_binary_dragonfly_uuid() {
+    run_dragonfly_filter_test("dragonfly-uuid", "uuid-test", common::write_uuid_project);
+}
+
+/// Datetime range — stored as NUMERIC epoch seconds, filtered with an ISO range.
+#[test]
+fn test_binary_dragonfly_datetime() {
+    run_dragonfly_filter_test("dragonfly-dt", "dt-test", common::write_datetime_project);
+}
+
+/// Full-text — a `text` field indexed as TEXT, `@body:quick` prefilter.
+#[test]
+fn test_binary_dragonfly_fulltext() {
+    run_dragonfly_filter_test(
+        "dragonfly-text",
+        "text-test",
+        common::write_fulltext_project,
+    );
+}
+
+// NOTE: geo-radius is intentionally NOT tested — Dragonfly Search's geo-query
+// parser rejects the `$param` placeholders the shared RediSearch filter builder
+// emits (verified live), so geo filtering is unsupported here (like Chroma/Milvus).
+
+/// Multi-condition AND (keyword AND numeric range).
+#[test]
+fn test_binary_dragonfly_and_filter() {
+    run_dragonfly_filter_test(
+        "dragonfly-and",
+        "and-test",
+        common::write_and_filter_project,
+    );
+}
+
+/// Multi-condition OR (union).
+#[test]
+fn test_binary_dragonfly_or_filter() {
+    run_dragonfly_filter_test("dragonfly-or", "or-test", common::write_or_filter_project);
+}
+
+/// Nested boolean `(A AND B) OR (C AND D)`.
+#[test]
+fn test_binary_dragonfly_nested_filter() {
+    run_dragonfly_filter_test(
+        "dragonfly-nested",
+        "nested-test",
+        common::write_nested_filter_project,
     );
 }
 
