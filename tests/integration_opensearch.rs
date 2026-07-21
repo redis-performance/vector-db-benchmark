@@ -765,6 +765,46 @@ fn test_binary_opensearch_bool() {
     assert!(recall >= 0.9, "opensearch bool recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies OpenSearch
+/// composes two conditions of different types into one `bool.filter` array
+/// (term on `color` AND range on `size`), not just a single clause.
+#[test]
+fn test_binary_opensearch_and_filter() {
+    wait_for_opensearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-and", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_and_filter_project(
+        "and-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-and",
+            "and-test",
+            "http://127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_and")
+            ],
+        ),
+        "opensearch and-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "os-and");
+    println!("opensearch and-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "opensearch and-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Datetime range filter end-to-end. Regression for the schema-type bug:
 /// "datetime" is not a valid OS type; with "datetime" -> "date" OS parses the
 /// reader's ISO-8601 strings and selects the [day 100, day 300) window.

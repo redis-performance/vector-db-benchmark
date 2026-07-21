@@ -488,6 +488,46 @@ fn test_binary_milvus_bool() {
     assert!(recall >= 0.9, "milvus bool recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies Milvus
+/// composes two conditions of different types into one boolean-expr `&&`
+/// (`color == "red" && size >= 50`), not just a single clause.
+#[test]
+fn test_binary_milvus_and_filter() {
+    wait_for_milvus();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-and", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj = common::write_and_filter_project(
+        "and-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-and",
+            "and-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_and")
+            ],
+        ),
+        "milvus and-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "milvus-and");
+    println!("milvus and-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "milvus and-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Datetime range filter end-to-end. Regression: `"datetime"` was dropped from
 /// the schema and the range builder inlined the quoted ISO string. Now
 /// `datetime` -> Int64 epoch column; upload and the range filter both convert
