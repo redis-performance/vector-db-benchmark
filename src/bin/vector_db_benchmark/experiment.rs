@@ -259,7 +259,15 @@ pub fn run(args: &Args) -> Result<(), String> {
         None
     };
 
-    'experiments: for (_engine_name, engine_config) in &engines {
+    let num_engine_configs = engines.len();
+    'experiments: for (engine_idx, (_engine_name, engine_config)) in engines.iter().enumerate() {
+        // On a multi-config sweep, `--keep-data` must keep only ONE config's data
+        // resident at a time — otherwise every config's copy of the (identical)
+        // corpus accumulates and OOMs a memory-bounded server (#184). So only the
+        // LAST config keeps its data; earlier configs tear down after finishing,
+        // even under `--keep-data`. (A full M×EF sweep runs every config over the
+        // same datasets, so the last config is the last to touch each dataset.)
+        let is_last_config = engine_idx + 1 == num_engine_configs;
         // Apply --skip-vector-index: override name and set flag on config
         let mut engine_config = (*engine_config).clone();
         if args.skip_vector_index {
@@ -310,7 +318,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             let mut engine = create_engine(&engine_config, &args.host)?;
 
             // Run experiment phases
-            if let Err(e) = run_single_experiment(&mut *engine, &dataset, args) {
+            if let Err(e) = run_single_experiment(&mut *engine, &dataset, args, is_last_config) {
                 eprintln!("Experiment failed: {}", e);
                 if args.exit_on_error {
                     pb.finish_and_clear();
@@ -351,7 +359,12 @@ fn run_single_experiment(
     engine: &mut dyn Engine,
     dataset: &Dataset,
     args: &Args,
+    is_last_config: bool,
 ) -> Result<(), String> {
+    // `--keep-data` only skips cleanup for the LAST config in a sweep; earlier
+    // configs still tear down so their (identical) corpus copy doesn't accumulate
+    // and OOM the server (#184). For a single-config run this is always the last.
+    let keep_data = args.keep_data && is_last_config;
     // Check if we should skip
     if args.skip_if_exists {
         let glob_pattern = format!("{}-{}-upload-*.json", engine.name(), dataset.config.name);
@@ -448,10 +461,17 @@ fn run_single_experiment(
                      skipping search (no filter conditions possible)",
                     dataset.config.name
                 );
-                if args.keep_data {
+                if keep_data {
                     println!("Experiment stage: Keep data (cleanup skipped)");
                 } else {
-                    println!("Experiment stage: Cleanup (deleting index and data)");
+                    if args.keep_data {
+                        println!(
+                            "Experiment stage: Cleanup (multi-config --keep-data: freeing this \
+                             config's data before the next; only the last config's data is kept)"
+                        );
+                    } else {
+                        println!("Experiment stage: Cleanup (deleting index and data)");
+                    }
                     engine.delete()?;
                 }
                 println!("Experiment stage: Done");
@@ -858,11 +878,20 @@ fn run_single_experiment(
         )?;
     }
 
-    // Cleanup unless the caller wants to reuse the populated index.
-    if args.keep_data {
+    // Cleanup unless the caller wants to reuse the populated index. On a
+    // multi-config sweep `--keep-data` keeps only the LAST config's data; earlier
+    // configs tear down here so their corpus copy doesn't accumulate (#184).
+    if keep_data {
         println!("Experiment stage: Keep data (cleanup skipped)");
     } else {
-        println!("Experiment stage: Cleanup (deleting index and data)");
+        if args.keep_data {
+            println!(
+                "Experiment stage: Cleanup (multi-config --keep-data: freeing this config's data \
+                 before the next; only the last config's data is kept)"
+            );
+        } else {
+            println!("Experiment stage: Cleanup (deleting index and data)");
+        }
         engine.delete()?;
     }
 

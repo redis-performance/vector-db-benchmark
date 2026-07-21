@@ -2299,6 +2299,75 @@ fn test_binary_redis_or_filter() {
     run_filter_recall_test("redis-or", "or-test", common::write_or_filter_project);
 }
 
+/// Regression for #184: a multi-config sweep with `--keep-data` must keep only
+/// the LAST config's data resident, not accumulate every config's copy (which
+/// OOMs a memory-bounded server). Runs a 2-config sweep with `--keep-data` and
+/// asserts exactly ONE FT index survives (the last config's) — the buggy
+/// behaviour left both, and the total keyspace stays at one config's size.
+#[test]
+fn test_binary_redis_keep_data_sweep_frees_prior_configs() {
+    wait_for_redis();
+    let mut conn = get_test_connection();
+    flush_db(&mut conn);
+
+    let dim = 8;
+    // Two configs over the SAME dataset — a minimal M×EF sweep. Distinct names →
+    // distinct per-config index/keyspace (idx:redis-sweepa / idx:redis-sweepb).
+    let configs = serde_json::json!([
+        {
+            "name": "redis-sweepa", "engine": "redis",
+            "search_params": [{"parallel": 1, "search_params": {"ef": 128}}],
+            "upload_params": {"parallel": 1, "batch_size": 200}
+        },
+        {
+            "name": "redis-sweepb", "engine": "redis",
+            "search_params": [{"parallel": 1, "search_params": {"ef": 128}}],
+            "upload_params": {"parallel": 1, "batch_size": 200}
+        }
+    ]);
+    let proj =
+        common::write_bool_project("sweep-test", &serde_json::to_string(&configs).unwrap(), dim);
+
+    // `redis-sweep*` matches both configs; `--keep-data` would (pre-fix) leave
+    // both configs' data behind.
+    assert!(
+        common::run_binary_extra(
+            &proj.root,
+            "redis-sweep*",
+            "sweep-test",
+            "localhost",
+            &[("REDIS_PORT", &TEST_PORT.to_string())],
+            &["--keep-data"],
+        ),
+        "redis keep-data sweep run failed"
+    );
+
+    // Exactly one FT index must remain (the last config's); the first config's
+    // was torn down despite --keep-data. Pre-fix this was 2.
+    let indexes: Vec<String> = redis::cmd("FT._LIST").query(&mut conn).unwrap_or_default();
+    let sweep_indexes: Vec<&String> = indexes
+        .iter()
+        .filter(|i| i.contains("sweepa") || i.contains("sweepb"))
+        .collect();
+    println!("surviving sweep indexes: {:?}", sweep_indexes);
+    assert_eq!(
+        sweep_indexes.len(),
+        1,
+        "expected exactly 1 surviving sweep index (only the last config kept), got {:?}",
+        sweep_indexes
+    );
+
+    // And the keyspace holds one config's docs, not two (the memory symptom).
+    let dbsize: i64 = redis::cmd("DBSIZE").query(&mut conn).unwrap_or(0);
+    println!("dbsize after keep-data sweep: {}", dbsize);
+    assert!(
+        dbsize <= 600,
+        "keyspace should hold ~one config's 400 docs, not two configs' 800 (got {dbsize})"
+    );
+
+    flush_db(&mut conn);
+}
+
 /// Nested boolean: `(color==red AND size>=50) OR (color==blue AND size<10)` —
 /// verifies the parser recurses into grouped sub-conditions (parenthesised
 /// RediSearch clause) instead of flattening the tree. A flattening parser matches
