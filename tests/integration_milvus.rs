@@ -488,6 +488,40 @@ fn test_binary_milvus_bool() {
     assert!(recall >= 0.9, "milvus bool recall {:.3} < 0.9", recall);
 }
 
+/// UUID exact-match filter end-to-end. Regression: `uuid` hit the schema map's
+/// `_ => continue`, so no field was created and the filter silently broke. Now
+/// `uuid` -> VarChar (no analyzer, exact match), and `uid == UUIDS[0]` selects
+/// the quarter of docs it should.
+#[test]
+fn test_binary_milvus_uuid() {
+    wait_for_milvus();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-uuid", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj =
+        common::write_uuid_project("uuid-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-uuid",
+            "uuid-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_uuid")
+            ],
+        ),
+        "milvus uuid run failed"
+    );
+    let recall = common::read_recall(&proj.root, "milvus-uuid");
+    println!("milvus uuid recall={:.3}", recall);
+    assert!(recall >= 0.9, "milvus uuid recall {:.3} < 0.9", recall);
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies Milvus
 /// composes two conditions of different types into one boolean-expr `&&`
 /// (`color == "red" && size >= 50`), not just a single clause.

@@ -541,6 +541,37 @@ fn test_binary_pgvector_match_any() {
     );
 }
 
+/// UUID exact-match filter end-to-end. Regression for the schema-type bug:
+/// `uuid` hit `pg_column_type`'s `_ => None`, so no column was created and the
+/// filter referenced a missing column. With `uuid` -> TEXT the exact `=` match
+/// selects the quarter of docs whose `uid` equals UUIDS[0].
+#[test]
+fn test_binary_pgvector_uuid() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-uuid", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_uuid_project("uuid-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-uuid",
+            "uuid-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector uuid run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-uuid");
+    println!("pgvector uuid recall={:.3}", recall);
+    assert!(recall >= 0.9, "pgvector uuid recall {:.3} < 0.9", recall);
+}
+
 /// Bool-field equality filter end-to-end. Regression for the missing-column bug:
 /// `pg_column_type("bool")` returned None so no column was created and the filter
 /// referenced a non-existent column (SQL error). With a BOOLEAN column, COPY

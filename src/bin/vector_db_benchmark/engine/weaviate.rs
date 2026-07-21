@@ -420,6 +420,11 @@ fn weaviate_property(field_name: &str, field_type: &str) -> Option<serde_json::V
         // compares date properties via valueText (there is no ValueDate variant).
         "bool" => "boolean",
         "datetime" => "date",
+        // A `uuid` is an exact-match opaque string → a `text` property with
+        // `field` tokenization (whole-value equality, like keyword). Without this
+        // arm it hit `_ => return None`, so no property was created and every
+        // uuid filter silently broke.
+        "uuid" => "text",
         _ => return None,
     };
     let mut prop = serde_json::json!({
@@ -434,7 +439,9 @@ fn weaviate_property(field_name: &str, field_type: &str) -> Option<serde_json::V
     // `field` tokenization for keyword; keep `word` for full-text. Tokenization
     // and `indexSearchable` apply only to text-backed properties.
     if let Some(tok) = match field_type {
-        "keyword" => Some("field"),
+        // `uuid` needs whole-value equality just like keyword, so force `field`
+        // tokenization (default `word` would turn `Equal` into token-containment).
+        "keyword" | "uuid" => Some("field"),
         "text" => Some("word"),
         _ => None,
     } {

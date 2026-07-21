@@ -22,7 +22,10 @@ use vector_db_benchmark::readers::metadata::{
 /// types pgvector can't filter on with a plain scalar column (e.g. geo).
 fn pg_column_type(field_type: &str) -> Option<&'static str> {
     match field_type {
-        "keyword" | "text" => Some("TEXT"),
+        // A `uuid` is an exact-match opaque string; store it in a TEXT column
+        // (exact `=` match, like keyword). Without this arm it hit `_ => None`,
+        // so no column was created and every uuid filter silently broke.
+        "keyword" | "text" | "uuid" => Some("TEXT"),
         "int" => Some("BIGINT"),
         "float" => Some("DOUBLE PRECISION"),
         // Bools/datetimes arrive from the reader as strings ("true"/"false",
@@ -897,6 +900,7 @@ mod tests {
         assert_eq!(pg_column_type("datetime"), Some("TIMESTAMPTZ"));
         // Geo is now stored as a "lat,lon" TEXT scalar (earthdistance filter).
         assert_eq!(pg_column_type("geo"), Some("TEXT"));
+        assert_eq!(pg_column_type("uuid"), Some("TEXT"));
         assert_eq!(pg_column_type("unknown"), None);
     }
 
