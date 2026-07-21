@@ -19,6 +19,7 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 | **Turbopuffer** | `turbopuffer-client` 0.0.4 | HTTP/REST (cloud) | Cosine, Euclidean | Yes |
 | **Dragonfly** (Dragonfly Search) | `redis` 1.3 | RESP protocol | L2, Cosine, IP | No [\*\*\*](#dragonfly-note) |
 | **Vertex AI** (Vector Search) | `reqwest` (Vertex AI REST v1) | HTTP/REST (cloud) | L2, Cosine, Dot | Yes [\*\*\*\*](#vertex-note) |
+| **Chroma** | `reqwest` (Chroma v2 REST API) | HTTP/REST | L2, Cosine, IP | Yes [\*\*\*\*\*](#chroma-note) |
 
 <a id="valkey-client-note"></a>
 \* **Valkey client note:** Valkey GLIDE has no published Rust crate ([valkey-io/valkey-glide#828](https://github.com/valkey-io/valkey-glide/issues/828), closed NOT_PLANNED). The GLIDE maintainers recommend using `redis-rs` for Rust and upstream their improvements to it. The `redis` crate works with Valkey since it speaks the same RESP protocol.
@@ -31,6 +32,9 @@ A benchmarking tool for vector databases, written in Rust. Measures upload throu
 
 <a id="vertex-note"></a>
 \*\*\*\* **Vertex AI note:** Uses **Vertex AI Vector Search** (Google Cloud) — a STREAM_UPDATE tree-AH index streamed with `upsertDatapoints`, queried with `findNeighbors`. Cloud-only (no local server), like Turbopuffer. **Metadata filters** are supported: on upload, string/`labels` fields become categorical `restricts` and int/float fields become `numericRestricts` on each datapoint; on query, `match`/`range` conditions translate to Vertex query restrictions over REST **and** both gRPC transports. Vertex restrictions AND across fields and OR within a field's `allowList`, so an `and` of per-field conditions maps directly — but a filter Vertex cannot express (cross-field `or`, nested boolean, a numeric `match_any` IN-list, or geo) is a **hard error** rather than a silently partial filter. **Mixed workload** (`--update-search-ratio`) is supported: each worker interleaves S `findNeighbors` searches with U single-datapoint `upsertDatapoints` updates, reporting search recall/latency alongside update RPS/latency. Required: `VERTEX_PROJECT`; auth is `VERTEX_ACCESS_TOKEN` if set, else `gcloud auth print-access-token`. Optional: `VERTEX_REGION` (default `us-central1`), `VERTEX_MACHINE_TYPE` (default `e2-standard-16`), `VERTEX_DEPLOY_TIMEOUT_SECS` (default `3600`), and index-tuning knobs `VERTEX_APPROX_NEIGHBORS` / `VERTEX_LEAF_EMBEDDING_COUNT` / `VERTEX_LEAF_SEARCH_PERCENT`. **Deploying an index takes tens of minutes**; to skip the create+deploy step, point at an already-deployed index with `VERTEX_INDEX`, `VERTEX_INDEX_ENDPOINT`, and `VERTEX_DEPLOYED_INDEX_ID` (in that case the tool leaves those resources in place on cleanup). Query-time recall/latency is tuned per search config via `search_params.fraction_leaf_nodes_to_search_override` (0..1). Upload streams `upsertDatapoints` concurrently (`upload_params.parallel`); each `upsertDatapoints` request is bounded by payload size, so **very wide datasets may need a smaller `batch_size`** than the default 1000 to stay under the request limit.
+
+<a id="chroma-note"></a>
+\*\*\*\*\* **Chroma note:** Uses **Chroma** (OSS) via its **v2 REST API** — a collection of records (`ids` + `embeddings` + scalar `metadatas`) queried with `query` + a `where` document. **Metadata filters** map directly onto the canonical model: `match` → `$eq`, `match_any` → `$in`, `range` → `$gte`/`$gt`/`$lte`/`$lt`, and **AND / OR / nested boolean** to Chroma's native `$and` / `$or` (which nest arbitrarily). Supported datatypes: **keyword, int, float, bool, uuid, datetime** (stored as epoch-seconds int, like Milvus, so numeric range operators apply). **NOT supported** by Chroma's metadata engine (those conditions are dropped, like Dragonfly's documented limits): **geo-radius**, **full-text** (`where_document` is document-body search, not a metadata filter), and multi-valued **`labels` arrays** (Chroma metadata values are scalar only). Runs over HTTP/REST via Docker; set the host port with `CHROMA_PORT` (default `8000`, test compose maps `8003`), and optionally `CHROMA_COLLECTION` / `CHROMA_TENANT` / `CHROMA_DATABASE`. Distance space (`l2`/`cosine`/`ip`) is set per collection from the dataset metric.
 
 <details>
 <summary><b>Runbook: benchmarking against Vertex AI</b></summary>
@@ -321,20 +325,39 @@ cargo run --release --bin generate-dataset          # writes into ./datasets
 cargo run --release --bin generate-dataset -- --only sparse --out-dir /tmp/ds
 ```
 
-This writes three datasets under `datasets/` (each in the exact on-disk layout
+This writes four datasets under `datasets/` (each in the exact on-disk layout
 its reader expects), registered in [`datasets/datasets.json`](./datasets/datasets.json):
 
-| Dataset                | Type     | Dims | Distance | Layout                                                                                  |
-| ---------------------- | -------- | ---: | -------- | --------------------------------------------------------------------------------------- |
-| `synthetic-sparse-300` | `sparse` |  300 | dot      | `data.csr` + `queries.csr` + `neighbours.jsonl` (dot/MIPS ground truth)                 |
-| `synthetic-hybrid-16`  | `hybrid` |   16 | l2       | `vectors.npy` + `queries.npy` + `data.csr` + `queries.csr` + shared `neighbours.jsonl`  |
-| `synthetic-filter-32`  | `tar`    |   32 | l2       | `vectors.npy` + `payloads.jsonl` + `tests.jsonl` (per-query `conditions` + filtered GT) |
+| Dataset                     | Type     | Dims | Distance | Layout                                                                                  |
+| --------------------------- | -------- | ---: | -------- | --------------------------------------------------------------------------------------- |
+| `synthetic-sparse-300`      | `sparse` |  300 | dot      | `data.csr` + `queries.csr` + `neighbours.jsonl` (dot/MIPS ground truth)                 |
+| `synthetic-hybrid-16`       | `hybrid` |   16 | l2       | `vectors.npy` + `queries.npy` + `data.csr` + `queries.csr` + shared `neighbours.jsonl`  |
+| `synthetic-filter-32`       | `tar`    |   32 | l2       | `vectors.npy` + `payloads.jsonl` + `tests.jsonl` (per-query `conditions` + filtered GT) |
+| `synthetic-selectivity-32`  | `tar`    |   32 | l2       | `vectors.npy` + `payloads.jsonl` + `tests.jsonl` (one `rank < K` range query per selectivity rung) |
 
 `synthetic-filter-32`'s per-query `conditions` rotate through **keyword**, **int**,
 **bool** and **datetime** filters (schema `color:keyword, size:int, flag:bool, ts:datetime`),
 each with ground truth brute-forced over only the matching documents, so a high
-recall proves the engine actually applied the filter. The generated files are
-git-ignored — regenerate them on any checkout with the command above.
+recall proves the engine actually applied the filter. `synthetic-selectivity-32`
+(2000 docs) instead holds one `rank < K` range query per rung of a **selectivity
+ladder** (1% / 2% / 5% / 10% / 25% / 50% / 90%), each row annotated with its
+`selectivity` / `n_matching`, so recall/latency can be reported as a function of
+filter selectivity. The generated files are git-ignored — regenerate them on any
+checkout with the command above.
+
+### Filter features
+
+Across the filtering engines, metadata `conditions` support the datatypes
+**keyword**, **int**, **float**, **bool**, **datetime** (ISO-8601 range),
+**uuid**, **geo-radius**, and **full-text**; the compositions **`match`** (exact),
+**`match_any`** (IN-set), **`range`**, and boolean **AND**, **OR**, and
+**nested/grouped** trees (e.g. `(A∧B)∨(C∧D)`); plus **multi-tenancy** (per-tenant
+scoped filters). Not every engine supports every feature natively — see each
+engine's note above for its exceptions (e.g. Dragonfly is KNN-only; Chroma has no
+geo/full-text/array metadata; Vertex errors on cross-field `or`/nested/geo). Each
+`(engine × feature)` combination is covered by an end-to-end `tests/integration_*`
+recall test that scores against filtered brute-force ground truth, so an engine
+that silently drops or mis-applies a filter fails its test.
 
 Example runs against a generated dataset (start the engine first, e.g.
 `docker compose -f tests/docker-compose.test.yml up -d qdrant redis`):

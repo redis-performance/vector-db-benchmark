@@ -140,6 +140,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         "turbopuffer",
         "dragonfly",
         "vertex",
+        "chroma",
     ];
     let mut engines: Vec<_> = engine_configs
         .iter()

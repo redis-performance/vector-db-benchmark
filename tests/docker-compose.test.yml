@@ -175,3 +175,14 @@ services:
       interval: 1s
       timeout: 3s
       retries: 10
+
+  chroma:
+    image: chromadb/chroma:1.0.0
+    environment:
+      ANONYMIZED_TELEMETRY: "False"
+    ports:
+      - "8003:8000"
+    # The Chroma image is minimal (no curl/wget/python for a shell healthcheck)
+    # and ships no built-in HEALTHCHECK, so `up --wait` only waits for the
+    # container to be running; the integration test's wait_for_chroma() polls
+    # /api/v2/heartbeat (60s deadline) for actual readiness.
