@@ -692,6 +692,41 @@ fn test_binary_qdrant_match_any() {
     assert!(recall >= 0.9, "qdrant match_any recall {:.3} < 0.9", recall);
 }
 
+/// Geo-radius filter end-to-end (previously untested for qdrant). `geo` -> a Geo
+/// payload index + `Condition::geo_radius`; recall vs haversine ground truth.
+#[test]
+fn test_binary_qdrant_geo() {
+    wait_for_qdrant();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-geo", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_geo_project("geo-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-geo",
+            "geo-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant geo run failed"
+    );
+    let recall = common::read_recall(&proj.root, "qdrant-geo");
+    println!("qdrant geo recall={:.3}", recall);
+    assert!(recall >= 0.9, "qdrant geo recall {:.3} < 0.9", recall);
+}
+
 /// Control for the multi-valued `labels` fixture (#88). Qdrant already stores
 /// `labels` as a native list payload and matches per element, so it must clear
 /// 0.9 recall. If this fails alongside the Milvus/Weaviate/pgvector labels
