@@ -881,6 +881,48 @@ pub fn write_or_filter_project(
     )
 }
 
+/// Nested/grouped boolean fixture: `(color == "red" AND size >= 50) OR
+/// (color == "blue" AND size < 10)`. The condition is a top-level `or` whose two
+/// arms are themselves `and` GROUPS — a genuine two-level tree that CANNOT be
+/// flattened to top-level and/or without changing its meaning. A parser that
+/// mis-flattens it (the historical behaviour) matches a wildly different doc set
+/// — an OR-of-all-leaves matches ~everything, an AND-of-all-leaves matches
+/// nothing (color can't be both red and blue) — so either way its nearest
+/// neighbours diverge from the ~120-doc nested set and recall collapses.
+pub fn write_nested_filter_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        serde_json::json!({ "color": "keyword", "size": "int" }),
+        move |id| {
+            serde_json::json!({
+                "color": if id % 2 == 0 { "red" } else { "blue" },
+                "size": (id % 100) as i64,
+            })
+        },
+        serde_json::json!({ "or": [
+            { "and": [
+                { "color": { "match": { "value": "red" } } },
+                { "size": { "range": { "gte": 50 } } },
+            ] },
+            { "and": [
+                { "color": { "match": { "value": "blue" } } },
+                { "size": { "range": { "lt": 10 } } },
+            ] },
+        ] }),
+        move |id| {
+            let size = (id % 100) as i64;
+            (id % 2 == 0 && size >= 50) || (id % 2 == 1 && size < 10)
+        },
+    )
+}
+
 // ── Selectivity-ladder fixture ──────────────────────────────────────────────
 //
 // The #1 methodology idea shared by VectorDBBench, Pinecone VSB and qdrant's

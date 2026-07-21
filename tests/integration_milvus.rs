@@ -662,6 +662,49 @@ fn test_binary_milvus_fulltext() {
     assert!(recall >= 0.9, "milvus fulltext recall {:.3} < 0.9", recall);
 }
 
+/// Nested/grouped boolean filter end-to-end:
+/// `(color == "red" && size >= 50) || (color == "blue" && size < 10)`. Verifies
+/// the Milvus builder RECURSES into each `{and:[...]}` group and emits a
+/// PARENTHESISED sub-expression combined by `||`, instead of mis-flattening the
+/// nested tree (which drops the group clauses → returns every row → recall
+/// collapses). A live recall >= 0.9 proves the grouped union is correct.
+#[test]
+fn test_binary_milvus_nested_filter() {
+    wait_for_milvus();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-nested", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj = common::write_nested_filter_project(
+        "nested-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-nested",
+            "nested-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_nested")
+            ],
+        ),
+        "milvus nested-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "milvus-nested");
+    println!("milvus nested-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "milvus nested-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88).
 /// Milvus stores it as an Array(VarChar) and filters with
 /// `array_contains_any`; before the fix it was a comma-joined VarChar tested

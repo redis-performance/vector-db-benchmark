@@ -739,6 +739,45 @@ fn test_binary_pgvector_or_filter() {
     );
 }
 
+/// Nested/grouped boolean filter `(color==red AND size>=50) OR (color==blue AND
+/// size<10)` — verifies pgvector recurses into each nested AND-group and emits a
+/// parenthesised SQL sub-expression per group, instead of mis-flattening the tree
+/// into a single flat disjunction (which selects a wildly different doc set and
+/// collapses recall).
+#[test]
+fn test_binary_pgvector_nested_filter() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-nested", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_nested_filter_project(
+        "nested-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-nested",
+            "nested-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector nested run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-nested");
+    println!("pgvector nested-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector nested-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies pgvector
 /// composes two clauses into one SQL WHERE (`"color" = $1 AND "size" >= $2`).
 #[test]

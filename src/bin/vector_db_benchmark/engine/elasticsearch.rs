@@ -513,6 +513,20 @@ fn build_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let mut filters = Vec::new();
     for entry in entries {
         if let Some(entry_obj) = entry.as_object() {
+            // Nested group: an array element that is itself a `{and:[...]}` /
+            // `{or:[...]}` sub-tree (not a field leaf). Recurse via
+            // parse_es_conditions to build the sub-group as its OWN nested
+            // `{bool:{must|should}}` query and push that as a single clause, so
+            // ES nests the group natively instead of flattening its leaves up
+            // into the parent's must/should (which would union/intersect the
+            // wrong set — e.g. `(a AND b) OR (c AND d)` mis-flattened to
+            // `a OR b OR c OR d`).
+            if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+                if let Some(sub) = parse_es_conditions(entry) {
+                    filters.push(sub);
+                }
+                continue;
+            }
             for (field_name, field_filters) in entry_obj {
                 if let Some(filter_obj) = field_filters.as_object() {
                     for (condition_type, criteria) in filter_obj {
@@ -1288,6 +1302,45 @@ mod tests {
         assert_eq!(bool_query["should"].as_array().unwrap().len(), 1);
         // minimum_should_match:1 keeps the OR restrictive even alongside must.
         assert_eq!(bool_query["minimum_should_match"], 1);
+    }
+
+    // Nested/grouped boolean: `(color==red AND size>=50) OR (color==blue AND
+    // size<10)` must nest each AND-group as its OWN `{bool:{must:[...]}}` inside
+    // the parent `should`, NOT flatten the four leaves up into one should
+    // (which would union the wrong set → recall collapse).
+    #[test]
+    fn es_nested_or_of_and_groups_nests_natively() {
+        let conditions = serde_json::json!({
+            "or": [
+                { "and": [
+                    {"color": {"match": {"value": "red"}}},
+                    {"size": {"range": {"gte": 50}}}
+                ]},
+                { "and": [
+                    {"color": {"match": {"value": "blue"}}},
+                    {"size": {"range": {"lt": 10}}}
+                ]}
+            ]
+        });
+        let parsed = parse_es_conditions(&conditions).expect("nested filter must parse");
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "bool": {
+                    "should": [
+                        {"bool": {"must": [
+                            {"match": {"color": "red"}},
+                            {"range": {"size": {"gte": 50}}}
+                        ]}},
+                        {"bool": {"must": [
+                            {"match": {"color": "blue"}},
+                            {"range": {"size": {"lt": 10}}}
+                        ]}}
+                    ],
+                    "minimum_should_match": 1
+                }
+            })
+        );
     }
 
     #[test]

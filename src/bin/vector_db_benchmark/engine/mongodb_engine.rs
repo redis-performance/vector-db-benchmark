@@ -958,7 +958,16 @@ fn parse_mongo_conditions(conditions: &serde_json::Value) -> Option<Document> {
     if obj.is_empty() {
         return None;
     }
+    build_mongo_group(obj)
+}
 
+/// Build one `{and:[...], or:[...]}` group into a MongoDB filter document, using
+/// native `$and`/`$or`. Each array entry is either a field leaf or itself a
+/// nested group (`{and:...}`/`{or:...}`); `build_mongo_filter_entry` recurses
+/// back here for nested groups, so arbitrarily deep boolean trees nest natively
+/// (e.g. `(color==red && size>=50) || (color==blue && size<10)` becomes
+/// `{$or:[{$and:[...]},{$and:[...]}]}`), rather than being flattened.
+fn build_mongo_group(obj: &serde_json::Map<String, serde_json::Value>) -> Option<Document> {
     let mut filter_clauses: Vec<mongodb::bson::Bson> = Vec::new();
 
     if let Some(and_entries) = obj.get("and").and_then(|v| v.as_array()) {
@@ -997,6 +1006,14 @@ fn parse_mongo_conditions(conditions: &serde_json::Value) -> Option<Document> {
 
 fn build_mongo_filter_entry(entry: &serde_json::Value) -> Option<Document> {
     let entry_obj = entry.as_object()?;
+
+    // Nested group: an entry that is itself an `{and:[...]}`/`{or:[...]}` node
+    // (not a field leaf) is built as its own grouped sub-clause via native
+    // `$and`/`$or`, so nested boolean trees nest instead of mis-flattening.
+    if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+        return build_mongo_group(entry_obj);
+    }
+
     let mut clauses = Document::new();
 
     for (field_name, field_filters) in entry_obj {

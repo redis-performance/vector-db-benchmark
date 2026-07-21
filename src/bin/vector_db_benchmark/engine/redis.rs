@@ -970,21 +970,41 @@ fn parse_conditions(conditions: &serde_json::Value) -> Option<ParsedFilter> {
     }
 
     let mut counter: usize = 0;
+    build_group(obj, &mut counter)
+}
 
+/// Build one boolean GROUP (a `{and:[...], or:[...]}` object) into a parenthesised
+/// RediSearch clause. Recursive: an entry inside `and`/`or` may itself be a nested
+/// group, so this and [`build_subfilters`] call each other. Shares `counter`
+/// across the whole tree so param placeholders (`$p0`, `$p1`, …) stay unique.
+fn build_group(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    counter: &mut usize,
+) -> Option<ParsedFilter> {
     let and_entries = obj.get("and").and_then(|v| v.as_array());
     let or_entries = obj.get("or").and_then(|v| v.as_array());
 
-    let and_subfilters = and_entries.map(|entries| build_subfilters(entries, &mut counter));
-    let or_subfilters = or_entries.map(|entries| build_subfilters(entries, &mut counter));
+    let and_subfilters = and_entries.map(|entries| build_subfilters(entries, counter));
+    let or_subfilters = or_entries.map(|entries| build_subfilters(entries, counter));
 
     build_condition(and_subfilters, or_subfilters)
 }
 
-/// Build individual subfilters from an array of condition entries.
+/// Build individual subfilters from an array of condition entries. Each entry is
+/// either a nested boolean group (`{and:[...]}` / `{or:[...]}`) — recursed via
+/// [`build_group`] — or a leaf `{field: {op: criteria}}`.
 fn build_subfilters(entries: &[serde_json::Value], counter: &mut usize) -> Vec<ParsedFilter> {
     let mut filters = Vec::new();
     for entry in entries {
         if let Some(entry_obj) = entry.as_object() {
+            // Nested group: an entry carrying an `and`/`or` key is a sub-tree,
+            // not a field leaf. Recurse and keep it as one parenthesised clause.
+            if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+                if let Some(f) = build_group(entry_obj, counter) {
+                    filters.push(f);
+                }
+                continue;
+            }
             for (field_name, field_filters) in entry_obj {
                 if let Some(filter_obj) = field_filters.as_object() {
                     for (condition_type, criteria) in filter_obj {

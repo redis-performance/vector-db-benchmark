@@ -522,6 +522,16 @@ fn parse_os_conditions(conditions: &serde_json::Value) -> Option<serde_json::Val
         return None;
     }
 
+    build_group(obj)
+}
+
+/// Build one boolean GROUP (a `{and:[...], or:[...]}` object) into an OpenSearch
+/// `{bool: ...}` query. Recursive: an entry inside `and`/`or` may itself be a
+/// nested group, so this and [`build_subfilters`] call each other. A nested group
+/// becomes its own `{bool: ...}` object placed inside the parent's `must`/`should`
+/// array — OpenSearch's native bool nesting — so `(a AND b) OR (c AND d)` is
+/// preserved instead of being silently flattened into one flat clause list.
+fn build_group(obj: &serde_json::Map<String, serde_json::Value>) -> Option<serde_json::Value> {
     let and_filters = obj
         .get("and")
         .and_then(|v| v.as_array())
@@ -555,10 +565,21 @@ fn parse_os_conditions(conditions: &serde_json::Value) -> Option<serde_json::Val
     Some(serde_json::json!({ "bool": bool_query }))
 }
 
+/// Build individual subfilters from an array of condition entries. Each entry is
+/// either a nested boolean group (`{and:[...]}` / `{or:[...]}`) — recursed via
+/// [`build_group`] into a nested `{bool: ...}` — or a leaf `{field: {op: criteria}}`.
 fn build_subfilters(entries: &[serde_json::Value]) -> Vec<serde_json::Value> {
     let mut filters = Vec::new();
     for entry in entries {
         if let Some(entry_obj) = entry.as_object() {
+            // Nested group: an entry carrying an `and`/`or` key is a sub-tree,
+            // not a field leaf. Recurse and nest it as its own `{bool: ...}`.
+            if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+                if let Some(f) = build_group(entry_obj) {
+                    filters.push(f);
+                }
+                continue;
+            }
             for (field_name, field_filters) in entry_obj {
                 if let Some(filter_obj) = field_filters.as_object() {
                     for (condition_type, criteria) in filter_obj {
@@ -1250,6 +1271,40 @@ mod tests {
         assert!(parse_os_conditions(&json!({})).is_none());
         // Present-but-empty sub-arrays should not produce a filter either.
         assert!(parse_os_conditions(&json!({"and": [], "or": []})).is_none());
+    }
+
+    // Nested/grouped boolean filter: `(color==red AND size>=50) OR (color==blue
+    // AND size<10)`. Each OR arm must become its OWN nested `{bool:{must:[...]}}`
+    // inside the outer `should`, NOT be flattened into one flat clause list.
+    #[test]
+    fn nested_group_nests_native_bool() {
+        let conditions = json!({ "or": [
+            { "and": [
+                { "color": { "match": { "value": "red" } } },
+                { "size": { "range": { "gte": 50 } } },
+            ] },
+            { "and": [
+                { "color": { "match": { "value": "blue" } } },
+                { "size": { "range": { "lt": 10 } } },
+            ] },
+        ] });
+        let parsed = parse_os_conditions(&conditions).expect("nested filter must parse");
+        assert_eq!(
+            parsed,
+            json!({ "bool": {
+                "minimum_should_match": 1,
+                "should": [
+                    { "bool": { "must": [
+                        { "match": { "color": "red" } },
+                        { "range": { "size": { "gte": 50 } } },
+                    ] } },
+                    { "bool": { "must": [
+                        { "match": { "color": "blue" } },
+                        { "range": { "size": { "lt": 10 } } },
+                    ] } },
+                ],
+            } })
+        );
     }
 
     #[test]

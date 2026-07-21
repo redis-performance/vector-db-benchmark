@@ -690,6 +690,26 @@ fn test_binary_weaviate_or_filter() {
     );
 }
 
+/// Nested/grouped boolean filter `(color==red AND size>=50) OR (color==blue AND
+/// size<10)` — verifies Weaviate builds each `{and:[...]}` group as its own
+/// native `Filters.And` operand and unions the two under a `Filters.Or`, instead
+/// of mis-flattening the nested tree. A flattening builder would match a wildly
+/// different set and recall would collapse, so recall >= 0.9 proves correct
+/// native nesting.
+#[test]
+fn test_binary_weaviate_nested_filter() {
+    wait_for_weaviate();
+    let proj = common::write_nested_filter_project("nested-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "nested-test", "BenchNested");
+    println!("weaviate nested-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate nested-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies Weaviate
 /// composes two conditions of different types into one `Filters.And` operand
 /// (`Equal color` AND `GreaterThanEqual size`), not just a single clause.

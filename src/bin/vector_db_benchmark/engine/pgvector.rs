@@ -669,12 +669,26 @@ fn parse_pg_conditions(
         next_param: first_param,
         values: Vec::new(),
     };
+
+    let template = build_pg_group(obj, &mut builder)?;
+    Some((template, builder.values))
+}
+
+/// Build the SQL for a `{and:[...], or:[...]}` group. Each `and`/`or` array
+/// becomes a parenthesised sub-expression joined by SQL `AND`/`OR`; the two
+/// groups (when both present) are combined with `AND`. Entries that are
+/// themselves nested groups recurse through `build_pg_entry`, so an arbitrarily
+/// deep tree like `(a AND b) OR (c AND d)` maps to correctly parenthesised SQL.
+fn build_pg_group(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    builder: &mut FilterBuilder,
+) -> Option<String> {
     let mut clauses = Vec::new();
 
     if let Some(and_entries) = obj.get("and").and_then(|v| v.as_array()) {
         let sub: Vec<String> = and_entries
             .iter()
-            .filter_map(|e| build_pg_clause(e, &mut builder))
+            .filter_map(|e| build_pg_entry(e, builder))
             .collect();
         if !sub.is_empty() {
             clauses.push(format!("({})", sub.join(" AND ")));
@@ -684,7 +698,7 @@ fn parse_pg_conditions(
     if let Some(or_entries) = obj.get("or").and_then(|v| v.as_array()) {
         let sub: Vec<String> = or_entries
             .iter()
-            .filter_map(|e| build_pg_clause(e, &mut builder))
+            .filter_map(|e| build_pg_entry(e, builder))
             .collect();
         if !sub.is_empty() {
             clauses.push(format!("({})", sub.join(" OR ")));
@@ -694,8 +708,23 @@ fn parse_pg_conditions(
     if clauses.is_empty() {
         None
     } else {
-        Some((clauses.join(" AND "), builder.values))
+        Some(clauses.join(" AND "))
     }
+}
+
+/// Build one entry of an `and`/`or` array. An entry is EITHER a nested group
+/// (it carries an `and`/`or` key) — built as its own parenthesised sub-clause so
+/// the engine's native SQL grouping preserves precedence — OR a field leaf,
+/// dispatched to `build_pg_clause`. This is the recursion that keeps a
+/// mis-flattening builder from collapsing `(a AND b) OR (c AND d)` into a flat
+/// disjunction.
+fn build_pg_entry(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Option<String> {
+    if let Some(entry_obj) = entry.as_object() {
+        if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+            return build_pg_group(entry_obj, builder).map(|s| format!("({})", s));
+        }
+    }
+    build_pg_clause(entry, builder)
 }
 
 fn build_pg_clause(entry: &serde_json::Value, builder: &mut FilterBuilder) -> Option<String> {
@@ -1123,6 +1152,41 @@ mod tests {
             vec![
                 PgValue::Text("x".to_string()),
                 PgValue::Text("y".to_string())
+            ]
+        );
+    }
+
+    // ── Nested / grouped boolean tree ──────────────────────────────────────
+
+    #[test]
+    fn nested_or_of_and_groups_parenthesises_each_subgroup() {
+        // (color==red AND size>=50) OR (color==blue AND size<10). Each nested
+        // AND-group must become its OWN parenthesised sub-expression so the top
+        // OR does not mis-flatten into `red AND size>=50 OR color==blue AND ...`.
+        let cond = json!({
+            "or": [
+                {"and": [
+                    {"color": {"match": {"value": "red"}}},
+                    {"size": {"range": {"gte": 50}}}
+                ]},
+                {"and": [
+                    {"color": {"match": {"value": "blue"}}},
+                    {"size": {"range": {"lt": 10}}}
+                ]}
+            ]
+        });
+        let (sql, vals) = parse(&cond).unwrap();
+        assert_eq!(
+            sql,
+            "(((\"color\" = $3 AND \"size\" >= $4)) OR ((\"color\" = $5 AND \"size\" < $6)))"
+        );
+        assert_eq!(
+            vals,
+            vec![
+                PgValue::Text("red".to_string()),
+                PgValue::Int(50),
+                PgValue::Text("blue".to_string()),
+                PgValue::Int(10),
             ]
         );
     }
