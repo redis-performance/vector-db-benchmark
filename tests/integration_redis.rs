@@ -2299,11 +2299,13 @@ fn test_binary_redis_or_filter() {
     run_filter_recall_test("redis-or", "or-test", common::write_or_filter_project);
 }
 
-/// Regression for #184: a multi-config sweep with `--keep-data` must keep only
-/// the LAST config's data resident, not accumulate every config's copy (which
-/// OOMs a memory-bounded server). Runs a 2-config sweep with `--keep-data` and
-/// asserts exactly ONE FT index survives (the last config's) — the buggy
-/// behaviour left both, and the total keyspace stays at one config's size.
+/// Regression for #184: a multi-config sweep with `--keep-data
+/// --reset-between-configs` must keep only the LAST config's data resident, not
+/// accumulate every config's copy (which OOMs a memory-bounded server). Runs a
+/// 2-config sweep with both flags and asserts exactly ONE FT index survives (the
+/// last config's) and the keyspace stays at one config's size. (Without
+/// --reset-between-configs, --keep-data keeps both configs coexisting — see
+/// test_binary_redis_coexistence_skip_upload.)
 #[test]
 fn test_binary_redis_keep_data_sweep_frees_prior_configs() {
     wait_for_redis();
@@ -2337,7 +2339,7 @@ fn test_binary_redis_keep_data_sweep_frees_prior_configs() {
             "sweep-test",
             "localhost",
             &[("REDIS_PORT", &TEST_PORT.to_string())],
-            &["--keep-data"],
+            &["--keep-data", "--reset-between-configs"],
         ),
         "redis keep-data sweep run failed"
     );
