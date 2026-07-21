@@ -127,6 +127,14 @@ fn test_binary_chroma_match_any_int() {
     );
 }
 
+/// Full-text: `{match:{text}}` → Chroma `where_document` `$contains` over the
+/// record's uploaded `document` (the text field's value). Even docs contain
+/// "quick"; recall vs the docs that contain the token.
+#[test]
+fn test_binary_chroma_fulltext() {
+    run_filter_recall_test("chroma-text", "text-test", common::write_fulltext_project);
+}
+
 #[test]
 fn test_binary_chroma_and_filter() {
     run_filter_recall_test("chroma-and", "and-test", common::write_and_filter_project);
