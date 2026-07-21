@@ -6,11 +6,11 @@
 //! model (`$eq`/`$in`/`$gte`… leaves, native `$and`/`$or` for AND/OR/NESTED).
 //!
 //! Supported filter datatypes: keyword, int, float, bool, uuid, datetime (stored
-//! as epoch-seconds int, like Milvus), `match_any` (`$in`), and AND/OR/nested
-//! boolean. NOT supported by Chroma's metadata engine (dropped, like Dragonfly's
-//! documented limits): geo-radius, full-text (`where_document` is document-body
-//! search, not a metadata filter), and multi-valued `labels` arrays (Chroma
-//! metadata values are scalar only).
+//! as epoch-seconds int, like Milvus), `match_any` (`$in`), full-text
+//! (`{match:{text}}` → `where_document` `$contains` over the record's uploaded
+//! `document`), and AND/OR/nested boolean. NOT supported by Chroma's metadata
+//! engine (dropped, like Dragonfly's documented limits): geo-radius and
+//! multi-valued `labels` arrays (Chroma metadata values are scalar only).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -281,6 +281,19 @@ fn metadata_to_chroma(
     obj
 }
 
+/// The (deterministic) name of the `text`-typed schema field, if any. Its value
+/// is stored as each record's Chroma `document` so `{match:{text}}` filters can
+/// run as `where_document` `$contains` full-text search.
+fn text_field(schema_types: &HashMap<String, String>) -> Option<String> {
+    let mut names: Vec<&String> = schema_types
+        .iter()
+        .filter(|(_, t)| t.as_str() == "text")
+        .map(|(k, _)| k)
+        .collect();
+    names.sort();
+    names.first().map(|s| s.to_string())
+}
+
 fn insert_batch(
     client: &reqwest::blocking::Client,
     url: &str,
@@ -289,6 +302,8 @@ fn insert_batch(
     metadata: &[Option<MetadataItem>],
     schema_types: &HashMap<String, String>,
 ) -> Result<(), String> {
+    use vector_db_benchmark::readers::metadata::MetadataValue;
+
     let id_strs: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
     let metadatas: Vec<serde_json::Value> = (0..ids.len())
         .map(|i| match &metadata[i] {
@@ -297,11 +312,33 @@ fn insert_batch(
         })
         .collect();
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "ids": id_strs,
         "embeddings": vectors,
         "metadatas": metadatas,
     });
+
+    // Store the text field's value as each record's `document` so full-text
+    // (`where_document` $contains) works. Chroma has one document per record.
+    if let Some(tf) = text_field(schema_types) {
+        let documents: Vec<serde_json::Value> = (0..ids.len())
+            .map(|i| {
+                let s = metadata[i].as_ref().and_then(|m| {
+                    m.fields.iter().find(|(k, _)| k == &tf).and_then(|(_, v)| {
+                        if let MetadataValue::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                });
+                serde_json::Value::String(s.unwrap_or_default())
+            })
+            .collect();
+        body.as_object_mut()
+            .unwrap()
+            .insert("documents".to_string(), serde_json::Value::Array(documents));
+    }
     let resp = client
         .post(url)
         .json(&body)
@@ -452,6 +489,51 @@ fn build_chroma_leaf(
     }
 }
 
+/// Build a Chroma `where_document` from the `{match:{text}}` leaves of the
+/// filter tree (full-text `$contains`), preserving the tree's `$and`/`$or`
+/// structure. Non-text leaves are skipped (they go to the metadata `where`,
+/// which Chroma ANDs with `where_document`). Returns `None` when there are no
+/// text matches. NOTE: because `where` and `where_document` are separate query
+/// params that Chroma ANDs, a filter that ORs a text match with a metadata
+/// condition can't be expressed — such queries aren't emitted by our generators.
+fn build_chroma_where_document(conditions: &serde_json::Value) -> Option<serde_json::Value> {
+    let obj = conditions.as_object()?;
+    let mut clauses = Vec::new();
+    if let Some(items) = obj.get("and").and_then(|v| v.as_array()) {
+        let ops: Vec<serde_json::Value> = items.iter().filter_map(where_document_entry).collect();
+        if let Some(c) = combine(ops, "$and") {
+            clauses.push(c);
+        }
+    }
+    if let Some(items) = obj.get("or").and_then(|v| v.as_array()) {
+        let ops: Vec<serde_json::Value> = items.iter().filter_map(where_document_entry).collect();
+        if let Some(c) = combine(ops, "$or") {
+            clauses.push(c);
+        }
+    }
+    combine(clauses, "$and")
+}
+
+fn where_document_entry(entry: &serde_json::Value) -> Option<serde_json::Value> {
+    let entry_obj = entry.as_object()?;
+    if entry_obj.contains_key("and") || entry_obj.contains_key("or") {
+        return build_chroma_where_document(entry);
+    }
+    let mut ops = Vec::new();
+    for (_field, filter_obj) in entry_obj {
+        if let Some(fo) = filter_obj.as_object() {
+            if let Some(text) = fo
+                .get("match")
+                .and_then(|m| m.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                ops.push(serde_json::json!({ "$contains": text }));
+            }
+        }
+    }
+    combine(ops, "$and")
+}
+
 /// Parse the returned `{ "ids": [[...]] }` (nested per query; we send one query
 /// per request) into ordered i64 ids.
 fn extract_query_ids(resp_body: &serde_json::Value) -> Result<Vec<i64>, String> {
@@ -467,16 +549,23 @@ fn extract_query_ids(resp_body: &serde_json::Value) -> Result<Vec<i64>, String> 
         .collect())
 }
 
-fn build_query_body(query: &[f32], top: usize, where_doc: Option<&serde_json::Value>) -> Vec<u8> {
+fn build_query_body(
+    query: &[f32],
+    top: usize,
+    where_meta: Option<&serde_json::Value>,
+    where_document: Option<&serde_json::Value>,
+) -> Vec<u8> {
     let mut body = serde_json::json!({
         "query_embeddings": [query],
         "n_results": top,
         "include": ["distances"],
     });
-    if let Some(w) = where_doc {
-        body.as_object_mut()
-            .unwrap()
-            .insert("where".to_string(), w.clone());
+    let obj = body.as_object_mut().unwrap();
+    if let Some(w) = where_meta {
+        obj.insert("where".to_string(), w.clone());
+    }
+    if let Some(wd) = where_document {
+        obj.insert("where_document".to_string(), wd.clone());
     }
     serde_json::to_vec(&body).unwrap_or_default()
 }
@@ -539,6 +628,10 @@ impl Engine for ChromaEngine {
             .iter()
             .map(|c| c.as_ref().and_then(build_chroma_where))
             .collect();
+        let where_docs: Vec<Option<serde_json::Value>> = conditions
+            .iter()
+            .map(|c| c.as_ref().and_then(build_chroma_where_document))
+            .collect();
 
         let explicit_top: Option<usize> = params.top.map(|t| t as usize);
         let num_to_run = if num_queries > 0 {
@@ -560,7 +653,14 @@ impl Engine for ChromaEngine {
             })
             .collect();
         let bodies: Vec<Vec<u8>> = (0..num_to_run)
-            .map(|idx| build_query_body(&queries[idx], tops[idx], wheres[idx].as_ref()))
+            .map(|idx| {
+                build_query_body(
+                    &queries[idx],
+                    tops[idx],
+                    wheres[idx].as_ref(),
+                    where_docs[idx].as_ref(),
+                )
+            })
             .collect();
 
         let query_idx = Arc::new(AtomicUsize::new(0));
@@ -727,9 +827,29 @@ mod tests {
     }
 
     #[test]
-    fn geo_and_fulltext_are_dropped() {
+    fn geo_is_dropped_and_text_leaves_the_metadata_where() {
+        // geo is unsupported; a text match is NOT a metadata `where` leaf (it is
+        // routed to `where_document` instead — see next test).
         assert!(build_chroma_leaf("loc", "geo", &json!({"lat":1,"lon":2,"radius":5})).is_none());
         assert!(build_chroma_leaf("body", "match", &json!({"text":"quick"})).is_none());
+    }
+
+    #[test]
+    fn fulltext_routes_to_where_document_contains() {
+        let cond = json!({"and":[{"body":{"match":{"text":"quick"}}}]});
+        // Metadata where is empty (the text leaf is not a metadata condition)...
+        assert!(build_chroma_where(&cond).is_none());
+        // ...and the full-text clause becomes a where_document $contains.
+        assert_eq!(
+            build_chroma_where_document(&cond).unwrap(),
+            json!({"$contains":"quick"})
+        );
+    }
+
+    #[test]
+    fn where_document_none_without_text() {
+        let cond = json!({"and":[{"color":{"match":{"value":"red"}}}]});
+        assert!(build_chroma_where_document(&cond).is_none());
     }
 
     #[test]
