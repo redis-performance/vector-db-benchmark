@@ -769,6 +769,50 @@ fn test_binary_qdrant_and_filter() {
     );
 }
 
+/// Selectivity ladder: one `rank < K` range query per rung, sweeping filter
+/// selectivity from ~3% to ~99% in a single dataset. Verifies qdrant's
+/// filterable HNSW keeps recall across the whole selectivity range (recall vs
+/// per-rung ground truth), not just at one operating point.
+#[test]
+fn test_binary_qdrant_selectivity() {
+    wait_for_qdrant();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-sel", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_selectivity_project(
+        "sel-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-sel",
+            "sel-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant selectivity run failed"
+    );
+    let recall = common::read_recall(&proj.root, "qdrant-sel");
+    println!("qdrant selectivity recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "qdrant selectivity recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Control for the multi-valued `labels` fixture (#88). Qdrant already stores
 /// `labels` as a native list payload and matches per element, so it must clear
 /// 0.9 recall. If this fails alongside the Milvus/Weaviate/pgvector labels

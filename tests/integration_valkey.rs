@@ -1394,6 +1394,14 @@ fn test_binary_valkey_and_filter() {
     run_filter_recall_test("valkey-and", "and-test", common::write_and_filter_project);
 }
 
+/// Selectivity ladder: one `rank < K` range query per rung, sweeping filter
+/// selectivity from ~3% to ~99% in a single dataset. Verifies the numeric-range
+/// filter path stays correct across the whole selectivity range.
+#[test]
+fn test_binary_valkey_selectivity() {
+    run_filter_recall_test("valkey-sel", "sel-test", common::write_selectivity_project);
+}
+
 /// Multi-tenancy: many tenants share ONE index and every query is scoped to a
 /// single tenant via a keyword-equality filter on a `tenant` field, with ground
 /// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG

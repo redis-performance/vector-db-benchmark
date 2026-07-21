@@ -1073,6 +1073,40 @@ fn test_binary_elasticsearch_and_filter() {
     assert!(recall >= 0.9, "es and-filter recall {:.3} < 0.9", recall);
 }
 
+/// Selectivity ladder: one `rank < K` range query per rung, sweeping filter
+/// selectivity from ~3% to ~99% in a single dataset. Verifies ES's pre-filtered
+/// kNN keeps recall across the whole selectivity range (recall vs per-rung
+/// ground truth), not just at one operating point.
+#[test]
+fn test_binary_elasticsearch_selectivity() {
+    wait_for_elasticsearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "es-sel", "engine": "elasticsearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_selectivity_project(
+        "sel-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "es-sel",
+            "sel-test",
+            "127.0.0.1",
+            &[("ELASTIC_PORT", "9201"), ("ELASTIC_INDEX", "bench_sel")],
+        ),
+        "es selectivity run failed"
+    );
+    let recall = common::read_recall(&proj.root, "es-sel");
+    println!("es selectivity recall={:.3}", recall);
+    assert!(recall >= 0.9, "es selectivity recall {:.3} < 0.9", recall);
+}
+
 /// End-to-end full-text filter (#120): the query carries a single
 /// `{"body":{"match":{"text":"quick"}}}` condition and ground truth is
 /// brute-forced over only the docs whose body CONTAINS "quick". Before the fix,
