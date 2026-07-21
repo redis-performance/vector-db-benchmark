@@ -421,13 +421,47 @@ impl RedisEngine {
                             break;
                         }
                         let (batch_start, batch_end) = batches[idx];
-                        if let Err(e) = upload_batch_internal(
-                            &mut conn,
-                            &config,
-                            &ids[batch_start..batch_end],
-                            &vectors[batch_start..batch_end],
-                            &metadata[batch_start..batch_end],
-                        ) {
+
+                        // Upload the batch, reconnecting + retrying on a TRANSIENT
+                        // connection error (broken pipe / reset / EOF / timeout —
+                        // common under heavy index-build load behind a managed-Redis
+                        // proxy). Without this a single dropped socket aborted the
+                        // whole sweep (#160). Genuine command errors (WRONGTYPE,
+                        // syntax, …) are NOT transient and fail fast.
+                        let mut attempt = 0usize;
+                        let batch_result = loop {
+                            match upload_batch_internal(
+                                &mut conn,
+                                &config,
+                                &ids[batch_start..batch_end],
+                                &vectors[batch_start..batch_end],
+                                &metadata[batch_start..batch_end],
+                            ) {
+                                Ok(()) => break Ok(()),
+                                Err(e) => {
+                                    if !is_transient_conn_error(&e) || attempt >= MAX_UPLOAD_RETRIES
+                                    {
+                                        break Err(format!(
+                                            "batch {idx} failed after {attempt} \
+                                             reconnect attempt(s): {e}"
+                                        ));
+                                    }
+                                    attempt += 1;
+                                    // Bounded exponential backoff: 100·2^(n-1) ms,
+                                    // capped at 2s.
+                                    let backoff_ms = (100u64 << (attempt - 1)).min(2000);
+                                    std::thread::sleep(std::time::Duration::from_millis(
+                                        backoff_ms,
+                                    ));
+                                    // Re-open the connection; if that also fails
+                                    // transiently we retry again next iteration.
+                                    if let Ok(c) = client.get_connection() {
+                                        conn = c;
+                                    }
+                                }
+                            }
+                        };
+                        if let Err(e) = batch_result {
                             *error.lock().unwrap() = Some(e);
                             break;
                         }
@@ -838,6 +872,37 @@ fn encode_vector(data_type: &str, vector: &[f32]) -> Vec<u8> {
 }
 
 /// Internal batch upload function
+/// Max reconnect+retry attempts for a single upload batch that hits a transient
+/// connection error before it is treated as fatal (#160).
+const MAX_UPLOAD_RETRIES: usize = 5;
+
+/// Whether a stringified upload error looks like a TRANSIENT connection/IO drop
+/// (worth reconnecting + retrying) rather than a genuine command error (worth
+/// failing fast). Under heavy index-build load behind a managed-Redis proxy the
+/// remote can close the socket ("unexpected end of file", "broken pipe",
+/// "connection reset"); those must not abort a whole sweep (#160). Command errors
+/// like WRONGTYPE / wrong number of arguments are NOT matched here.
+fn is_transient_conn_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    const SIGNATURES: &[&str] = &[
+        "broken pipe",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "unexpected end of file",
+        "unexpected eof",
+        "timed out",
+        "timeout",
+        "os error 104", // ECONNRESET
+        "os error 32",  // EPIPE
+        "os error 111", // ECONNREFUSED
+        "os error 110", // ETIMEDOUT
+        "connection dropped",
+        "not connected",
+    ];
+    SIGNATURES.iter().any(|sig| m.contains(sig))
+}
+
 fn upload_batch_internal(
     conn: &mut Connection,
     config: &RedisEngineConfig,
@@ -2500,7 +2565,36 @@ impl Engine for RedisEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_vector, parse_conditions, FilterParamValue};
+    use super::{encode_vector, is_transient_conn_error, parse_conditions, FilterParamValue};
+
+    #[test]
+    fn transient_conn_errors_are_retryable() {
+        // Real redis-rs / OS socket-drop signatures → retry (#160).
+        for msg in [
+            "unexpected end of file",
+            "Broken pipe (os error 32)",
+            "Connection reset by peer (os error 104)",
+            "Connection refused (os error 111)",
+            "operation timed out",
+            "IoError: Connection aborted",
+            "connection dropped",
+        ] {
+            assert!(is_transient_conn_error(msg), "should retry: {msg}");
+        }
+    }
+
+    #[test]
+    fn command_errors_are_not_retryable() {
+        // Genuine server/command errors must fail fast, not spin on retries.
+        for msg in [
+            "WRONGTYPE Operation against a key holding the wrong kind of value",
+            "ERR wrong number of arguments for 'hset' command",
+            "OOM command not allowed when used memory > 'maxmemory'",
+            "Unknown index name",
+        ] {
+            assert!(!is_transient_conn_error(msg), "should NOT retry: {msg}");
+        }
+    }
 
     #[test]
     fn match_any_string_list_emits_tag_or() {
