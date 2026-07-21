@@ -20,6 +20,10 @@
 //!   * `synthetic-filter-32/`   — compound `vectors.npy` + `payloads.jsonl`
 //!     (keyword/int/bool/datetime fields) + `tests.jsonl` (per-query `conditions`
 //!     filter + filtered ground truth). `type: "tar"`.
+//!   * `synthetic-selectivity-32/` — compound `vectors.npy` + `payloads.jsonl`
+//!     (int `rank` field) + `tests.jsonl` sweeping a `rank < K` range filter
+//!     across a selectivity ladder (1%..90%), each row annotated with its
+//!     `selectivity`. `type: "tar"`.
 
 use std::path::{Path, PathBuf};
 
@@ -37,19 +41,20 @@ use vector_db_benchmark::synthetic::{
 const SPARSE_NAME: &str = "synthetic-sparse-300";
 const HYBRID_NAME: &str = "synthetic-hybrid-16";
 const FILTER_NAME: &str = "synthetic-filter-32";
+const SELECTIVITY_NAME: &str = "synthetic-selectivity-32";
 
 #[derive(Parser, Debug)]
 #[command(
     name = "generate-dataset",
-    about = "Generate small deterministic synthetic datasets (sparse / hybrid / filter) on disk."
+    about = "Generate small deterministic synthetic datasets (sparse / hybrid / filter / selectivity) on disk."
 )]
 struct Args {
     /// Base directory to write datasets into (each dataset gets its own subdir).
     #[arg(long, default_value = "datasets")]
     out_dir: PathBuf,
 
-    /// Generate only one dataset kind. Omit to generate all three.
-    #[arg(long, value_parser = ["sparse", "hybrid", "filter"])]
+    /// Generate only one dataset kind. Omit to generate all four.
+    #[arg(long, value_parser = ["sparse", "hybrid", "filter", "selectivity"])]
     only: Option<String>,
 }
 
@@ -75,6 +80,9 @@ fn run(args: &Args) -> Result<(), String> {
     }
     if want("filter") {
         gen_filter(&args.out_dir)?;
+    }
+    if want("selectivity") {
+        gen_selectivity(&args.out_dir)?;
     }
     println!("\nDone. Register/select these datasets by the names printed above.");
     Ok(())
@@ -302,4 +310,203 @@ fn gen_filter(base: &Path) -> Result<(), String> {
     note(&payloads_path)?;
     note(&tests_path)?;
     Ok(())
+}
+
+// ── selectivity ladder ───────────────────────────────────────────────────────
+
+/// Target filter selectivities (fraction of the corpus that matches) for the
+/// selectivity-ladder dataset, from highly restrictive (1%) to barely filtered
+/// (90%). The #1 methodology idea shared by VectorDBBench, Pinecone VSB and
+/// qdrant's vector-db-benchmark: filter recall/latency must be reported as a
+/// FUNCTION of selectivity, because a restrictive filter and a permissive one
+/// exercise very different engine paths — naive post-filtering HNSW can COLLAPSE
+/// at low selectivity, while a pre-filtering engine stays correct.
+const SELECTIVITY_LADDER: [f64; 7] = [0.01, 0.02, 0.05, 0.10, 0.25, 0.50, 0.90];
+
+/// Emit `synthetic-selectivity-32`: an int `rank` = doc id on every doc and one
+/// `rank < K` range query per rung of [`SELECTIVITY_LADDER`], so a SINGLE dataset
+/// sweeps the same numeric-range filter across selectivities. Each test row also
+/// carries `selectivity` and `n_matching` (extra keys the reader ignores) so a
+/// downstream analysis can bucket recall/latency by selectivity. The corpus is
+/// larger than the other synthetic sets (N=2000) so that, run against a real
+/// HNSW index with `ef << N`, the restrictive rungs actually stress the
+/// post-filter regime rather than degenerating to exhaustive search.
+fn gen_selectivity(base: &Path) -> Result<(), String> {
+    const N: usize = 2000;
+    const DIM: usize = 32;
+    const TOP: usize = 10;
+
+    // Fixed seed → reproducible vectors, queries and ground truth.
+    let mut rng = StdRng::seed_from_u64(0x5E1EC_u64);
+    let gen_vec =
+        |rng: &mut StdRng| -> Vec<f32> { (0..DIM).map(|_| rng.gen_range(-1.0f32..1.0)).collect() };
+    let vectors: Vec<Vec<f32>> = (0..N).map(|_| gen_vec(&mut rng)).collect();
+    let queries: Vec<Vec<f32>> = (0..SELECTIVITY_LADDER.len())
+        .map(|_| gen_vec(&mut rng))
+        .collect();
+
+    // Number of matching docs for rung `q`: the K lowest ranks (ids 0..K).
+    let k_for = |q: usize| -> usize {
+        let k = (SELECTIVITY_LADDER[q] * N as f64).round() as usize;
+        k.clamp(TOP, N) // keep >= TOP so recall is well-defined
+    };
+
+    // Ground truth: top-TOP nearest by L2 over ONLY the docs matching rung `q`
+    // (rank < K, i.e. ids 0..K).
+    let filtered_gt = |q_vec: &[f32], k: usize| -> Vec<i64> {
+        let l2 = |a: &[f32], b: &[f32]| -> f64 {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+                .sum()
+        };
+        let mut scored: Vec<(i64, f64)> = (0..k)
+            .map(|id| (id as i64, l2(q_vec, &vectors[id])))
+            .collect();
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        scored.iter().take(TOP).map(|(id, _)| *id).collect()
+    };
+
+    let dir = base.join(SELECTIVITY_NAME);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    println!(
+        "[select]  {SELECTIVITY_NAME}/  ({N} docs, {} queries, dim {DIM}, \
+         selectivity ladder {SELECTIVITY_LADDER:?})",
+        SELECTIVITY_LADDER.len()
+    );
+
+    // vectors.npy (implicit ids 0..N).
+    let vectors_npy = dir.join("vectors.npy");
+    write_npy_vectors(vectors_npy.to_str().ok_or("bad path")?, &vectors)?;
+
+    // payloads.jsonl: one int `rank` per doc.
+    let payloads: String = (0..N)
+        .map(|id| serde_json::json!({ "rank": id as i64 }).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let payloads_path = dir.join("payloads.jsonl");
+    std::fs::write(&payloads_path, payloads).map_err(|e| e.to_string())?;
+
+    // tests.jsonl: query + range condition + filtered ground truth, annotated
+    // with the rung's target selectivity and actual match count.
+    let tests: String = queries
+        .iter()
+        .enumerate()
+        .map(|(q, q_vec)| {
+            let k = k_for(q);
+            serde_json::json!({
+                "query": q_vec.iter().map(|x| *x as f64).collect::<Vec<_>>(),
+                "conditions": { "and": [ { "rank": { "range": { "lt": k as i64 } } } ] },
+                "closest_ids": filtered_gt(q_vec, k),
+                "selectivity": SELECTIVITY_LADDER[q],
+                "n_matching": k,
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tests_path = dir.join("tests.jsonl");
+    std::fs::write(&tests_path, tests).map_err(|e| e.to_string())?;
+
+    note(&vectors_npy)?;
+    note(&payloads_path)?;
+    note(&tests_path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_lines(path: &Path) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    // The selectivity dataset must (1) emit exactly one query per ladder rung,
+    // (2) size each rung's match count to its target selectivity (clamped to
+    // >= TOP), (3) tie the `rank < K` filter bound to that match count, and
+    // (4) draw the whole filtered ground truth from inside the surviving set.
+    #[test]
+    fn selectivity_dataset_matches_the_ladder() {
+        const N: usize = 2000;
+        const TOP: usize = 10;
+        let tmp = tempfile::tempdir().unwrap();
+        gen_selectivity(tmp.path()).unwrap();
+        let dir = tmp.path().join(SELECTIVITY_NAME);
+
+        // payloads: one `rank` per doc, rank == id.
+        let payloads = read_lines(&dir.join("payloads.jsonl"));
+        assert_eq!(payloads.len(), N, "payload row per doc");
+        for (id, row) in payloads.iter().enumerate() {
+            assert_eq!(row["rank"].as_i64().unwrap(), id as i64, "rank == id");
+        }
+
+        // tests: one row per ladder rung, fully consistent with its selectivity.
+        let rows = read_lines(&dir.join("tests.jsonl"));
+        assert_eq!(rows.len(), SELECTIVITY_LADDER.len(), "one query per rung");
+        for (q, row) in rows.iter().enumerate() {
+            let sel = SELECTIVITY_LADDER[q];
+            let expected_k = ((sel * N as f64).round() as usize).clamp(TOP, N);
+
+            assert_eq!(
+                row["selectivity"].as_f64().unwrap(),
+                sel,
+                "rung {q} selectivity annotation"
+            );
+            let n_matching = row["n_matching"].as_u64().unwrap() as usize;
+            assert_eq!(
+                n_matching, expected_k,
+                "rung {q} match count == round(sel*N)"
+            );
+
+            // filter bound `rank < K` must equal the match count.
+            let lt = row["conditions"]["and"][0]["rank"]["range"]["lt"]
+                .as_i64()
+                .unwrap();
+            assert_eq!(lt as usize, expected_k, "rung {q} filter bound ties to K");
+
+            // ground truth: TOP ids, all inside the surviving set (id < K), distinct.
+            let ids: Vec<i64> = row["closest_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap())
+                .collect();
+            assert_eq!(ids.len(), TOP, "rung {q} returns TOP ground-truth ids");
+            for &id in &ids {
+                assert!(
+                    (id as usize) < expected_k,
+                    "rung {q} GT id {id} must be inside the filtered set (< {expected_k})"
+                );
+            }
+            let mut uniq = ids.clone();
+            uniq.sort_unstable();
+            uniq.dedup();
+            assert_eq!(uniq.len(), ids.len(), "rung {q} GT ids must be distinct");
+        }
+
+        // The tightest rung must still yield >= TOP matches (recall well-defined).
+        assert!(
+            rows[0]["n_matching"].as_u64().unwrap() as usize >= TOP,
+            "tightest rung keeps >= TOP matches"
+        );
+    }
+
+    // Fixed seeds → byte-identical output across runs (reproducible ground truth).
+    #[test]
+    fn selectivity_dataset_is_deterministic() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        gen_selectivity(a.path()).unwrap();
+        gen_selectivity(b.path()).unwrap();
+        for f in ["payloads.jsonl", "tests.jsonl", "vectors.npy"] {
+            let ra = std::fs::read(a.path().join(SELECTIVITY_NAME).join(f)).unwrap();
+            let rb = std::fs::read(b.path().join(SELECTIVITY_NAME).join(f)).unwrap();
+            assert_eq!(ra, rb, "{f} must be identical across runs");
+        }
+    }
 }
