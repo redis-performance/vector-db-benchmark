@@ -2275,6 +2275,14 @@ fn test_binary_redis_datetime() {
     run_filter_recall_test("redis-dt", "dt-test", common::write_datetime_project);
 }
 
+/// Geo-radius filter: points along a meridian, query a radius selecting the
+/// nearest ~198. Exercises RediSearch's `@location:[lon lat radius m]` GEO filter
+/// against haversine ground truth (new fixture — geo was previously untested).
+#[test]
+fn test_binary_redis_geo() {
+    run_filter_recall_test("redis-geo", "geo-test", common::write_geo_project);
+}
+
 /// Multi-tenancy: many tenants share ONE index and every query is scoped to a
 /// single tenant via a keyword-equality filter on a `tenant` field, with ground
 /// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG

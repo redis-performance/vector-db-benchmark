@@ -771,6 +771,53 @@ pub fn write_datetime_project(
     )
 }
 
+/// Great-circle distance in metres (haversine, R=6_371_000 m). Used to
+/// brute-force geo-radius ground truth. The ~55 m margin baked into
+/// [`write_geo_project`] keeps every doc clearly inside or outside the radius
+/// despite tiny differences vs each engine's own earth model.
+fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const R: f64 = 6_371_000.0;
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let dphi = (lat2 - lat1).to_radians();
+    let dlambda = (lon2 - lon1).to_radians();
+    let a = (dphi / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dlambda / 2.0).sin().powi(2);
+    2.0 * R * a.sqrt().asin()
+}
+
+/// geo-radius filter: field `location` (schema `geo`), one point per doc along a
+/// meridian ~111 m apart from (lat 40.0, lon -74.0). The query is a radius around
+/// doc 0's location selecting the nearest ~198 docs; ground truth is brute-forced
+/// with [`haversine_m`]. The reader parses geo as `{"lon":..,"lat":..}`; the
+/// query condition is `{geo:{lat,lon,radius}}` with radius in METERS.
+pub fn write_geo_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    let (lat0, lon0) = (40.0_f64, -74.0_f64);
+    let loc = |id: usize| (lat0 + id as f64 * 0.001, lon0);
+    // ~111 m per 0.001 deg latitude; 22 km ≈ the nearest 198 docs, and the
+    // radius falls ~55 m between doc 197 (inside) and doc 198 (outside).
+    let radius = 22_000.0_f64;
+    let (q_lat, q_lon) = loc(0);
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        serde_json::json!({ "location": "geo" }),
+        move |id| {
+            let (lat, lon) = loc(id);
+            serde_json::json!({ "location": { "lon": lon, "lat": lat } })
+        },
+        serde_json::json!({ "and": [ { "location": { "geo": { "lat": q_lat, "lon": q_lon, "radius": radius } } } ] }),
+        move |id| {
+            let (lat, lon) = loc(id);
+            haversine_m(lat, lon, q_lat, q_lon) <= radius
+        },
+    )
+}
+
 // ── Multi-tenancy fixture ───────────────────────────────────────────────────
 //
 // Mirrors upstream qdrant/vector-db-benchmark's `random-768-*-tenants` scenario:
