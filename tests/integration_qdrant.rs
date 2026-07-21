@@ -727,6 +727,48 @@ fn test_binary_qdrant_geo() {
     assert!(recall >= 0.9, "qdrant geo recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies qdrant
+/// composes two conditions into one Filter.must (intersection).
+#[test]
+fn test_binary_qdrant_and_filter() {
+    wait_for_qdrant();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "qdrant-and", "engine": "qdrant",
+        "connection_params": {"timeout": 60}, "collection_params": {"timeout": 60},
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 128}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_and_filter_project(
+        "and-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    let grpc = QDRANT_GRPC_PORT.to_string();
+    let rest = QDRANT_REST_PORT.to_string();
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "qdrant-and",
+            "and-test",
+            "localhost",
+            &[
+                ("QDRANT_GRPC_PORT", grpc.as_str()),
+                ("QDRANT_REST_PORT", rest.as_str()),
+            ],
+        ),
+        "qdrant and-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "qdrant-and");
+    println!("qdrant and-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "qdrant and-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Control for the multi-valued `labels` fixture (#88). Qdrant already stores
 /// `labels` as a native list payload and matches per element, so it must clear
 /// 0.9 recall. If this fails alongside the Milvus/Weaviate/pgvector labels

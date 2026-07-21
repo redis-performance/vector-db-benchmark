@@ -1041,6 +1041,38 @@ fn test_binary_elasticsearch_geo() {
     assert!(recall >= 0.9, "es geo recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition AND (keyword match AND numeric range) — verifies ES composes
+/// two clauses of different types into one `bool.must`.
+#[test]
+fn test_binary_elasticsearch_and_filter() {
+    wait_for_elasticsearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "es-and", "engine": "elasticsearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj = common::write_and_filter_project(
+        "and-test",
+        &serde_json::to_string(&configs).unwrap(),
+        dim,
+    );
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "es-and",
+            "and-test",
+            "127.0.0.1",
+            &[("ELASTIC_PORT", "9201"), ("ELASTIC_INDEX", "bench_and")],
+        ),
+        "es and-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "es-and");
+    println!("es and-filter recall={:.3}", recall);
+    assert!(recall >= 0.9, "es and-filter recall {:.3} < 0.9", recall);
+}
+
 /// End-to-end full-text filter (#120): the query carries a single
 /// `{"body":{"match":{"text":"quick"}}}` condition and ground truth is
 /// brute-forced over only the docs whose body CONTAINS "quick". Before the fix,

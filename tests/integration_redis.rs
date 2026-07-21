@@ -2283,6 +2283,14 @@ fn test_binary_redis_geo() {
     run_filter_recall_test("redis-geo", "geo-test", common::write_geo_project);
 }
 
+/// Multi-condition AND: `color == "red" AND size >= 50` in one query — verifies
+/// the engine intersects two clauses of different types (every other fixture
+/// filters on a single condition).
+#[test]
+fn test_binary_redis_and_filter() {
+    run_filter_recall_test("redis-and", "and-test", common::write_and_filter_project);
+}
+
 /// Multi-tenancy: many tenants share ONE index and every query is scoped to a
 /// single tenant via a keyword-equality filter on a `tenant` field, with ground
 /// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG
