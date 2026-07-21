@@ -1397,5 +1397,16 @@
       "ts": "datetime"
     },
     "description": "Locally-generated filter-datatype dataset (compound: vectors.npy + payloads.jsonl + tests.jsonl). Per-query `conditions` rotate through keyword/int/bool/datetime filters, each with filtered ground truth. NO public download — generate with `cargo run --release --bin generate-dataset`. Exercises the filter path, e.g. --engines redis-docker-test --datasets synthetic-filter-32."
+  },
+  {
+    "name": "synthetic-selectivity-32",
+    "vector_size": 32,
+    "distance": "l2",
+    "type": "tar",
+    "path": "synthetic-selectivity-32/",
+    "schema": {
+      "rank": "int"
+    },
+    "description": "Locally-generated selectivity-ladder dataset (compound: vectors.npy + payloads.jsonl + tests.jsonl, 2000 docs). Each query is a `rank < K` range filter at a different selectivity rung (1%/2%/5%/10%/25%/50%/90%), with filtered ground truth and per-row `selectivity`/`n_matching` annotations, so recall/latency can be reported as a FUNCTION of filter selectivity (VectorDBBench/VSB/qdrant-bench methodology). NO public download — generate with `cargo run --release --bin generate-dataset`. Exercises the numeric-range filter path across selectivities, e.g. --engines redis-docker-test --datasets synthetic-selectivity-32."
   }
 ]
