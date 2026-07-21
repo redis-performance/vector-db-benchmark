@@ -1005,14 +1005,14 @@ fn parse_used_memory(info: &str) -> i64 {
 
 /// A filter parameter value to pass to FT.SEARCH PARAMS.
 #[derive(Debug, Clone)]
-enum FilterParamValue {
+pub(crate) enum FilterParamValue {
     Str(String),
     Int(i64),
     Float(f64),
 }
 
 /// Parsed filter: (prefilter_query_string, param_name -> param_value).
-type ParsedFilter = (String, HashMap<String, FilterParamValue>);
+pub(crate) type ParsedFilter = (String, HashMap<String, FilterParamValue>);
 
 /// Map a dataset distance name to the RediSearch `DISTANCE_METRIC` value.
 /// Unknown metrics default to `COSINE` (matches the historical inline behavior).
@@ -1028,7 +1028,7 @@ fn map_distance_metric(distance: &str) -> &'static str {
 
 /// Parse meta_conditions JSON into a RediSearch prefilter string + params.
 /// Returns None when no conditions are present.
-fn parse_conditions(conditions: &serde_json::Value) -> Option<ParsedFilter> {
+pub(crate) fn parse_conditions(conditions: &serde_json::Value) -> Option<ParsedFilter> {
     let obj = conditions.as_object()?;
     if obj.is_empty() {
         return None;
