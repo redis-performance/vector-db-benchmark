@@ -893,7 +893,11 @@ mod tests {
         assert_eq!(pg_column_type("text"), Some("TEXT"));
         assert_eq!(pg_column_type("int"), Some("BIGINT"));
         assert_eq!(pg_column_type("float"), Some("DOUBLE PRECISION"));
-        assert_eq!(pg_column_type("geo"), None);
+        assert_eq!(pg_column_type("bool"), Some("BOOLEAN"));
+        assert_eq!(pg_column_type("datetime"), Some("TIMESTAMPTZ"));
+        // Geo is now stored as a "lat,lon" TEXT scalar (earthdistance filter).
+        assert_eq!(pg_column_type("geo"), Some("TEXT"));
+        assert_eq!(pg_column_type("unknown"), None);
     }
 
     #[test]
