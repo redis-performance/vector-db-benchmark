@@ -68,6 +68,11 @@ pub struct SearchResults {
     pub mean_time: f64,
     pub mean_precision: f64,
     pub mean_recall: f64,
+    /// 10th-percentile per-query recall — the "worst 10%" floor. A healthy mean
+    /// with a near-zero p10 means a slice of queries return almost nothing (e.g.
+    /// a filter that occasionally matches an empty/degenerate set); the mean
+    /// hides that, so this is reported alongside it (VSB/VDBBench methodology).
+    pub recall_p10: f64,
     pub mean_mrr: f64,
     pub mean_ndcg: f64,
     pub recalls: Vec<f64>,
@@ -309,11 +314,22 @@ pub fn compute_search_stats(
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let pct = |q: f64| percentile_linear(&sorted, q);
 
+    // Worst-10% recall floor: catches queries that return almost nothing even
+    // when the mean recall looks fine.
+    let recall_p10 = if recalls.is_empty() {
+        0.0
+    } else {
+        let mut sorted_recalls = recalls.to_vec();
+        sorted_recalls.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        percentile_linear(&sorted_recalls, 0.10)
+    };
+
     Ok(SearchResults {
         total_time,
         mean_time,
         mean_precision: mean(precisions),
         mean_recall: mean(recalls),
+        recall_p10,
         mean_mrr: mean(mrrs),
         mean_ndcg: mean(ndcgs),
         recalls: recalls.to_vec(),
@@ -603,5 +619,28 @@ mod stats_tests {
         assert_eq!(results.p50_time, 0.015);
         assert!(results.schedule_delay_p95_time.unwrap() > 0.4);
         assert_eq!(results.end_to_end_p50_time, Some(0.017));
+    }
+
+    #[test]
+    fn recall_p10_surfaces_worst_decile() {
+        // 20% of queries return nothing (recall 0), 80% perfect. The mean looks
+        // healthy (0.8) but recall_p10 exposes the zero-recall slice — the whole
+        // point of reporting the distribution, not just the mean.
+        let recalls = vec![0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let times = vec![0.001; 10];
+        let r = compute_search_stats(
+            &times, &recalls, &recalls, &recalls, &recalls, 1.0, 10, 1, 10,
+        )
+        .unwrap();
+        assert!((r.mean_recall - 0.8).abs() < 1e-9);
+        assert!(
+            r.recall_p10 <= 0.1,
+            "recall_p10 should surface the ~zero worst decile, got {}",
+            r.recall_p10
+        );
+        // All-perfect recall → p10 is also 1.0 (no false alarm).
+        let ones = vec![1.0; 10];
+        let r2 = compute_search_stats(&times, &ones, &ones, &ones, &ones, 1.0, 10, 1, 10).unwrap();
+        assert!((r2.recall_p10 - 1.0).abs() < 1e-9);
     }
 }

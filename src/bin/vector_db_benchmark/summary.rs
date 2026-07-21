@@ -357,6 +357,7 @@ pub fn save_summary(
                 "parallel": e.parallel,
                 "mean_precisions": e.results.mean_precision,
                 "mean_recall": e.results.mean_recall,
+                "recall_p10": e.results.recall_p10,
                 "mean_mrr": e.results.mean_mrr,
                 "mean_ndcg": e.results.mean_ndcg,
                 "rps": e.results.rps,

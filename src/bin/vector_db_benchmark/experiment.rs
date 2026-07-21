@@ -1016,6 +1016,7 @@ fn save_search_results(
             "end_to_end_p99_time": results.end_to_end_p99_time,
             "mean_precisions": results.mean_precision,
             "mean_recall": results.mean_recall,
+            "recall_p10": results.recall_p10,
             "mean_mrr": results.mean_mrr,
             "mean_ndcg": results.mean_ndcg,
             "std_time": results.std_time,
