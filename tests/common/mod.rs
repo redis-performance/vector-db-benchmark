@@ -849,6 +849,58 @@ pub fn write_and_filter_project(
     )
 }
 
+// ── Selectivity-ladder fixture ──────────────────────────────────────────────
+//
+// The #1 methodology idea shared by VectorDBBench, Pinecone VSB and qdrant's
+// vector-db-benchmark: filter recall/latency must be measured as a FUNCTION of
+// filter selectivity, not at a single point. A restrictive filter (few matching
+// docs) and a permissive one exercise very different engine code paths — and
+// naive post-filtering HNSW can COLLAPSE at low selectivity, because the graph
+// walk rarely reaches a matching node, whereas a pre-filtering (or
+// brute-force-below-threshold) engine stays correct.
+//
+// This fixture puts an int field `rank` = doc id (0..N_DOCS) on every doc and
+// emits ONE query per rung of `SELECTIVITY_LADDER`, each a `rank < K` range that
+// selects exactly the K lowest ranks (selectivity K/N_DOCS). So a single dataset
+// sweeps the same range-filter path from ~3% to ~99% selectivity. Ground truth
+// is brute-forced over only the surviving docs per rung, so an engine that drops
+// the filter — or whose recall collapses at the restrictive end — scores low.
+//
+// SCOPE NOTE: with only N_DOCS=400 and a high ef, search is near-exhaustive, so
+// this asserts range-filter CORRECTNESS across selectivity boundaries (each rung
+// a distinct range extent) rather than reproducing at-scale post-filter collapse
+// (which needs ef << corpus). It is the local, deterministic counterpart to the
+// large selectivity-graded datasets those external tools ship.
+
+/// Filter-match counts (out of `N_DOCS` = 400) for each selectivity rung, from
+/// highly restrictive (~3%) to barely filtered (~99%). The tightest rung keeps
+/// `>= TOP` matches so recall is well-defined at every point.
+pub const SELECTIVITY_LADDER: [usize; 8] = [12, 20, 40, 100, 200, 300, 360, 396];
+
+/// selectivity-ladder filter: field `rank` (schema type `int`) = doc id. Query
+/// `q` filters `rank < SELECTIVITY_LADDER[q]`, sweeping selectivity across the
+/// ladder, with per-rung ground truth brute-forced over only the matching docs.
+pub fn write_selectivity_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project_multi(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        SELECTIVITY_LADDER.len(),
+        serde_json::json!({ "rank": "int" }),
+        |id| serde_json::json!({ "rank": id as i64 }),
+        move |q| {
+            let k = SELECTIVITY_LADDER[q] as i64;
+            serde_json::json!({ "and": [ { "rank": { "range": { "lt": k } } } ] })
+        },
+        move |q, id| (id as i64) < SELECTIVITY_LADDER[q] as i64,
+    )
+}
+
 // ── Multi-tenancy fixture ───────────────────────────────────────────────────
 //
 // Mirrors upstream qdrant/vector-db-benchmark's `random-768-*-tenants` scenario:
