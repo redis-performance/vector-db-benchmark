@@ -1014,7 +1014,17 @@ impl Engine for DragonflyEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
+
+        // Barrier-synchronized start so connection setup AND the cold first query
+        // fall OUTSIDE the measured window (mirrors redis.rs/vertex.rs). Every
+        // worker connects + primes, then blocks on `ready`; the main thread stamps
+        // the shared start instant into `start_cell` and releases `go`, so the
+        // measurement clock starts only once all workers are warm and poised. A
+        // worker that fails to connect MUST still pass both barriers before
+        // returning, or the run would deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
@@ -1034,6 +1044,8 @@ impl Engine for DragonflyEngine {
                 let algorithm = algorithm.as_str();
                 let index_name = index_name.as_str();
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1046,8 +1058,36 @@ impl Engine for DragonflyEngine {
 
                     let mut conn = match DragonflyEngine::connect(&host, port) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
+
+                    // Prime this connection with ONE discarded query (index 0) so
+                    // the cold first round-trip is not inside the measured window.
+                    // Best effort: errors ignored and its sample is NOT recorded.
+                    {
+                        let prime_top = explicit_top.unwrap_or(10);
+                        let _ = ft_search_knn(
+                            &mut conn,
+                            index_name,
+                            &encoded_queries[0],
+                            &query_strs[0],
+                            prime_top,
+                            ef,
+                            algorithm,
+                            query_timeout,
+                            parsed_filters[0].as_ref(),
+                        );
+                    }
+
+                    // Signal "connected + primed", then block until the main thread
+                    // stamps the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
@@ -1108,6 +1148,13 @@ impl Engine for DragonflyEngine {
                 }));
             }
 
+            // All workers are connected + primed once they clear `ready`; stamp the
+            // shared measurement start and release them together via `go`.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -1119,7 +1166,11 @@ impl Engine for DragonflyEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // total_time excludes connection setup and the cold first query.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         if times.is_empty() {
             return Err("No searches completed".to_string());

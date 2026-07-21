@@ -1291,7 +1291,17 @@ impl Engine for MongoDBEngine {
 
         let pb = self.create_progress_bar(num_to_run);
 
-        let start_time = Instant::now();
+        // Barrier-synchronized start so connection setup AND the cold first query
+        // fall OUTSIDE the measured window (mirrors the Redis/Vertex engines).
+        // Every worker connects + primes, then blocks on `ready`; the main thread
+        // stamps the shared start instant into `start_cell` and releases `go`, so
+        // the measurement clock starts only once all workers are warm and poised.
+        // A worker that fails to connect MUST still pass both barriers before
+        // returning, or the run would deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
+
         let uri = self.uri.clone();
         let db_name = self.db_name.clone();
         let collection_name = self.collection_name.clone();
@@ -1312,6 +1322,9 @@ impl Engine for MongoDBEngine {
                 let tops = &tops;
                 let pipelines = &pipelines;
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
+                let start_cell = Arc::clone(&start_cell);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1324,11 +1337,29 @@ impl Engine for MongoDBEngine {
 
                     let client = match Client::with_uri_str(&uri) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
                     let coll = client
                         .database(&db_name)
                         .collection::<Document>(&collection_name);
+
+                    // Prime this connection with ONE discarded query so the cold
+                    // first round-trip is not inside the measured window. Best
+                    // effort: errors are ignored and its sample is NOT recorded.
+                    if let Some(prime_pipeline) = pipelines.first() {
+                        let _ = send_search(&coll, prime_pipeline);
+                    }
+
+                    // Signal "connected + primed", then block until the main thread
+                    // stamps the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
+                    let _start_time = *start_cell.get().unwrap();
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
@@ -1380,6 +1411,14 @@ impl Engine for MongoDBEngine {
                 }));
             }
 
+            // All workers are connected + primed and waiting on `ready`. Stamp the
+            // shared start instant, then release everyone via `go` so the measured
+            // window excludes connection setup and the cold first query.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -1391,7 +1430,11 @@ impl Engine for MongoDBEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // total_time excludes connection setup and the cold first query.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(

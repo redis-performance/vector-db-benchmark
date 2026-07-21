@@ -350,38 +350,11 @@ impl OpenSearchEngine {
         Ok(())
     }
 
-    /// Load the kNN index into memory before searching so the first queries
-    /// aren't penalised by cold-cache graph loading. Best-effort: a non-success
-    /// response is logged, not fatal.
-    fn warmup(&self) -> Result<(), String> {
-        use opensearch::http::headers::HeaderMap;
-        use opensearch::http::Method;
-
-        let path = format!("/_plugins/_knn/warmup/{}", self.index_name);
-        let resp = self
-            .rt
-            .block_on(self.client.transport().send(
-                Method::Get,
-                &path,
-                HeaderMap::new(),
-                Option::<&()>::None,
-                Option::<Vec<u8>>::None,
-                None,
-            ))
-            .map_err(|e| format!("kNN warmup request failed: {}", e))?;
-
-        if !resp.status_code().is_success() {
-            let text = self.rt.block_on(resp.text()).unwrap_or_default();
-            eprintln!("Warning: kNN warmup returned non-success: {}", text);
-        }
-        Ok(())
-    }
-
     /// Apply search-time settings (e.g., knn.algo_param.ef_search)
     fn setup_search(&self, params: &SearchParams) -> Result<(), String> {
-        // Warm the graph into memory before timing any queries.
-        self.warmup()?;
-
+        // Cold-cache graph loading is warmed uniformly by the per-worker prime
+        // query in `search` (mirrors redis/vertex), so no engine-specific
+        // server-side `_knn/warmup` call is needed here.
         let ef_search = params
             .extra
             .as_ref()
@@ -998,10 +971,21 @@ impl Engine for OpenSearchEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
         let base_url = self.base_url.clone();
         let timeout = self.timeout;
         let index_name = self.index_name.clone();
+
+        // Barrier-synchronized start so connection setup AND the cold first query
+        // fall OUTSIDE the measured window (mirrors the Redis/Vertex engines).
+        // Every worker builds its runtime + client and primes with one discarded
+        // query, then blocks on `ready`; the main thread stamps the shared start
+        // instant into `start_cell` and releases `go`, so the measurement clock
+        // starts only once all workers are warm and poised. A worker that fails to
+        // set up MUST still pass both barriers before returning, or the run would
+        // deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
@@ -1018,6 +1002,8 @@ impl Engine for OpenSearchEngine {
                 let tops = &tops;
                 let raw_bodies = &raw_bodies;
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1032,12 +1018,33 @@ impl Engine for OpenSearchEngine {
                         .build()
                     {
                         Ok(rt) => rt,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
                     let client = match create_os_client(&base_url, timeout) {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
+
+                    // Prime this connection with ONE discarded query so the cold
+                    // first round-trip is not inside the measured window. Best
+                    // effort: errors are ignored and its sample is NOT recorded.
+                    if num_to_run > 0 {
+                        let _ = knn_send(&rt, &client, &index_name, &raw_bodies[0]);
+                    }
+
+                    // Signal "connected + primed", then block until the main thread
+                    // stamps the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
@@ -1079,6 +1086,14 @@ impl Engine for OpenSearchEngine {
                 }));
             }
 
+            // All workers are connected + primed and blocked on `go`. Stamp the
+            // shared measurement start and release them simultaneously. The cold
+            // setup is already behind the barrier.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -1090,7 +1105,12 @@ impl Engine for OpenSearchEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // Measure from the post-barrier start stamp (workers already primed), so
+        // total_time excludes connection setup and the cold first query.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(

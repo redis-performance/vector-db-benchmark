@@ -1033,7 +1033,17 @@ impl Engine for MilvusEngine {
         let query_idx = Arc::new(AtomicUsize::new(0));
 
         let pb = self.create_progress_bar(num_to_run);
-        let start_time = Instant::now();
+
+        // Barrier-synchronized start so connection setup AND the cold first query
+        // fall OUTSIDE the measured window (mirrors the Redis/Vertex engines).
+        // Every worker builds its client + primes one discarded query, then blocks
+        // on `ready`; the main thread stamps the shared start instant into
+        // `start_cell` and releases `go`, so the measurement clock starts only once
+        // all workers are warm and poised. A worker that fails to build its client
+        // MUST still pass both barriers before returning, or the run deadlocks.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
@@ -1050,6 +1060,9 @@ impl Engine for MilvusEngine {
                 let tops = &tops;
                 let bodies = &bodies;
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
+                let start_cell = Arc::clone(&start_cell);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -1064,8 +1077,26 @@ impl Engine for MilvusEngine {
                         .build()
                     {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
+
+                    // Prime this client with ONE discarded query (body 0) so the
+                    // cold first round-trip is not inside the measured window. Best
+                    // effort: errors are ignored and its sample is NOT recorded.
+                    if !bodies.is_empty() {
+                        let _ = send_search(&client, &base_url, &bodies[0]);
+                    }
+
+                    // Signal "connected + primed", then block until the main thread
+                    // stamps the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
+                    let _start_time = *start_cell.get().unwrap();
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
@@ -1107,6 +1138,14 @@ impl Engine for MilvusEngine {
                 }));
             }
 
+            // All workers are spawned; wait until each has connected + primed,
+            // then stamp the shared start instant and release them together so the
+            // measurement clock excludes connection setup and the cold first query.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -1118,7 +1157,12 @@ impl Engine for MilvusEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // total_time excludes connection setup and the cold first query: it is
+        // measured from the barrier release stamped into `start_cell`.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(

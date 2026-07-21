@@ -665,7 +665,17 @@ impl Engine for ChromaEngine {
 
         let query_idx = Arc::new(AtomicUsize::new(0));
         let pb = self.progress_bar(num_to_run);
-        let start_time = Instant::now();
+
+        // Barrier-synchronized start so per-worker HTTP client construction AND the
+        // cold first query fall OUTSIDE the measured window (mirrors redis/vertex).
+        // Every worker builds its client + primes, then blocks on `ready`; the main
+        // thread stamps the shared start instant into `start_cell` and releases `go`,
+        // so the measurement clock starts only once all workers are warm. A worker
+        // that fails to build its client MUST still pass both barriers before
+        // returning, or the run would deadlock.
+        let ready = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let go = Arc::new(std::sync::Barrier::new(parallel + 1));
+        let start_cell = Arc::new(std::sync::OnceLock::<Instant>::new());
 
         let mut times: Vec<f64> = Vec::with_capacity(num_to_run);
         let mut precs: Vec<f64> = Vec::with_capacity(num_to_run);
@@ -684,6 +694,8 @@ impl Engine for ChromaEngine {
                 let tops = &tops;
                 let bodies = &bodies;
                 let query_idx = Arc::clone(&query_idx);
+                let ready = Arc::clone(&ready);
+                let go = Arc::clone(&go);
                 let pb = &pb;
 
                 handles.push(s.spawn(move || {
@@ -698,8 +710,32 @@ impl Engine for ChromaEngine {
                         .build()
                     {
                         Ok(c) => c,
-                        Err(_) => return (t, p, r, mr, nd),
+                        Err(_) => {
+                            // Still cross both barriers so peers aren't stranded.
+                            ready.wait();
+                            go.wait();
+                            return (t, p, r, mr, nd);
+                        }
                     };
+
+                    // Prime this client with ONE discarded query so the cold first
+                    // round-trip (TCP/TLS setup + server JIT/caches) is not inside the
+                    // measured window. Best effort: errors are ignored and its sample
+                    // is NOT recorded.
+                    if !bodies.is_empty() {
+                        let _ = client
+                            .post(&query_url)
+                            .header("Content-Type", "application/json")
+                            .body(bodies[0].clone())
+                            .send()
+                            .and_then(|resp| resp.error_for_status())
+                            .and_then(|resp| resp.text());
+                    }
+
+                    // Signal "ready + primed", then block until the main thread stamps
+                    // the shared measurement start and releases everyone.
+                    ready.wait();
+                    go.wait();
 
                     loop {
                         let idx = query_idx.fetch_add(1, Ordering::Relaxed);
@@ -745,6 +781,14 @@ impl Engine for ChromaEngine {
                     (t, p, r, mr, nd)
                 }));
             }
+
+            // All workers spawned: wait until every one has built its client and
+            // primed, stamp the shared measurement start, then release them together.
+            ready.wait();
+            let st = Instant::now();
+            start_cell.set(st).ok();
+            go.wait();
+
             for h in handles {
                 let (t, p, r, mr, nd) = h.join().unwrap();
                 times.extend(t);
@@ -756,7 +800,12 @@ impl Engine for ChromaEngine {
         });
 
         pb.finish_and_clear();
-        let total_time = start_time.elapsed().as_secs_f64();
+        // total_time excludes connection setup and the cold first query: it is
+        // measured from the barrier release (start_cell), not a pre-scope instant.
+        let total_time = start_cell
+            .get()
+            .map(|st| st.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
         let top = explicit_top.unwrap_or_else(|| neighbors.first().map(|n| n.len()).unwrap_or(10));
         crate::engine::compute_search_stats(
             &times, &precs, &recs, &mrr_vals, &ndcg_vals, total_time, top, parallel, num_to_run,
