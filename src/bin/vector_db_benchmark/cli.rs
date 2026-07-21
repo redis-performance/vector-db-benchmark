@@ -42,6 +42,15 @@ pub struct Args {
     #[arg(long, default_value = "false")]
     pub keep_data: bool,
 
+    /// On a multi-config sweep with `--keep-data`, free each config's data before
+    /// the next runs so only ONE config's corpus is resident at a time (keeping
+    /// just the last config's). Prevents the per-config keyspaces from
+    /// accumulating and OOMing a memory-bounded server (#184). Off by default, so
+    /// `--keep-data` still keeps every config's data coexisting (the default,
+    /// needed for `--skip-upload` reuse across configs).
+    #[arg(long, default_value = "false")]
+    pub reset_between_configs: bool,
+
     /// Skip if results already exist (accepts an optional value, e.g.
     /// `--skip-if-exists false`; bare `--skip-if-exists` means true)
     #[arg(

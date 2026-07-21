@@ -259,7 +259,28 @@ pub fn run(args: &Args) -> Result<(), String> {
         None
     };
 
-    'experiments: for (_engine_name, engine_config) in &engines {
+    let num_engine_configs = engines.len();
+    // `--keep-data` on a multi-config sweep keeps EVERY config's data coexisting
+    // (the default — needed for `--skip-upload` reuse across configs). On a
+    // memory-bounded server that accumulation OOMs (#184); `--reset-between-configs`
+    // opts into freeing each config before the next so only the LAST config's data
+    // is kept. Warn up-front when the user is on the accumulating path with >1
+    // config so the peak-memory cost isn't a silent surprise.
+    if args.keep_data && num_engine_configs > 1 && !args.reset_between_configs {
+        eprintln!(
+            "NOTE: --keep-data with {} configs keeps EVERY config's data resident \
+             simultaneously (peak memory ≈ sum of all configs' datasets). On a \
+             memory-bounded server pass --reset-between-configs to keep only one \
+             config's data at a time, or drop --keep-data.",
+            num_engine_configs
+        );
+    }
+    'experiments: for (engine_idx, (_engine_name, engine_config)) in engines.iter().enumerate() {
+        // With --reset-between-configs, only the LAST config keeps its data under
+        // --keep-data; earlier configs tear down after finishing so at most one
+        // config's corpus is resident (#184). (A full M×EF sweep runs every config
+        // over the same datasets, so the last config is the last to touch each.)
+        let is_last_config = engine_idx + 1 == num_engine_configs;
         // Apply --skip-vector-index: override name and set flag on config
         let mut engine_config = (*engine_config).clone();
         if args.skip_vector_index {
@@ -310,7 +331,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             let mut engine = create_engine(&engine_config, &args.host)?;
 
             // Run experiment phases
-            if let Err(e) = run_single_experiment(&mut *engine, &dataset, args) {
+            if let Err(e) = run_single_experiment(&mut *engine, &dataset, args, is_last_config) {
                 eprintln!("Experiment failed: {}", e);
                 if args.exit_on_error {
                     pb.finish_and_clear();
@@ -351,7 +372,14 @@ fn run_single_experiment(
     engine: &mut dyn Engine,
     dataset: &Dataset,
     args: &Args,
+    is_last_config: bool,
 ) -> Result<(), String> {
+    // With --reset-between-configs, `--keep-data` only skips cleanup for the LAST
+    // config in a sweep; earlier configs tear down so their (identical) corpus
+    // copy doesn't accumulate and OOM the server (#184). Without the flag,
+    // `--keep-data` keeps every config's data (the default coexistence behaviour,
+    // needed for --skip-upload reuse). A single-config run is always the last.
+    let keep_data = args.keep_data && (is_last_config || !args.reset_between_configs);
     // Check if we should skip
     if args.skip_if_exists {
         let glob_pattern = format!("{}-{}-upload-*.json", engine.name(), dataset.config.name);
@@ -448,10 +476,17 @@ fn run_single_experiment(
                      skipping search (no filter conditions possible)",
                     dataset.config.name
                 );
-                if args.keep_data {
+                if keep_data {
                     println!("Experiment stage: Keep data (cleanup skipped)");
                 } else {
-                    println!("Experiment stage: Cleanup (deleting index and data)");
+                    if args.keep_data {
+                        println!(
+                            "Experiment stage: Cleanup (multi-config --keep-data: freeing this \
+                             config's data before the next; only the last config's data is kept)"
+                        );
+                    } else {
+                        println!("Experiment stage: Cleanup (deleting index and data)");
+                    }
                     engine.delete()?;
                 }
                 println!("Experiment stage: Done");
@@ -858,11 +893,20 @@ fn run_single_experiment(
         )?;
     }
 
-    // Cleanup unless the caller wants to reuse the populated index.
-    if args.keep_data {
+    // Cleanup unless the caller wants to reuse the populated index. On a
+    // multi-config sweep `--keep-data` keeps only the LAST config's data; earlier
+    // configs tear down here so their corpus copy doesn't accumulate (#184).
+    if keep_data {
         println!("Experiment stage: Keep data (cleanup skipped)");
     } else {
-        println!("Experiment stage: Cleanup (deleting index and data)");
+        if args.keep_data {
+            println!(
+                "Experiment stage: Cleanup (multi-config --keep-data: freeing this config's data \
+                 before the next; only the last config's data is kept)"
+            );
+        } else {
+            println!("Experiment stage: Cleanup (deleting index and data)");
+        }
         engine.delete()?;
     }
 
