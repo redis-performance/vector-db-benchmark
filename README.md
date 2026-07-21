@@ -197,6 +197,17 @@ memory is reported per-index via `FT.INFO` (issue #151-4).
   (search each against its own index). Per-config prefixing stores N copies of
   otherwise-identical sweep docs, so keyspace bytes scale ×N — the intended trade
   for isolation.
+- **Shared-corpus (upload-once / build-many) mode — Redis, opt-in (#188):** for a
+  sweep over **one** dataset where only the index params (M / EF_construction)
+  differ, the corpus is identical across configs, so re-uploading it per config is
+  wasted work (N× ingest — dominant at 10M+). Set `REDIS_KEY_PREFIX=<shared>:` to
+  make **all** configs share ONE corpus keyspace: the first config uploads it, and
+  every later config **skips the re-upload** (detected by a corpus key-count check)
+  and just builds its own per-config index over the shared docs (the index name
+  stays per-config). In this mode the index is dropped **without `DD`** so the
+  shared corpus survives across configs; flush the DB (or the shared prefix) when
+  the sweep finishes. Unset (the default) keeps full per-config isolation — no
+  behavior change.
 
 ### Charts
 
