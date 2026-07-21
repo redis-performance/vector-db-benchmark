@@ -818,6 +818,37 @@ pub fn write_geo_project(
     )
 }
 
+/// Multi-condition AND filter: a keyword match AND a numeric range in one query
+/// (`color == "red" AND size >= 50`). Every other fixture puts a SINGLE condition
+/// under `and`; this exercises that engines correctly COMPOSE (intersect) two
+/// clauses of different types. `color` is `id % 2 == 0 ? "red" : "blue"` and
+/// `size` is `id % 100`, so the ground truth is the even ids whose `id % 100 >=
+/// 50` — an AND that neither clause alone selects.
+pub fn write_and_filter_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        serde_json::json!({ "color": "keyword", "size": "int" }),
+        move |id| {
+            serde_json::json!({
+                "color": if id % 2 == 0 { "red" } else { "blue" },
+                "size": (id % 100) as i64,
+            })
+        },
+        serde_json::json!({ "and": [
+            { "color": { "match": { "value": "red" } } },
+            { "size": { "range": { "gte": 50 } } },
+        ] }),
+        move |id| id % 2 == 0 && (id % 100) as i64 >= 50,
+    )
+}
+
 // ── Multi-tenancy fixture ───────────────────────────────────────────────────
 //
 // Mirrors upstream qdrant/vector-db-benchmark's `random-768-*-tenants` scenario:
