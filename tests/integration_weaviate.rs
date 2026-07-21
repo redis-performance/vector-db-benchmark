@@ -673,6 +673,23 @@ fn test_binary_weaviate_uuid() {
     assert!(recall >= 0.9, "weaviate uuid recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition OR (`color == "red" OR size >= 90`) — verifies Weaviate unions
+/// two clauses into a `Filters.Or` operand, searching the union not the
+/// intersection.
+#[test]
+fn test_binary_weaviate_or_filter() {
+    wait_for_weaviate();
+    let proj = common::write_or_filter_project("or-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "or-test", "BenchOr");
+    println!("weaviate or-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate or-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies Weaviate
 /// composes two conditions of different types into one `Filters.And` operand
 /// (`Equal color` AND `GreaterThanEqual size`), not just a single clause.

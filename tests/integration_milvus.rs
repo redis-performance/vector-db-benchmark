@@ -562,6 +562,38 @@ fn test_binary_milvus_and_filter() {
     );
 }
 
+/// Multi-condition OR (`color == "red" OR size >= 90`) — verifies Milvus unions
+/// two clauses into a boolean-expr `||` (`color == "red" || size >= 90`).
+#[test]
+fn test_binary_milvus_or_filter() {
+    wait_for_milvus();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "milvus-or", "engine": "milvus",
+        "search_params": [{"parallel": 1, "search_params": {"ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100, "index_params": {"M": 16, "efConstruction": 200}}
+    }]);
+    let proj =
+        common::write_or_filter_project("or-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "milvus-or",
+            "or-test",
+            "127.0.0.1",
+            &[
+                ("MILVUS_PORT", "19531"),
+                ("MILVUS_COLLECTION_NAME", "bench_or")
+            ],
+        ),
+        "milvus or-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "milvus-or");
+    println!("milvus or-filter recall={:.3}", recall);
+    assert!(recall >= 0.9, "milvus or-filter recall {:.3} < 0.9", recall);
+}
+
 /// Datetime range filter end-to-end. Regression: `"datetime"` was dropped from
 /// the schema and the range builder inlined the quoted ISO string. Now
 /// `datetime` -> Int64 epoch column; upload and the range filter both convert

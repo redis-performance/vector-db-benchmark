@@ -706,6 +706,39 @@ fn test_binary_pgvector_geo() {
     assert!(recall >= 0.9, "pgvector geo recall {:.3} < 0.9", recall);
 }
 
+/// Multi-condition OR (`color == "red" OR size >= 90`) — verifies pgvector unions
+/// two clauses with SQL `OR` (searching the union), not `AND`.
+#[test]
+fn test_binary_pgvector_or_filter() {
+    wait_for_postgres();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "pg-or", "engine": "pgvector",
+        "search_params": [{"parallel": 1, "search_params": {"hnsw_ef": 400}}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_or_filter_project("or-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "pg-or",
+            "or-test",
+            "127.0.0.1",
+            &[("PGVECTOR_PORT", "5433")]
+        ),
+        "pgvector or run failed"
+    );
+    let recall = common::read_recall(&proj.root, "pg-or");
+    println!("pgvector or-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "pgvector or-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// Multi-condition AND (keyword match AND numeric range) — verifies pgvector
 /// composes two clauses into one SQL WHERE (`"color" = $1 AND "size" >= $2`).
 #[test]

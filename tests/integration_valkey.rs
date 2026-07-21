@@ -1402,6 +1402,14 @@ fn test_binary_valkey_selectivity() {
     run_filter_recall_test("valkey-sel", "sel-test", common::write_selectivity_project);
 }
 
+/// Multi-condition OR: `color == "red" OR size >= 90` — verifies Valkey Search
+/// UNIONs two clauses (top-level `{or:[...]}` → `@color:{red} | @size:[90 +inf]`),
+/// not an intersection.
+#[test]
+fn test_binary_valkey_or_filter() {
+    run_filter_recall_test("valkey-or", "or-test", common::write_or_filter_project);
+}
+
 /// Multi-tenancy: many tenants share ONE index and every query is scoped to a
 /// single tenant via a keyword-equality filter on a `tenant` field, with ground
 /// truth brute-forced over ONLY that tenant's docs. Reuses the keyword-TAG
