@@ -427,6 +427,129 @@ fn build_upsert_body(
     serde_json::json!({ "datapoints": datapoints })
 }
 
+/// Serialize a filter to Vertex *batch file* `restricts` / `numeric_restricts`
+/// JSON. The batch (GCS) schema differs from the streaming upsert schema:
+/// batch uses `allow`/`deny` (not `allowList`) and `value_int`/`value_float`
+/// (not `valueInt`/`valueDouble`). Datapoint restrictions carry no operator.
+///
+/// See https://cloud.google.com/vertex-ai/docs/vector-search/setup/format-structure
+fn filter_to_batch(filter: &VertexFilter) -> (serde_json::Value, serde_json::Value) {
+    let restricts: Vec<serde_json::Value> = filter
+        .restricts
+        .iter()
+        .map(|r| serde_json::json!({ "namespace": r.namespace, "allow": r.allow_list }))
+        .collect();
+    let numeric: Vec<serde_json::Value> = filter
+        .numeric_restricts
+        .iter()
+        .map(|n| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("namespace".to_string(), serde_json::json!(n.namespace));
+            match n.value {
+                NumericValue::Int(i) => {
+                    obj.insert("value_int".to_string(), serde_json::json!(i));
+                }
+                NumericValue::Double(d) => {
+                    obj.insert("value_float".to_string(), serde_json::json!(d));
+                }
+            }
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+    (serde_json::json!(restricts), serde_json::json!(numeric))
+}
+
+/// Serialize all datapoints to Vertex batch-import JSONL (#187): one JSON
+/// object per line in Vertex's *batch file* schema —
+/// `{"id","embedding","restricts":[{namespace,allow}],"numeric_restricts":[…]}`.
+/// This is what gets staged to GCS and referenced by `contentsDeltaUri`.
+///
+/// The batch schema deliberately differs from the streaming upsert body
+/// (`build_upsert_body`): here ids/vectors are `id`/`embedding` and restrictions
+/// use `allow`/`value_int`/`value_float` (see `filter_to_batch`).
+fn build_batch_datapoint_jsonl(
+    ids: &[i64],
+    vectors: &[Vec<f32>],
+    metadata: &[Option<MetadataItem>],
+    schema: &HashMap<String, String>,
+) -> String {
+    let mut out = String::with_capacity(vectors.len() * 32);
+    for (i, v) in vectors.iter().enumerate() {
+        let mut obj = serde_json::json!({
+            "id": ids[i].to_string(),
+            "embedding": v,
+        });
+        if let Some(Some(meta)) = metadata.get(i) {
+            let filter = metadata_to_filter(meta, schema);
+            let (restricts, numeric) = filter_to_batch(&filter);
+            if !filter.restricts.is_empty() {
+                obj["restricts"] = restricts;
+            }
+            if !filter.numeric_restricts.is_empty() {
+                obj["numeric_restricts"] = numeric;
+            }
+        }
+        // serde_json never fails to serialize a Value; fall back to an empty
+        // object rather than silently dropping a line on the impossible path.
+        out.push_str(&serde_json::to_string(&obj).unwrap_or_else(|_| "{}".to_string()));
+        out.push('\n');
+    }
+    out
+}
+
+/// BATCH_UPDATE variant of `build_index_body` (#187). Creates an empty
+/// bulk-ingest index; datapoints are added afterwards by UpdateIndex with a
+/// `contentsDeltaUri` (see `build_batch_update_body`). `upsertDatapoints`
+/// (streaming) does NOT work on a BATCH_UPDATE index and vice-versa.
+fn build_batch_index_body(
+    display_name: &str,
+    dimensions: i64,
+    distance_measure: &str,
+    approx_neighbors: i64,
+    leaf_embedding_count: i64,
+    leaf_search_percent: i64,
+    shard_size: Option<&str>,
+) -> serde_json::Value {
+    let mut config = serde_json::json!({
+        "dimensions": dimensions,
+        "approximateNeighborsCount": approx_neighbors,
+        "distanceMeasureType": distance_measure,
+        "algorithmConfig": {
+            "treeAhConfig": {
+                "leafNodeEmbeddingCount": leaf_embedding_count.to_string(),
+                "leafNodesToSearchPercent": leaf_search_percent,
+            }
+        }
+    });
+    if let Some(shard) = shard_size {
+        config["shardSize"] = serde_json::json!(shard);
+    }
+    serde_json::json!({
+        "displayName": display_name,
+        "indexUpdateMethod": "BATCH_UPDATE",
+        "metadata": { "config": config },
+    })
+}
+
+/// UpdateIndex body that points a BATCH_UPDATE index at a staged GCS folder.
+/// Paired with `updateMask=metadata.contentsDeltaUri` on the PATCH URL so only
+/// the delta URI is updated (the config is left untouched). Vertex reads ALL
+/// files directly under the folder named here, so callers pass the *folder*
+/// URI, not the object URI.
+fn build_batch_update_body(contents_delta_uri: &str) -> serde_json::Value {
+    serde_json::json!({
+        "metadata": { "contentsDeltaUri": contents_delta_uri },
+    })
+}
+
+/// Whether GCS batch ingest is worthwhile for this run. Batch trades a
+/// GCS round-trip + a full index rebuild for far higher ingest throughput on
+/// large corpora, so it only pays off past a threshold; below it, streaming
+/// upsert is simpler and lower-latency. Requires a non-empty staging bucket.
+fn should_batch_ingest(bucket: Option<&str>, count: usize, threshold: usize) -> bool {
+    bucket.map(|b| !b.trim().is_empty()).unwrap_or(false) && count >= threshold
+}
+
 /// Body for `indexEndpoints.findNeighbors` (single query). An optional
 /// `fraction_leaf_nodes_to_search_override` (0..1) trades recall for latency.
 fn build_find_neighbors_body(
@@ -654,6 +777,11 @@ pub struct VertexEngine {
     shard_size: Option<String>,
     query_transport: VertexQueryTransport,
     grpc_address: Option<String>,
+    // Batch (bulk) ingest via GCS contentsDeltaUri (#187). When a staging
+    // bucket is set the index is created BATCH_UPDATE and upload stages all
+    // datapoints to GCS instead of streaming them via upsertDatapoints.
+    gcs_staging_bucket: Option<String>,
+    batch_threshold: usize,
     // Populated during configure().
     index_name: String,
     index_endpoint_name: String,
@@ -729,6 +857,13 @@ impl VertexEngine {
             grpc_address: std::env::var("VERTEX_GRPC_ADDRESS")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            gcs_staging_bucket: std::env::var("VERTEX_GCS_STAGING_BUCKET")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            batch_threshold: std::env::var("VERTEX_BATCH_THRESHOLD")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(100_000),
             index_name: String::new(),
             index_endpoint_name: String::new(),
             deployed_index_id: String::new(),
@@ -739,6 +874,17 @@ impl VertexEngine {
 
     fn base_url(&self) -> String {
         format!("https://{}-aiplatform.googleapis.com/v1", self.region)
+    }
+
+    /// True when a GCS staging bucket is configured, i.e. the operator has
+    /// opted into BATCH_UPDATE bulk ingest (#187). The index-update method is a
+    /// fixed property of the index, so configure() and upload() must agree on
+    /// this: a BATCH_UPDATE index rejects streaming `upsertDatapoints`.
+    fn batch_mode(&self) -> bool {
+        self.gcs_staging_bucket
+            .as_deref()
+            .map(|b| !b.trim().is_empty())
+            .unwrap_or(false)
     }
 
     fn parent(&self) -> String {
@@ -973,6 +1119,108 @@ impl VertexEngine {
             std::thread::sleep(Duration::from_secs(poll_secs));
         }
     }
+
+    /// Bulk-ingest via GCS `contentsDeltaUri` (#187). Serializes every datapoint
+    /// to a single JSONL object under `gs://<bucket>/<folder>/`, then issues
+    /// UpdateIndex with `metadata.contentsDeltaUri` pointing at that folder and
+    /// blocks on the returned LRO while Vertex rebuilds the index.
+    ///
+    /// GCP-UNVALIDATED: this path is written from the Vertex batch-import docs
+    /// but has NOT been exercised against a live GCS bucket + BATCH_UPDATE
+    /// index. Open items flagged in the PR: the exact batch-file field names
+    /// (`allow` vs `allowList`, `numeric_restricts` vs `numericRestricts`), the
+    /// contentsDeltaUri folder-vs-object layout, and whether UpdateIndex or a
+    /// dedicated import RPC is the correct trigger. Do not merge without a live
+    /// run.
+    fn batch_upload(
+        &self,
+        ids: &[i64],
+        vectors: &[Vec<f32>],
+        metadata: &[Option<MetadataItem>],
+        schema: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let bucket = self
+            .gcs_staging_bucket
+            .as_deref()
+            .ok_or("batch_upload called without VERTEX_GCS_STAGING_BUCKET")?;
+
+        let jsonl = build_batch_datapoint_jsonl(ids, vectors, metadata, schema);
+
+        // Vertex reads ALL files directly under the folder named in
+        // contentsDeltaUri, so stage the single object one level below the
+        // folder we point the index at. The folder is namespaced by index
+        // display name so concurrent runs don't clobber each other's staging.
+        let folder = format!("vdbb-batch/{}", self.display_name);
+        let object = format!("{}/datapoints.json", folder);
+        let contents_delta_uri = format!("gs://{}/{}", bucket, folder);
+
+        // 1. Stage the JSONL to GCS (media upload). reqwest URL-encodes the
+        //    object name in the query string, which GCS requires for names
+        //    containing slashes.
+        println!(
+            "Staging {} datapoints to gs://{}/{} ({:.1} MiB)...",
+            ids.len(),
+            bucket,
+            object,
+            jsonl.len() as f64 / (1024.0 * 1024.0)
+        );
+        let token = self.access_token()?;
+        let upload_url = format!(
+            "https://storage.googleapis.com/upload/storage/v1/b/{}/o",
+            bucket
+        );
+        let resp = self
+            .client
+            .post(&upload_url)
+            .bearer_auth(&token)
+            .query(&[("uploadType", "media"), ("name", object.as_str())])
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(jsonl)
+            .send()
+            .map_err(|e| format!("GCS staging upload failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(format!("GCS staging upload returned {status}: {body}"));
+        }
+
+        // 2. Point the index at the staged folder and trigger the rebuild.
+        println!("Updating index with contentsDeltaUri={contents_delta_uri}...");
+        let update_url = format!(
+            "{}/{}?updateMask=metadata.contentsDeltaUri",
+            self.base_url(),
+            self.index_name
+        );
+        let token = self.access_token()?;
+        let body = build_batch_update_body(&contents_delta_uri);
+        let resp = self
+            .client
+            .patch(&update_url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .map_err(|e| format!("UpdateIndex (batch ingest) failed: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            return Err(format!(
+                "UpdateIndex (batch ingest) returned {status}: {text}"
+            ));
+        }
+        let op: serde_json::Value = resp
+            .json()
+            .map_err(|e| format!("UpdateIndex response was not JSON: {e}"))?;
+        let op_name = op
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or("UpdateIndex (batch ingest) returned no operation name")?
+            .to_string();
+
+        // 3. Block on the rebuild LRO (reuses the deploy-timeout budget — a
+        //    full batch rebuild can take a long time on large corpora).
+        self.poll_operation(&op_name, self.deploy_timeout, "batch index ingest")?;
+        Ok(())
+    }
 }
 
 impl Engine for VertexEngine {
@@ -998,19 +1246,39 @@ impl Engine for VertexEngine {
         } else {
             // 1. Create the index.
             println!(
-                "Creating Vertex index (dim={}, {})...",
+                "Creating Vertex index (dim={}, {}, {})...",
                 dataset.vector_size(),
-                self.distance_measure
+                self.distance_measure,
+                if self.batch_mode() {
+                    "BATCH_UPDATE"
+                } else {
+                    "STREAM_UPDATE"
+                }
             );
-            let index_body = build_index_body(
-                &self.display_name,
-                dataset.vector_size(),
-                &self.distance_measure,
-                self.approx_neighbors,
-                self.leaf_embedding_count,
-                self.leaf_search_percent,
-                self.shard_size.as_deref(),
-            );
+            // BATCH_UPDATE when a GCS staging bucket is set (#187); the index
+            // starts empty and upload() ingests via contentsDeltaUri. Otherwise
+            // the default STREAM_UPDATE index, populated by upsertDatapoints.
+            let index_body = if self.batch_mode() {
+                build_batch_index_body(
+                    &self.display_name,
+                    dataset.vector_size(),
+                    &self.distance_measure,
+                    self.approx_neighbors,
+                    self.leaf_embedding_count,
+                    self.leaf_search_percent,
+                    self.shard_size.as_deref(),
+                )
+            } else {
+                build_index_body(
+                    &self.display_name,
+                    dataset.vector_size(),
+                    &self.distance_measure,
+                    self.approx_neighbors,
+                    self.leaf_embedding_count,
+                    self.leaf_search_percent,
+                    self.shard_size.as_deref(),
+                )
+            };
             let op = self.post_json(
                 &format!("{}/{}/indexes", self.base_url(), self.parent()),
                 &token,
@@ -1123,8 +1391,49 @@ impl Engine for VertexEngine {
             read_time
         );
 
-        let url = format!("{}/{}:upsertDatapoints", self.base_url(), self.index_name);
         let schema = schema_type_map(dataset);
+
+        // Batch (bulk) ingest path (#187): stage all datapoints to GCS and let
+        // Vertex rebuild the index from them, instead of streaming millions of
+        // upsertDatapoints RPCs through the per-project write quota. Only taken
+        // when a staging bucket is configured (the index was then created
+        // BATCH_UPDATE, which rejects upsertDatapoints).
+        if self.batch_mode() {
+            if !should_batch_ingest(
+                self.gcs_staging_bucket.as_deref(),
+                ids.len(),
+                self.batch_threshold,
+            ) {
+                println!(
+                    "NOTE: VERTEX_GCS_STAGING_BUCKET is set but {} vectors is below the batch threshold ({}); \
+                     batching anyway because the index is BATCH_UPDATE (streaming upsert is unavailable). \
+                     Unset the bucket for streaming ingest.",
+                    ids.len(),
+                    self.batch_threshold
+                );
+            }
+            let upload_start = Instant::now();
+            self.batch_upload(&ids, &vectors, &metadata, &schema)?;
+            let upload_time = upload_start.elapsed().as_secs_f64();
+            println!(
+                "Batch upload time: {:.3}s ({:.0} records/sec)",
+                upload_time,
+                vectors.len() as f64 / upload_time.max(f64::EPSILON)
+            );
+            return Ok(UploadStats {
+                upload_time,
+                total_time: read_time + upload_time,
+                upload_count: vectors.len(),
+                // Batch ingest is a single index-rebuild operation, not a
+                // parallel-worker stream, so parallel/batch_size describe the
+                // one staged file rather than per-request fan-out.
+                parallel: 1,
+                batch_size: vectors.len(),
+                memory_usage: None,
+            });
+        }
+
+        let url = format!("{}/{}:upsertDatapoints", self.base_url(), self.index_name);
         let batch_size = self.batch_size.max(1);
         let batches: Vec<(usize, usize)> = (0..ids.len())
             .step_by(batch_size)
@@ -2419,6 +2728,128 @@ mod tests {
         assert_eq!(dp["numericRestricts"][0]["valueInt"], 7);
         // Stored value has no op.
         assert!(dp["numericRestricts"][0].get("op").is_none());
+    }
+
+    // ---- #187 batch (GCS contentsDeltaUri) ingest -------------------------
+
+    #[test]
+    fn batch_index_body_is_batch_update_tree_ah() {
+        let b = build_batch_index_body("bench", 768, "COSINE_DISTANCE", 150, 500, 7, None);
+        // The ONLY structural difference from the stream body is the method:
+        // both are tree-AH with an identical config block.
+        assert_eq!(b["indexUpdateMethod"], "BATCH_UPDATE");
+        let cfg = &b["metadata"]["config"];
+        assert_eq!(cfg["dimensions"], 768);
+        assert_eq!(cfg["distanceMeasureType"], "COSINE_DISTANCE");
+        assert_eq!(
+            cfg["algorithmConfig"]["treeAhConfig"]["leafNodeEmbeddingCount"],
+            "500"
+        );
+        // A freshly-created BATCH_UPDATE index is EMPTY — the delta URI is
+        // supplied later by UpdateIndex, never at create time.
+        assert!(b["metadata"].get("contentsDeltaUri").is_none());
+        // shardSize honored like the stream body.
+        let b2 = build_batch_index_body(
+            "bench",
+            8,
+            "COSINE_DISTANCE",
+            150,
+            500,
+            7,
+            Some("SHARD_SIZE_SMALL"),
+        );
+        assert_eq!(b2["metadata"]["config"]["shardSize"], "SHARD_SIZE_SMALL");
+    }
+
+    #[test]
+    fn batch_update_body_sets_only_contents_delta_uri() {
+        let b = build_batch_update_body("gs://my-bucket/vdbb-batch/bench");
+        assert_eq!(
+            b["metadata"]["contentsDeltaUri"],
+            "gs://my-bucket/vdbb-batch/bench"
+        );
+        // Nothing else — the PATCH updateMask is metadata.contentsDeltaUri, so
+        // sending a config here would either be ignored or rejected.
+        assert!(b["metadata"].get("config").is_none());
+        assert!(b.get("displayName").is_none());
+    }
+
+    #[test]
+    fn batch_jsonl_one_line_per_datapoint_in_batch_schema() {
+        let meta = vec![
+            Some(MetadataItem {
+                fields: vec![
+                    ("color".into(), MetadataValue::String("red".into())),
+                    ("size".into(), MetadataValue::Int(7)),
+                    ("price".into(), MetadataValue::Float(3.5)),
+                ],
+            }),
+            None,
+        ];
+        let jsonl = build_batch_datapoint_jsonl(
+            &[0, 42],
+            &[vec![1.0, 2.0], vec![3.0, 4.0]],
+            &meta,
+            &HashMap::new(),
+        );
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let d0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        // Batch schema uses id/embedding (NOT datapointId/featureVector).
+        assert_eq!(d0["id"], "0");
+        assert_eq!(d0["embedding"], json!([1.0, 2.0]));
+        // Categorical uses `allow` (NOT allowList).
+        assert_eq!(d0["restricts"][0]["namespace"], "color");
+        assert_eq!(d0["restricts"][0]["allow"][0], "red");
+        // Numeric uses value_int / value_float (NOT valueInt/valueDouble) and
+        // carries no operator on a stored datapoint.
+        let nr = d0["numeric_restricts"].as_array().unwrap();
+        assert_eq!(nr.len(), 2);
+        assert!(nr
+            .iter()
+            .any(|n| n["namespace"] == "size" && n["value_int"] == 7));
+        assert!(nr
+            .iter()
+            .any(|n| n["namespace"] == "price" && n["value_float"] == 3.5));
+        assert!(nr.iter().all(|n| n.get("op").is_none()));
+
+        // A datapoint without metadata omits restriction keys entirely.
+        let d1: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(d1["id"], "42");
+        assert!(d1.get("restricts").is_none());
+        assert!(d1.get("numeric_restricts").is_none());
+    }
+
+    #[test]
+    fn batch_jsonl_types_numerics_from_schema() {
+        // A float-declared field must serialize as value_float even when the
+        // stored value is a whole number, so query restrictions of the same
+        // field match (Vertex compares numeric restrictions by type).
+        let mut schema = HashMap::new();
+        schema.insert("year".to_string(), "float".to_string());
+        let meta = vec![Some(MetadataItem {
+            fields: vec![("year".into(), MetadataValue::Int(2020))],
+        })];
+        let jsonl = build_batch_datapoint_jsonl(&[0], &[vec![1.0]], &meta, &schema);
+        let d: serde_json::Value = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+        let nr = &d["numeric_restricts"][0];
+        assert_eq!(nr["namespace"], "year");
+        assert!(nr.get("value_float").is_some());
+        assert!(nr.get("value_int").is_none());
+    }
+
+    #[test]
+    fn should_batch_ingest_gates_on_bucket_and_threshold() {
+        // No bucket → never batch, regardless of size.
+        assert!(!should_batch_ingest(None, 10_000_000, 100_000));
+        assert!(!should_batch_ingest(Some(""), 10_000_000, 100_000));
+        assert!(!should_batch_ingest(Some("   "), 10_000_000, 100_000));
+        // Bucket set but below threshold → no.
+        assert!(!should_batch_ingest(Some("b"), 99_999, 100_000));
+        // Bucket set and at/above threshold → yes.
+        assert!(should_batch_ingest(Some("b"), 100_000, 100_000));
+        assert!(should_batch_ingest(Some("b"), 5_000_000, 100_000));
     }
 
     #[test]
