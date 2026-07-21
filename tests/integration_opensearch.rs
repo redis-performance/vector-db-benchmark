@@ -805,6 +805,42 @@ fn test_binary_opensearch_and_filter() {
     );
 }
 
+/// Multi-condition OR (`color == "red" OR size >= 90`) — verifies OpenSearch
+/// unions two clauses into a `bool.should` (minimum_should_match 1).
+#[test]
+fn test_binary_opensearch_or_filter() {
+    wait_for_opensearch();
+    let dim = 8;
+    let configs = serde_json::json!([{
+        "name": "os-or", "engine": "opensearch",
+        "search_params": [{"parallel": 1, "num_candidates": 400}],
+        "upload_params": {"parallel": 1, "batch_size": 100}
+    }]);
+    let proj =
+        common::write_or_filter_project("or-test", &serde_json::to_string(&configs).unwrap(), dim);
+    assert!(proj.matching_docs >= proj.top);
+    assert!(
+        common::run_binary(
+            &proj.root,
+            "os-or",
+            "or-test",
+            "http://127.0.0.1",
+            &[
+                ("OPENSEARCH_PORT", "9202"),
+                ("OPENSEARCH_INDEX", "bench_or")
+            ],
+        ),
+        "opensearch or-filter run failed"
+    );
+    let recall = common::read_recall(&proj.root, "os-or");
+    println!("opensearch or-filter recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "opensearch or-filter recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// UUID exact-match filter end-to-end. Regression for the schema-type bug:
 /// "uuid" is not a valid OS type; forwarding it verbatim made index creation
 /// reject the whole mapping. With "uuid" -> "keyword" OS does an exact term

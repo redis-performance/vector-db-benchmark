@@ -849,6 +849,38 @@ pub fn write_and_filter_project(
     )
 }
 
+/// Multi-condition OR fixture: same `color`/`size` payload as the AND fixture,
+/// but the query is a top-level `{or: [...]}` UNION — `color == "red" OR size >=
+/// 90`. The two arms overlap only partially (all reds, plus the blue docs with
+/// size in 90..99), so the union (~220 docs) is strictly larger than either arm
+/// and strictly larger than their intersection. An engine that mis-handles OR —
+/// treating it as AND, or dropping an arm — searches a much smaller doc set, so
+/// its nearest neighbours diverge from the union's and recall collapses.
+pub fn write_or_filter_project(
+    dataset_name: &str,
+    engine_configs_json: &str,
+    dim: usize,
+) -> FilterProject {
+    write_filter_project(
+        dataset_name,
+        engine_configs_json,
+        dim,
+        GtMetric::L2,
+        serde_json::json!({ "color": "keyword", "size": "int" }),
+        move |id| {
+            serde_json::json!({
+                "color": if id % 2 == 0 { "red" } else { "blue" },
+                "size": (id % 100) as i64,
+            })
+        },
+        serde_json::json!({ "or": [
+            { "color": { "match": { "value": "red" } } },
+            { "size": { "range": { "gte": 90 } } },
+        ] }),
+        move |id| id % 2 == 0 || (id % 100) as i64 >= 90,
+    )
+}
+
 // ── Selectivity-ladder fixture ──────────────────────────────────────────────
 //
 // The #1 methodology idea shared by VectorDBBench, Pinecone VSB and qdrant's
