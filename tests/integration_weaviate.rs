@@ -676,6 +676,24 @@ fn test_binary_weaviate_datetime() {
     );
 }
 
+/// Full-text filter end-to-end. Regression: a `{match:{text}}` clause was dropped
+/// (the match arm required a `value` key), so the kNN ran UNFILTERED. Now `text`
+/// routes to `Equal valueText` on the word-tokenized `text` property, which
+/// matches objects containing the token (`Equal "quick"` -> "the quick brown fox").
+#[test]
+fn test_binary_weaviate_fulltext() {
+    wait_for_weaviate();
+    let proj = common::write_fulltext_project("ft-test", &weaviate_filter_config(), 8);
+    assert!(proj.matching_docs >= proj.top);
+    let recall = run_weaviate_filter(&proj.root, "ft-test", "BenchFt");
+    println!("weaviate fulltext recall={:.3}", recall);
+    assert!(
+        recall >= 0.9,
+        "weaviate fulltext recall {:.3} < 0.9",
+        recall
+    );
+}
+
 /// End-to-end `match_any` on a MULTI-VALUED keyword field (`labels`, #88).
 /// `labels` is declared as a `text[]` array property and each doc stores an
 /// array; the OR-of-`Equal` filter matches per element (Weaviate's `Equal` on
