@@ -82,7 +82,15 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Post PR comment
-        if: github.event_name == 'pull_request'
+        # Only on same-repo PRs. GitHub grants the GITHUB_TOKEN read-only scope
+        # for pull_request events from forks (regardless of the job's requested
+        # permissions), so createComment fails there with "Resource not
+        # accessible by integration" and reds an otherwise-passing build. Fork
+        # PRs simply skip the cosmetic comment; the build/test steps above are
+        # the real gate. continue-on-error is a belt-and-suspenders so a comment
+        # failure never fails the job.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -98,7 +106,7 @@ jobs:
             - Integration test (random-100 dataset + Redis)
             - Multi-platform build validation (amd64 + arm64)`;
 
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
