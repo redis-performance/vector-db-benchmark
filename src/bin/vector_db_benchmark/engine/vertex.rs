@@ -564,6 +564,24 @@ fn should_batch_ingest(bucket: Option<&str>, count: usize, threshold: usize) -> 
     bucket.map(|b| !b.trim().is_empty()).unwrap_or(false) && count >= threshold
 }
 
+/// Resolve the EFFECTIVE `approximateNeighborCount` for a Vertex query (#200).
+/// Returns `(value, source)` where source is `"config"` when the sweep set
+/// `num_candidates` and `"index-default"` when it fell back to the index's
+/// configured `approximateNeighborsCount`. Never returns Vertex's `0` "use
+/// index default" sentinel — the value is always explicit. `top` is the floor
+/// (Vertex rejects `approximateNeighborCount < neighborCount`).
+fn resolve_approx_neighbor_count(
+    num_candidates: Option<i64>,
+    index_approx_neighbors: i64,
+    top: usize,
+) -> (i64, &'static str) {
+    let floor = top as i64;
+    match num_candidates {
+        Some(n) => (n.max(floor), "config"),
+        None => (index_approx_neighbors.max(floor), "index-default"),
+    }
+}
+
 /// Body for `indexEndpoints.findNeighbors` (single query). An optional
 /// `fraction_leaf_nodes_to_search_override` (0..1) trades recall for latency.
 fn build_find_neighbors_body(
@@ -903,6 +921,45 @@ impl VertexEngine {
 
     fn parent(&self) -> String {
         format!("projects/{}/locations/{}", self.project, self.region)
+    }
+
+    /// Resolve the EFFECTIVE search knobs and log them, never sending Vertex the
+    /// "unset → use index default" sentinel silently (#200).
+    ///
+    /// Vertex treats a `0` `approximate_neighbor_count` (and `0.0`
+    /// `fraction_leaf_nodes_to_search_override`) as "use the deployed index
+    /// default". So a sweep point that forgets to set `num_candidates` would run
+    /// at the index default (~150) while still being LABELLED with whatever the
+    /// config claims — fewer candidates = less work = flattering QPS/latency at
+    /// lower recall, which breaks recall-matching against the Redis `ef` sweep
+    /// (fairness gate #4 of the #148 review).
+    ///
+    /// Fix: honor the config's `num_candidates` when set (clamped to `top`, which
+    /// Vertex requires as the floor for `approximateNeighborCount`); when unset,
+    /// fall back to the index's OWN configured `approximateNeighborsCount`
+    /// (`self.approx_neighbors`) **explicitly** — the value the index was built
+    /// with, sent as a real number rather than a hidden `0` — and log it. The
+    /// effective leaf-fraction is logged too (index default when unset). Returns
+    /// `(approximate_neighbor_count, fraction_leaf_override)` for `request()`.
+    fn resolve_search_knobs(&self, params: &SearchParams, top: usize) -> (i64, Option<f64>) {
+        let (count, count_src) =
+            resolve_approx_neighbor_count(params.num_candidates, self.approx_neighbors, top);
+        let fraction_leaf_override: Option<f64> = params
+            .search_params
+            .as_ref()
+            .and_then(|sp| sp.extra.as_ref())
+            .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
+            .and_then(|v| v.as_f64());
+        match fraction_leaf_override {
+            Some(f) => println!(
+                "\tVertex effective search knobs: approximateNeighborCount={count} ({count_src}), fraction_leaf_nodes_to_search={f:.4} (config)"
+            ),
+            None => println!(
+                "\tVertex effective search knobs: approximateNeighborCount={count} ({count_src}), fraction_leaf_nodes_to_search=index-default (leafNodesToSearchPercent={}%)",
+                self.leaf_search_percent
+            ),
+        }
+        (count, fraction_leaf_override)
     }
 
     /// A fresh bearer token: `VERTEX_ACCESS_TOKEN` if set, else `gcloud auth
@@ -1737,16 +1794,11 @@ impl Engine for VertexEngine {
             ));
         }
 
-        // Optional per-query recall/latency knob (0..1 fraction of leaf nodes).
-        let fraction_leaf_override: Option<f64> = params
-            .search_params
-            .as_ref()
-            .and_then(|sp| sp.extra.as_ref())
-            .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
-            .and_then(|v| v.as_f64());
-        // Vertex requires approximateNeighborCount >= neighborCount (= top);
-        // a smaller value is rejected, so clamp the floor to the effective top.
-        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(top as i64));
+        // Resolve the effective num_candidates + leaf-fraction, never sending the
+        // silent "use index default" sentinel (#200). approximate_neighbor_count
+        // is always Some now, so request() never falls back to 0.
+        let (approx_count, fraction_leaf_override) = self.resolve_search_knobs(params, top);
+        let approximate_neighbor_count = Some(approx_count);
 
         if let Some(duration) = closed_loop_duration {
             println!(
@@ -2132,13 +2184,9 @@ impl Engine for VertexEngine {
                 queries.len()
             ));
         }
-        let fraction_leaf_override: Option<f64> = params
-            .search_params
-            .as_ref()
-            .and_then(|sp| sp.extra.as_ref())
-            .and_then(|e| e.get("fraction_leaf_nodes_to_search_override"))
-            .and_then(|v| v.as_f64());
-        let approximate_neighbor_count = params.num_candidates.map(|n| n.max(top as i64));
+        // Effective knobs, explicit (never the silent index-default sentinel) — #200.
+        let (approx_count, fraction_leaf_override) = self.resolve_search_knobs(params, top);
+        let approximate_neighbor_count = Some(approx_count);
 
         let ratio_searches = ratio.searches.max(1) as usize;
         let ratio_updates = ratio.updates as usize;
@@ -2878,6 +2926,37 @@ mod tests {
         assert_eq!(nr["namespace"], "year");
         assert!(nr.get("value_float").is_some());
         assert!(nr.get("value_int").is_none());
+    }
+
+    #[test]
+    fn approx_neighbor_count_never_silently_defaults() {
+        // Config sets num_candidates → honored, source "config".
+        assert_eq!(
+            resolve_approx_neighbor_count(Some(1000), 150, 10),
+            (1000, "config")
+        );
+        // Config UNSET → explicit fall back to the index's configured value, NOT
+        // the silent 0 sentinel that would make Vertex pick its own default (#200).
+        assert_eq!(
+            resolve_approx_neighbor_count(None, 150, 10),
+            (150, "index-default")
+        );
+        // Vertex requires approximateNeighborCount >= neighborCount (= top): a
+        // config value below top is clamped up to the floor...
+        assert_eq!(
+            resolve_approx_neighbor_count(Some(5), 150, 100),
+            (100, "config")
+        );
+        // ...and so is a small index default.
+        assert_eq!(
+            resolve_approx_neighbor_count(None, 50, 100),
+            (100, "index-default")
+        );
+        // The result is NEVER 0 (the "use index default" sentinel) for any input.
+        for nc in [None, Some(0), Some(1)] {
+            let (v, _) = resolve_approx_neighbor_count(nc, 150, 10);
+            assert!(v >= 10, "must be >= top floor, never the 0 sentinel: {v}");
+        }
     }
 
     #[test]
