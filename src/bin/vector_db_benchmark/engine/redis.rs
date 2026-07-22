@@ -564,10 +564,42 @@ impl RedisEngine {
         let start = Instant::now();
 
         loop {
-            let info: redis::Value = redis::cmd("FT.INFO")
+            let info: redis::Value = match redis::cmd("FT.INFO")
                 .arg(&self.config.index_name)
                 .query(&mut conn)
-                .map_err(|e| format!("FT.INFO error: {}", e))?;
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = e.to_string();
+                    // A momentary blip right after a successful upload (a dropped
+                    // socket, or a transient `ERRCLUSTER` while the coordinator
+                    // re-initializes after a shard restart) must NOT tear down
+                    // the whole sweep (#198). While there is still budget, drop
+                    // the (possibly dead) connection, reconnect, and retry —
+                    // mirroring the #160 upload-retry philosophy on the verify
+                    // path. Only a terminal error, or exhausting the budget,
+                    // propagates.
+                    if is_transient_conn_error(&msg) && start.elapsed().as_secs() < max_wait {
+                        eprintln!(
+                            "wait_for_indexing: transient FT.INFO error ({msg}); reconnecting and retrying (elapsed {}s/{}s)",
+                            start.elapsed().as_secs(),
+                            max_wait
+                        );
+                        // A failed reconnect is itself likely transient; keep the
+                        // old handle and let the next iteration try again within
+                        // budget rather than aborting here.
+                        match self.get_connection() {
+                            Ok(c) => conn = c,
+                            Err(ce) => eprintln!(
+                                "wait_for_indexing: reconnect failed ({ce}); will retry within budget"
+                            ),
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        continue;
+                    }
+                    return Err(format!("FT.INFO error: {}", msg));
+                }
+            };
 
             // Parse num_docs, indexing, and percent_indexed from FT.INFO response.
             // The response can be a flat array (RESP2) or a Map (RESP3).
@@ -684,6 +716,35 @@ impl RedisEngine {
 
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
+    }
+
+    /// Best-effort FT.INFO for stat collection: reconnect + retry through a few
+    /// transient server blips (#198), then give up (`None`) rather than fail —
+    /// memory/index telemetry is non-critical, so a persistent error degrades to
+    /// a null stat instead of aborting. (`wait_for_indexing` is the strict path
+    /// that must actually succeed; it rides the full indexing budget instead.)
+    fn ft_info_best_effort(&self) -> Option<redis::Value> {
+        const ATTEMPTS: usize = 3;
+        let mut conn = self.get_connection().ok()?;
+        for attempt in 1..=ATTEMPTS {
+            match redis::cmd("FT.INFO")
+                .arg(&self.config.index_name)
+                .query::<redis::Value>(&mut conn)
+            {
+                Ok(v) => return Some(v),
+                Err(e) => {
+                    if is_transient_conn_error(&e.to_string()) && attempt < ATTEMPTS {
+                        if let Ok(c) = self.get_connection() {
+                            conn = c;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+                        continue;
+                    }
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     /// Filter-only search: run FT.SEARCH with filter conditions only (no KNN).
@@ -944,12 +1005,19 @@ fn encode_vector(data_type: &str, vector: &[f32]) -> Vec<u8> {
 /// connection error before it is treated as fatal (#160).
 const MAX_UPLOAD_RETRIES: usize = 5;
 
-/// Whether a stringified upload error looks like a TRANSIENT connection/IO drop
-/// (worth reconnecting + retrying) rather than a genuine command error (worth
-/// failing fast). Under heavy index-build load behind a managed-Redis proxy the
-/// remote can close the socket ("unexpected end of file", "broken pipe",
-/// "connection reset"); those must not abort a whole sweep (#160). Command errors
-/// like WRONGTYPE / wrong number of arguments are NOT matched here.
+/// Whether a stringified error looks TRANSIENT (worth reconnecting + retrying)
+/// rather than a genuine command error (worth failing fast). Two families:
+///
+/// 1. Connection/IO drops. Under heavy index-build load behind a managed-Redis
+///    proxy the remote can close the socket ("unexpected end of file", "broken
+///    pipe", "connection reset"); those must not abort a whole sweep (#160).
+/// 2. Transient server/coordinator errors during a failover or shard restart —
+///    notably `ERRCLUSTER: Uninitialized cluster state, could not perform
+///    command`, which a managed cluster returns for a few seconds while the
+///    coordinator re-initializes (#198). The coordinator recovers on its own, so
+///    a reconnect+retry rides straight through it.
+///
+/// Command errors like WRONGTYPE / wrong number of arguments are NOT matched.
 fn is_transient_conn_error(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
     const SIGNATURES: &[&str] = &[
@@ -967,6 +1035,9 @@ fn is_transient_conn_error(msg: &str) -> bool {
         "os error 110", // ETIMEDOUT
         "connection dropped",
         "not connected",
+        // Transient coordinator state during failover / shard restart (#198).
+        "errcluster",
+        "uninitialized cluster state",
     ];
     SIGNATURES.iter().any(|sig| m.contains(sig))
 }
@@ -2629,11 +2700,10 @@ impl Engine for RedisEngine {
         let info_str: String = redis::cmd("INFO").arg("memory").query(&mut conn).ok()?;
         let used_memory: i64 = parse_used_memory(&info_str);
 
-        // Get FT.INFO for this config's index stats + per-index memory.
-        let ft_info_raw: Option<redis::Value> = redis::cmd("FT.INFO")
-            .arg(&self.config.index_name)
-            .query::<redis::Value>(&mut conn)
-            .ok();
+        // Get FT.INFO for this config's index stats + per-index memory. Reconnect
+        // + retry through a transient blip so a momentary hiccup doesn't blank the
+        // per-config memory figure (#198); still degrades to None if it persists.
+        let ft_info_raw: Option<redis::Value> = self.ft_info_best_effort();
         let index_memory_bytes = ft_info_raw
             .as_ref()
             .and_then(redis_utils::ft_info_index_memory_bytes);
@@ -2650,12 +2720,10 @@ impl Engine for RedisEngine {
         let mut conn = self.get_connection().ok()?;
         let mut meta = redis_utils::collect_server_metadata(&mut conn);
         // Vector index stats (HNSW M/EF, num_docs, index memory, ...). Errors on
-        // the BEFORE snapshot (index not yet created) → index_info: null.
-        let ft_info = redis::cmd("FT.INFO")
-            .arg(&self.config.index_name)
-            .query::<redis::Value>(&mut conn)
-            .ok()
-            .map(|v| redis_value_to_json(&v));
+        // the BEFORE snapshot (index not yet created) → index_info: null. Uses the
+        // reconnect+retry best-effort read so a transient blip doesn't blank the
+        // stat (#198); a genuinely-absent index still degrades to null.
+        let ft_info = self.ft_info_best_effort().map(|v| redis_value_to_json(&v));
         if let Some(obj) = meta.as_object_mut() {
             obj.insert(
                 "index_info".to_string(),
@@ -2681,6 +2749,9 @@ mod tests {
             "operation timed out",
             "IoError: Connection aborted",
             "connection dropped",
+            // Transient coordinator errors during failover / shard restart (#198).
+            "ERRCLUSTER: Uninitialized cluster state, could not perform command",
+            "An error was signalled by the server: ERRCLUSTER Uninitialized cluster state",
         ] {
             assert!(is_transient_conn_error(msg), "should retry: {msg}");
         }
